@@ -19,13 +19,15 @@ def test_round_trip_through_ini(tmp_path):
     s.camera_index = 2; s.chroma_enabled = False
     s.chroma = ChromaParams(tolerance=55, feather_px=4, spill=0.3)
     s.set_pen(PenSettings(pressure_curve=70, smoothing=10, min_width=2, max_width=20, nib=Nib.CHALK,
-                          math_recognition=False, shape_correction=False, autosave=False, template_matching=True))
+                          math_recognition=False, shape_correction=False, autosave=False, template_matching=True,
+                          reading_ms=0))
     s.sync()
     t = AppSettings(QSettings(path, QSettings.Format.IniFormat))
     assert t.tool == Tool.ERASER and t.color == "#2456b8" and t.width == 8
     assert t.hint_mask == HintMaskMode.REDACT and t.camera_index == 2 and t.chroma_enabled is False
     assert t.chroma == ChromaParams(tolerance=55, feather_px=4, spill=0.3)
     assert t.pen().nib == Nib.CHALK and t.pen().template_matching is True and t.pen().autosave is False
+    assert t.pen().reading_ms == 0
 
 
 def test_garbage_values_fall_back(tmp_path):

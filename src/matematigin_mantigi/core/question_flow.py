@@ -99,6 +99,12 @@ class QuestionFlow(QObject):
             self._set_status(self._index, QuestionStatus.DONE)
         self.select((self._index + 1) % len(self._questions))
 
+    def prev_question(self) -> None:
+        """Önceki sayfaya döner; durumları değiştirmez."""
+        if not self._questions:
+            return
+        self.select((self._index - 1) % len(self._questions))
+
     def show_question(self) -> None:
         if not self._shown:
             self._shown = True

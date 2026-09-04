@@ -1,8 +1,10 @@
 import openpyxl
 import pytest
 
-from matematigin_mantigi.core.question_loader import (REQUIRED_COLUMNS, QuestionTemplateError,
-                                                      ensure_template, load_questions, write_template)
+from matematigin_mantigi.core.models import Question
+from matematigin_mantigi.core.question_loader import (ALL_COLUMNS, REQUIRED_COLUMNS, QuestionTemplateError,
+                                                      ensure_template, load_questions, write_questions,
+                                                      write_template)
 
 
 def test_write_then_load_round_trip(tmp_path):
@@ -11,9 +13,19 @@ def test_write_then_load_round_trip(tmp_path):
     assert [q.id for q in qs] == ["S1", "S2", "S3"]
     assert qs[0].soru == "3x + 5 = 20 ise x kaçtır?" and qs[0].sinif == 7
     assert qs[2].hints == ("Paydaları eşitle: 6 ortak payda.", "2/3 = 4/6 olur; 4/6 + 1/6.", "Cevap: 5/6.")
+    assert qs[0].options == ("3", "4", "5", "6") and qs[0].image is None
     wb = openpyxl.load_workbook(p)
-    assert [c.value for c in wb.active[1]] == list(REQUIRED_COLUMNS)
+    assert [c.value for c in wb.active[1]] == list(ALL_COLUMNS)
     assert wb.active["A1"].font.bold
+
+
+def test_optional_columns_round_trip(tmp_path):
+    q = Question("S9", "Konu", 8, "Soru?", ("h1", "h2", "h3", "h4"), "42", ("1", "2", "3", "4"), "img/s9.png")
+    p = write_questions(tmp_path / "q.xlsx", [q])
+    (tmp_path / "img").mkdir()
+    loaded = load_questions(p)[0]
+    assert loaded.hints == ("h1", "h2", "h3", "h4") and loaded.options == ("1", "2", "3", "4")
+    assert loaded.image == str(tmp_path / "img" / "s9.png")         # xlsx klasörüne göre çözülür
 
 
 def test_ensure_template_creates_once(tmp_path):
@@ -30,6 +42,15 @@ def test_missing_column_is_reported(tmp_path):
     p = tmp_path / "bad.xlsx"; wb.save(p)
     with pytest.raises(QuestionTemplateError, match="cevap"):
         load_questions(p)
+
+
+def test_required_only_header_still_loads(tmp_path):
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(list(REQUIRED_COLUMNS))
+    ws.append(["S1", "Konu", "7", "Eski şablon sorusu", "a", "b", "c", "d"])
+    p = tmp_path / "old.xlsx"; wb.save(p)
+    q = load_questions(p)[0]
+    assert q.options == () and q.image is None and q.hints == ("a", "b", "c")
 
 
 def test_blank_rows_skipped_and_missing_hints_dropped(tmp_path):

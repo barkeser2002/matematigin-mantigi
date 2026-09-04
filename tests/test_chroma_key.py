@@ -13,7 +13,7 @@ def scene(w=320, h=240):
 
 def test_defaults_match_brief():
     p = ChromaParams()
-    assert (p.tolerance, p.feather_px, p.spill, p.bg_bgr) == (38, 2, 0.60, (243, 246, 247))
+    assert (p.tolerance, p.feather_px, p.spill, p.bg_bgr) == (38, 2, 0.60, (255, 255, 255))
 
 
 def test_mask_is_0_on_green_and_1_on_subject():
@@ -25,7 +25,7 @@ def test_mask_is_0_on_green_and_1_on_subject():
 def test_green_becomes_panel_background_and_subject_survives():
     out = apply_chroma_key(scene(), ChromaParams())
     assert out.dtype == np.uint8 and out.shape == (240, 320, 3)
-    assert np.allclose(out[10, 10], (243, 246, 247), atol=2)
+    assert np.allclose(out[10, 10], (255, 255, 255), atol=2)
     assert np.allclose(out[120, 160], (20, 20, 220), atol=2)
 
 

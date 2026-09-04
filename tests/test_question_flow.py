@@ -39,6 +39,17 @@ def test_next_wraps_and_waiting_stays_waiting(sample_questions):
     assert f.index == 0 and f.status(2) == QuestionStatus.WAITING
 
 
+def test_prev_wraps_and_keeps_status(sample_questions, qtbot):
+    f = QuestionFlow(sample_questions)
+    f.toggle_work()
+    with qtbot.waitSignal(f.questionChanged) as sig:
+        f.prev_question()
+    assert sig.args == [2] and f.index == 2
+    assert f.status(0) == QuestionStatus.WORKING          # önceki durum değişmez
+    f.prev_question()
+    assert f.index == 1
+
+
 def test_hint_navigation_clamps(sample_questions, qtbot):
     f = QuestionFlow(sample_questions)
     f.hint_prev(); assert f.hint_index() == 0

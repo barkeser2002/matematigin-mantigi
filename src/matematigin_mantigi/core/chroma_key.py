@@ -13,7 +13,7 @@ class ChromaParams:
     feather_px: int = 2
     spill: float = 0.60                                  # 0..1
     key_hue: int = 60                                    # OpenCV hue (0..179); saf yeşil = 60
-    bg_bgr: tuple[int, int, int] = (243, 246, 247)       # #f7f6f3
+    bg_bgr: tuple[int, int, int] = (255, 255, 255)       # beyaz tahta zemini
 
 
 def green_mask(bgr: np.ndarray, p: ChromaParams) -> np.ndarray:

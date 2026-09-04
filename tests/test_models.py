@@ -21,7 +21,13 @@ def test_sample_questions_have_three_hints():
 def test_pen_settings_defaults():
     p = PenSettings()
     assert (p.pressure_curve, p.smoothing, p.min_width, p.max_width) == (50, 35, 1, 12)
-    assert p.template_matching is False
+    assert p.template_matching is False and p.reading_ms == 150
+
+
+def test_question_optional_fields_default():
+    q = Question("S1", "k", None, "soru?", ("h",), "c")
+    assert q.options == () and q.image is None
+    assert SAMPLE_QUESTIONS[0].options == ("3", "4", "5", "6")
 
 
 def test_parse_args_defaults():

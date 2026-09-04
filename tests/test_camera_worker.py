@@ -28,7 +28,7 @@ def test_worker_emits_keyed_frames(qtbot, fake_camera):
     assert opened.args == [320, 240]
     img: QImage = sig.args[0]
     assert img.width() == 160
-    assert img.pixelColor(2, 2).name() == "#f7f6f3"          # yeşil -> panel zemini
+    assert img.pixelColor(2, 2).name() == "#ffffff"          # yeşil -> beyaz tahta zemini
     assert img.pixelColor(80, 60).name() == "#dc1414"        # kırmızı kutu korunur (BGR 20,20,220)
     w.stop(); assert w.wait(2000)
     assert fake_camera.released

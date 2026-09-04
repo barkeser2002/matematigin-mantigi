@@ -97,6 +97,7 @@ class AppSettings:
             shape_correction=self._bool("pen/shape_correction", d.shape_correction),
             autosave=self._bool("pen/autosave", d.autosave),
             template_matching=self._bool("pen/template_matching", d.template_matching),
+            reading_ms=self._int("pen/reading_ms", d.reading_ms),
         )
 
     def set_pen(self, p: PenSettings) -> None:

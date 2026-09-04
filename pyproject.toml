@@ -16,9 +16,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-qt>=4.4"]
+pdf = ["pymupdf>=1.24"]
 
 [project.scripts]
 matematigin-mantigi = "matematigin_mantigi.app:main"
+matematigin-mantigi-pdf = "matematigin_mantigi.pdf_import:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

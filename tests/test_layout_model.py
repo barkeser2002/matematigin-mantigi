@@ -3,11 +3,12 @@ import json
 from matematigin_mantigi.core import layout_model as lm
 
 
-def test_default_layout_matches_mockup():
-    assert lm.DEFAULT_LAYOUT["soru"] == lm.PanelGeom(0, 0, 7, 3)
-    assert lm.DEFAULT_LAYOUT["ipucu"] == lm.PanelGeom(7, 0, 5, 5)
-    assert lm.DEFAULT_LAYOUT["cizim"] == lm.PanelGeom(0, 3, 7, 7)
-    assert lm.DEFAULT_LAYOUT["webcam"] == lm.PanelGeom(7, 5, 5, 5)
+def test_default_layout_is_whiteboard_zones():
+    assert lm.ZONE_KEYS == ("soru", "ipucu", "webcam")
+    assert lm.DEFAULT_LAYOUT["soru"] == lm.PanelGeom(0, 0, 6, 4)
+    assert lm.DEFAULT_LAYOUT["ipucu"] == lm.PanelGeom(6, 0, 6, 4)
+    assert lm.DEFAULT_LAYOUT["webcam"] == lm.PanelGeom(9, 7, 3, 3)
+    assert "cizim" not in lm.DEFAULT_LAYOUT
 
 
 def test_clamp_keeps_inside_grid_and_min_span():
@@ -26,11 +27,11 @@ def test_pixel_rect_and_snap_round_trip():
 def test_pixel_rects_tile_the_area_without_overlap():
     w, h, gap = 1200, 1000, 14
     a = lm.pixel_rect(lm.DEFAULT_LAYOUT["soru"], w, h, gap)
-    b = lm.pixel_rect(lm.DEFAULT_LAYOUT["cizim"], w, h, gap)
-    assert b[1] - (a[1] + a[3]) == gap          # vertical gap between soru and cizim
-    c = lm.pixel_rect(lm.DEFAULT_LAYOUT["ipucu"], w, h, gap)
-    assert c[0] - (a[0] + a[2]) == gap          # horizontal gap between soru and ipucu
-    assert c[0] + c[2] == w                     # right edge flush
+    b = lm.pixel_rect(lm.DEFAULT_LAYOUT["ipucu"], w, h, gap)
+    assert b[0] - (a[0] + a[2]) == gap          # soru ile ipucu arasındaki yatay boşluk
+    assert b[0] + b[2] == w                     # sağ kenara yapışık
+    c = lm.pixel_rect(lm.DEFAULT_LAYOUT["webcam"], w, h, gap)
+    assert c[0] + c[2] == w and c[1] + c[3] == h   # sağ alt köşe
 
 
 def test_snap_moves_to_nearest_cell():
@@ -43,12 +44,13 @@ def test_snap_moves_to_nearest_cell():
 
 def test_json_round_trip_and_bad_input():
     text = lm.to_json(lm.DEFAULT_LAYOUT)
-    assert json.loads(text)["webcam"] == {"col": 7, "row": 5, "col_span": 5, "row_span": 5}
+    assert json.loads(text)["webcam"] == {"col": 9, "row": 7, "col_span": 3, "row_span": 3}
     assert lm.from_json(text) == lm.DEFAULT_LAYOUT
     assert lm.from_json("not json") == lm.DEFAULT_LAYOUT
-    partial = lm.from_json('{"soru": {"col": 2, "row": 2, "col_span": 4, "row_span": 4}, "x": 1}')
-    assert partial["soru"] == lm.PanelGeom(2, 2, 4, 4) and partial["cizim"] == lm.DEFAULT_LAYOUT["cizim"]
-    assert "x" not in partial
+    partial = lm.from_json('{"soru": {"col": 2, "row": 2, "col_span": 4, "row_span": 4},'
+                           ' "cizim": {"col": 0, "row": 3, "col_span": 7, "row_span": 7}, "x": 1}')
+    assert partial["soru"] == lm.PanelGeom(2, 2, 4, 4) and partial["ipucu"] == lm.DEFAULT_LAYOUT["ipucu"]
+    assert "x" not in partial and "cizim" not in partial          # eski anahtar yok sayılır
 
 
 def test_load_save_layout(tmp_path):

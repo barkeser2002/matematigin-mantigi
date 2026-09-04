@@ -1,4 +1,4 @@
-"""OBS benzeri düzen modeli: paneller 12x10 ızgara biriminde konum/boyut taşır."""
+"""OBS benzeri düzen modeli: tahta üstündeki bölgeler 12x10 ızgara biriminde konum/boyut taşır."""
 from __future__ import annotations
 
 import json
@@ -8,7 +8,8 @@ from pathlib import Path
 GRID_COLS = 12
 GRID_ROWS = 10
 MIN_SPAN = 2
-PANEL_KEYS = ("soru", "ipucu", "cizim", "webcam")
+ZONE_KEYS = ("soru", "ipucu", "webcam")
+PANEL_KEYS = ZONE_KEYS   # eski ad
 
 
 @dataclass(frozen=True)
@@ -22,10 +23,9 @@ class PanelGeom:
 Layout = dict[str, PanelGeom]
 
 DEFAULT_LAYOUT: Layout = {
-    "soru": PanelGeom(0, 0, 7, 3),
-    "ipucu": PanelGeom(7, 0, 5, 5),
-    "cizim": PanelGeom(0, 3, 7, 7),
-    "webcam": PanelGeom(7, 5, 5, 5),
+    "soru": PanelGeom(0, 0, 6, 4),      # sol üst
+    "ipucu": PanelGeom(6, 0, 6, 4),     # sağ üst
+    "webcam": PanelGeom(9, 7, 3, 3),    # sağ alt köşe
 }
 
 
@@ -66,6 +66,7 @@ def to_json(layout: Layout) -> str:
 
 
 def from_json(text: str) -> Layout:
+    """Bilinmeyen anahtarlar (örn. eski 'cizim') yok sayılır; bozuk girdi varsayılana döner."""
     result: Layout = dict(DEFAULT_LAYOUT)
     try:
         raw = json.loads(text)
@@ -73,7 +74,7 @@ def from_json(text: str) -> Layout:
         return result
     if not isinstance(raw, dict):
         return result
-    for key in PANEL_KEYS:
+    for key in ZONE_KEYS:
         item = raw.get(key)
         if not isinstance(item, dict):
             continue

@@ -48,8 +48,8 @@ class _EditOverlay(QWidget):
             p.drawRoundedRect(QRectF(geo).adjusted(1, 1, -1, -1), theme.PANEL_RADIUS, theme.PANEL_RADIUS)
             p.fillRect(QRect(geo.right() - GRIP, geo.bottom() - GRIP, GRIP, GRIP), QColor(theme.ACCENT))
             p.setPen(QColor(theme.ACCENT))
-            p.drawText(geo.adjusted(10, 6, -10, -6), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft,
-                       zone.key.upper())
+            p.drawText(geo.adjusted(theme.FRAME_INSET + 6, theme.FRAME_INSET + 4, -10, -6),
+                       Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, zone.key.upper())
         p.end()
 
 

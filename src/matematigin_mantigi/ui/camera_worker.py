@@ -25,9 +25,15 @@ class OpenCvSource:
         self._cap: cv2.VideoCapture | None = None
 
     def open(self) -> bool:
-        backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
-        self._cap = cv2.VideoCapture(self.index, backend)
-        return bool(self._cap.isOpened())
+        backends = [cv2.CAP_DSHOW, cv2.CAP_ANY] if sys.platform == "win32" else [cv2.CAP_ANY]
+        for backend in backends:                      # DSHOW hızlı açılır; olmazsa varsayılan (MSMF/AVFoundation)
+            cap = cv2.VideoCapture(self.index, backend)
+            if cap.isOpened():
+                self._cap = cap
+                return True
+            cap.release()
+        self._cap = None
+        return False
 
     def read(self) -> np.ndarray | None:
         if self._cap is None:

@@ -111,11 +111,13 @@ class WorkArea(QWidget):
             x, y, w, h = lm.pixel_rect(self._layout[key], inner.width(), inner.height(), theme.GRID_GAP)
             panel.setGeometry(inner.x() + x, inner.y() + y, w, h)
         self.brand.move((self.width() - self.brand.width()) // 2, self.height() - self.brand.height() - theme.FRAME_INSET)
-        self.edit_bar.adjustSize()
-        self.edit_bar.move((self.width() - self.edit_bar.width()) // 2, theme.FRAME_INSET + 4)
-        self.edit_bar.raise_()
-        self.badge_slot.move((self.width() - self.badge_slot.width()) // 2, theme.FRAME_INSET + 4)
+        top = 4
+        self.badge_slot.move((self.width() - self.badge_slot.width()) // 2, top)
         self.badge_slot.raise_()
+        self.edit_bar.adjustSize()
+        bar_y = top + (self.badge_slot.height() + 6 if self.badge_slot.isVisible() else 0)   # rozetin altına
+        self.edit_bar.move((self.width() - self.edit_bar.width()) // 2, bar_y)
+        self.edit_bar.raise_()
 
     def resizeEvent(self, e):
         super().resizeEvent(e)

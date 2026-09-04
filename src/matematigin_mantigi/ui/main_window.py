@@ -197,6 +197,7 @@ class MainWindow(QMainWindow):
         elif not on and self.recorder.is_recording:
             self.recorder.stop()
             self.badge.stop()
+            self.work_area.relayout()
         self.toolbar.set_recording(self.recorder.is_recording)
 
     def open_pen_settings(self) -> None:

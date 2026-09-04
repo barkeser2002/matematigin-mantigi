@@ -17,6 +17,7 @@ from matematigin_mantigi.ui.camera_worker import FrameSource
 from matematigin_mantigi.ui.canvas_panel import CanvasPanel
 from matematigin_mantigi.ui.cursors import cursor_for
 from matematigin_mantigi.ui.hint_panel import HintPanel
+from matematigin_mantigi.ui.pen_settings import PenSettingsDialog
 from matematigin_mantigi.ui.question_panel import QuestionPanel
 from matematigin_mantigi.ui.record_badge import RecordBadge
 from matematigin_mantigi.ui.theme import FontFamilies
@@ -173,8 +174,10 @@ class MainWindow(QMainWindow):
             self.badge.stop()
         self.toolbar.set_recording(self.recorder.is_recording)
 
-    def open_pen_settings(self) -> None:      # Task 17 doldurur
-        pass
+    def open_pen_settings(self) -> None:
+        dlg = PenSettingsDialog(self.settings.pen(), self.canvas.color, self.canvas.base_width, self.fam, self)
+        dlg.applied.connect(self.settings.set_pen)
+        dlg.exec()
 
     def closeEvent(self, e):
         self.webcam_panel.shutdown()

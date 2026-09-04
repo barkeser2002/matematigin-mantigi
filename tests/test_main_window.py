@@ -111,3 +111,18 @@ def test_restores_settings_on_start(qtbot, tmp_path, ini_settings, dead_camera):
 
 def test_close_is_clean(window):
     window.close()
+
+
+def test_pen_settings_round_trip_through_window(window, qtbot, monkeypatch):
+    from matematigin_mantigi.core.models import PenSettings
+    from matematigin_mantigi.ui import pen_settings as ps
+    captured = {}
+
+    def fake_exec(self):
+        captured["dialog"] = self
+        self.smoothing_slider.setValue(80)
+        self._apply()
+        return 1
+    monkeypatch.setattr(ps.PenSettingsDialog, "exec", fake_exec)
+    qtbot.mouseClick(window.toolbar.pen_settings_button, Qt.MouseButton.LeftButton)
+    assert window.settings.pen() == PenSettings(smoothing=80)

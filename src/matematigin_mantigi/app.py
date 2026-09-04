@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QGuiApplication
-from PyQt6.QtWidgets import QApplication, QMainWindow
+from PyQt6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QWidget
 
 from matematigin_mantigi import paths
+from matematigin_mantigi.core import layout_model as lm
 from matematigin_mantigi.ui import theme
+from matematigin_mantigi.ui.panel import PanelFrame
+from matematigin_mantigi.ui.toolbar import ToolBar
+from matematigin_mantigi.ui.work_area import WorkArea
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -23,6 +28,18 @@ def build_window(args: argparse.Namespace, fam: theme.FontFamilies | None = None
     fam = fam or theme.FontFamilies("sans-serif", "cursive", False)
     win = QMainWindow()
     win.setWindowTitle("Matematiğin Mantığı")
+    central = QWidget(); row = QHBoxLayout(central); row.setContentsMargins(0, 0, 0, 0); row.setSpacing(0)
+    toolbar = ToolBar(fam); work = WorkArea(fam)
+    for key, num, title in (("soru", "1", "Soru"), ("ipucu", "3", "Akıllı ipuçları"),
+                            ("cizim", "2", "El çizimi"), ("webcam", "4", "Webcam")):
+        work.add_panel(key, PanelFrame(num, title, fam))
+    layout_path = Path.cwd() / "duzen.json"
+    work.set_layout(lm.load_layout(layout_path))
+    work.layoutChanged.connect(lambda lay: lm.save_layout(layout_path, lay))
+    toolbar.layoutEditToggled.connect(work.set_edit_mode)
+    work.editModeChanged.connect(toolbar.set_layout_edit)
+    row.addWidget(toolbar); row.addWidget(work, 1)
+    win.setCentralWidget(central)
     win.resize(1920, 1080)
     return win
 

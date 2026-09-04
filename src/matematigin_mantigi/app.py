@@ -10,12 +10,15 @@ from PyQt6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QWidget
 
 from matematigin_mantigi import paths
 from matematigin_mantigi.core import layout_model as lm
+from matematigin_mantigi.core.chroma_key import ChromaParams
 from matematigin_mantigi.core.models import TOOL_META
 from matematigin_mantigi.ui import theme
+from matematigin_mantigi.ui.camera_worker import OpenCvSource
 from matematigin_mantigi.ui.canvas_panel import CanvasPanel
 from matematigin_mantigi.ui.cursors import cursor_for
 from matematigin_mantigi.ui.panel import PanelFrame
 from matematigin_mantigi.ui.toolbar import ToolBar
+from matematigin_mantigi.ui.webcam_panel import WebcamPanel
 from matematigin_mantigi.ui.work_area import WorkArea
 
 
@@ -33,9 +36,19 @@ def build_window(args: argparse.Namespace, fam: theme.FontFamilies | None = None
     win.setWindowTitle("Matematiğin Mantığı")
     central = QWidget(); row = QHBoxLayout(central); row.setContentsMargins(0, 0, 0, 0); row.setSpacing(0)
     toolbar = ToolBar(fam); work = WorkArea(fam)
-    for key, num, title in (("soru", "1", "Soru"), ("ipucu", "3", "Akıllı ipuçları"),
-                            ("webcam", "4", "Webcam")):
+    for key, num, title in (("soru", "1", "Soru"), ("ipucu", "3", "Akıllı ipuçları")):
         work.add_panel(key, PanelFrame(num, title, fam))
+    cam_index = 0 if args.kamera is None else args.kamera
+    webcam_panel = WebcamPanel(fam, lambda: OpenCvSource(cam_index), ChromaParams())
+    work.add_panel("webcam", webcam_panel)
+    if not args.kamera_yok:
+        webcam_panel.start()
+    original_close = win.closeEvent
+
+    def close_event(e):
+        webcam_panel.shutdown()
+        original_close(e)
+    win.closeEvent = close_event
     canvas_panel = CanvasPanel(fam)
     work.add_panel("cizim", canvas_panel)
     canvas = canvas_panel.canvas

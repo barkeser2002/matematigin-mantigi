@@ -1,11 +1,13 @@
 """Kamera iş parçacığı: OpenCV yakalama -> (isteğe bağlı) yeşil perde -> QImage sinyali."""
 from __future__ import annotations
 
+import os
 import sys
 import time
 from typing import Protocol
 
-import cv2
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")   # eklenti günlükleri de (FFmpeg vb.) bu seviyeye uyar
+import cv2  # noqa: E402
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QImage
@@ -30,7 +32,8 @@ class OpenCvSource:
         self._cap: cv2.VideoCapture | None = None
 
     def open(self) -> bool:
-        backends = [cv2.CAP_DSHOW, cv2.CAP_ANY] if sys.platform == "win32" else [cv2.CAP_ANY]
+        # Windows'ta CAP_ANY, FFmpeg eklentisini de dolaştırır ve o kendi uyarısını basar; DSHOW + MSMF yeterli.
+        backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF] if sys.platform == "win32" else [cv2.CAP_ANY]
         candidates = [self.index] + [i for i in self.SCAN_INDICES if i != self.index]
         log = cv2.utils.logging
         prev = log.getLogLevel()

@@ -117,7 +117,7 @@ class HintZone(Zone):
     # --- API -------------------------------------------------------------------
     def set_hints(self, question_id: str, hints: Sequence[str]) -> None:
         for c in self.cards:
-            self.cards_layout.removeWidget(c); c.deleteLater()
+            self.cards_layout.removeWidget(c); c.hide(); c.deleteLater()     # hide: silinene kadar görünmesin
         self.cards = []
         for i, text in enumerate(hints):
             card = HintCard(text, self.fam)

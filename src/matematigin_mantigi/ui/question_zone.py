@@ -137,7 +137,7 @@ class QuestionZone(Zone):
 
     def _build_options(self, options: tuple[str, ...]) -> None:
         for lab in self.option_labels:
-            self.options_grid.removeWidget(lab); lab.deleteLater()
+            self.options_grid.removeWidget(lab); lab.hide(); lab.deleteLater()
         self.option_labels = []
         if not options:
             self.options_widget.hide()

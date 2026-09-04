@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600&family=Caveat:wght@500;700&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#e9e7e2;font-family:'Work Sans',sans-serif;color:#1c1b19}
+a{color:oklch(55% 0.16 30)} a:hover{color:oklch(45% 0.16 30)}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
+@keyframes pulse{0%,100%{transform:scale(1);box-shadow:0 0 0 0 oklch(55% 0.16 30 / .55)}50%{transform:scale(1.06);box-shadow:0 0 0 18px oklch(55% 0.16 30 / 0)}}
+@keyframes wiggle{0%,100%{transform:rotate(0)}20%{transform:rotate(-12deg)}40%{transform:rotate(10deg)}60%{transform:rotate(-6deg)}80%{transform:rotate(4deg)}}
+</style>
+<script src="./image-slot.js"></script>
+</helmet>
+<div data-screen-label="Uygulama" style="width:1920px;height:1080px;display:flex;background:#f7f6f3;position:relative;overflow:hidden;font-family:'Work Sans',sans-serif;color:#1c1b19">
+
+  <!-- 9: dış araç çubuğu (kayıtta görünmez) -->
+  <sc-if value="{{ showToolbar }}" hint-placeholder-val="{{ true }}">
+  <div style="width:88px;flex:none;background:#1c1b19;color:#f7f6f3;display:flex;flex-direction:column;align-items:center;padding:18px 0;gap:6px;position:relative;z-index:5">
+    <div style="font-family:'Caveat',cursive;font-size:34px;line-height:1;color:#f7f6f3;margin-bottom:6px">9</div>
+    <div style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:#8e8b84;text-align:center;line-height:1.3;margin-bottom:10px">kayıtta<br>görünmez</div>
+
+    <sc-for list="{{ screens }}" as="s" hint-placeholder-count="3">
+      <div onClick="{{ s.select }}" title="{{ s.label }}" style="width:56px;height:44px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;cursor:pointer;background:{{ s.bg }};color:{{ s.fg }}">{{ s.label }}</div>
+    </sc-for>
+
+    <div style="width:40px;height:1px;background:#3a3834;margin:10px 0"></div>
+
+    <sc-for list="{{ tools }}" as="t" hint-placeholder-count="5">
+      <div onClick="{{ t.select }}" title="{{ t.label }}" style="width:56px;height:48px;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer;background:{{ t.bg }};color:{{ t.fg }}">
+        <div style="font-size:18px;line-height:1">{{ t.glyph }}</div>
+        <div style="font-size:9px;letter-spacing:.04em">{{ t.label }}</div>
+      </div>
+    </sc-for>
+
+    <div style="width:40px;height:1px;background:#3a3834;margin:10px 0"></div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <sc-for list="{{ colors }}" as="c" hint-placeholder-count="4">
+        <div onClick="{{ c.select }}" style="width:22px;height:22px;border-radius:50%;background:{{ c.hex }};cursor:pointer;box-sizing:border-box;border:{{ c.border }}"></div>
+      </sc-for>
+    </div>
+
+    <div style="margin-top:12px;display:flex;flex-direction:column;align-items:center;gap:4px">
+      <div style="font-size:9px;color:#8e8b84;letter-spacing:.1em">KALINLIK</div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <sc-for list="{{ sizes }}" as="z" hint-placeholder-count="3">
+          <div onClick="{{ z.select }}" style="width:{{ z.px }}px;height:{{ z.px }}px;border-radius:50%;background:{{ z.bg }};cursor:pointer"></div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="width:40px;height:1px;background:#3a3834;margin:10px 0"></div>
+
+    <div style="font-size:9px;color:#8e8b84;letter-spacing:.1em;margin-bottom:2px">SORU AKIŞI</div>
+    <div onClick="{{ workQuestion }}" style="width:72px;padding:8px 4px;border-radius:8px;font-size:10px;font-weight:600;text-align:center;line-height:1.25;cursor:pointer;box-sizing:border-box;background:{{ workBg }};color:{{ workFg }};border:2px solid #f7f6f3">{{ workLabel }}</div>
+    <div onClick="{{ continueQuestion }}" style="width:72px;padding:8px 4px;border-radius:8px;font-size:10px;font-weight:600;text-align:center;line-height:1.25;cursor:pointer;box-sizing:border-box;border:2px solid #5a5751;color:#f7f6f3">Soruya devam et</div>
+    <div onClick="{{ nextQuestion }}" style="width:72px;padding:8px 4px;border-radius:8px;font-size:10px;font-weight:600;text-align:center;line-height:1.25;cursor:pointer;box-sizing:border-box;background:oklch(55% 0.16 30);color:#fff;border:2px solid oklch(55% 0.16 30)">Sıradaki soru →</div>
+    <div style="font-size:9px;color:#8e8b84;text-align:center;line-height:1.3">{{ progressLabel }}</div>
+
+    <div style="flex:1"></div>
+
+    <div style="display:flex;gap:6px">
+      <div onClick="{{ undo }}" style="width:26px;height:26px;border-radius:6px;background:#2c2a27;display:flex;align-items:center;justify-content:center;font-size:14px;cursor:pointer">↶</div>
+      <div onClick="{{ clearCanvas }}" style="width:26px;height:26px;border-radius:6px;background:#2c2a27;display:flex;align-items:center;justify-content:center;font-size:12px;cursor:pointer">✕</div>
+    </div>
+
+    <div onClick="{{ toggleRecord }}" style="margin-top:14px;width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;background:{{ recBg }};border:2px solid oklch(55% 0.16 30)">
+      <div style="width:{{ recDot }}px;height:{{ recDot }}px;border-radius:{{ recRadius }}px;background:oklch(55% 0.16 30)"></div>
+    </div>
+    <div style="font-size:9px;letter-spacing:.1em;color:#8e8b84;margin-top:4px">{{ recLabel }}</div>
+  </div>
+  </sc-if>
+
+  <!-- çalışma alanı (kayıt çerçevesi) -->
+  <div style="flex:1;position:relative;display:flex;flex-direction:column;box-shadow:inset 0 0 0 10px #1c1b19">
+    <image-slot id="logo" shape="rounded" radius="6" fit="contain" placeholder="Logo" style="position:absolute;top:24px;left:34px;width:72px;height:72px;z-index:7"></image-slot>
+    <div style="position:absolute;bottom:0;left:50%;transform:translateX(-50%);z-index:7;background:#1c1b19;color:#f7f6f3;padding:6px 34px 10px;border-radius:14px 14px 0 0;font-family:'Caveat',cursive;font-weight:700;font-size:38px;line-height:1;letter-spacing:.01em;pointer-events:none">Matematiğin Mantığı</div>
+
+    <sc-if value="{{ recording }}" hint-placeholder-val="{{ false }}">
+      <div style="position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:6;display:flex;align-items:center;gap:8px;background:#1c1b19;color:#f7f6f3;padding:6px 14px;border-radius:999px;font-size:12px;font-weight:600">
+        <div style="width:8px;height:8px;border-radius:50%;background:oklch(60% 0.2 30);animation:blink 1.2s infinite"></div>
+        KAYIT · {{ recTime }} · 1920×1080 · 60 fps
+      </div>
+    </sc-if>
+
+    <!-- Ana anlatım ekranı -->
+    <sc-if value="{{ isMain }}" hint-placeholder-val="{{ true }}">
+    <div data-screen-label="Ana anlatım" style="flex:1;display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr;grid-template-rows:1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr;padding:30px 30px 60px 210px;gap:14px;box-sizing:border-box">
+
+      <!-- 1 Soru -->
+      <div style="grid-column:1 / 8;grid-row:1 / 4;border:2px solid #1c1b19;border-radius:4px;padding:18px 24px;display:flex;flex-direction:column;gap:10px;background:#fff;position:relative;overflow:hidden">
+        <div style="display:flex;align-items:center;gap:14px">
+          <span style="font-family:'Caveat',cursive;font-size:44px;line-height:1">1</span>
+          <span style="font-size:15px;font-weight:600;letter-spacing:.14em;text-transform:uppercase">Soru</span>
+          <div style="display:flex;gap:6px;margin-left:8px">
+            <sc-for list="{{ questions }}" as="q" hint-placeholder-count="3">
+              <div onClick="{{ q.select }}" title="{{ q.text }}" style="padding:4px 10px;border-radius:999px;font-size:12px;font-weight:600;cursor:pointer;background:{{ q.badgeBg }};color:{{ q.badgeFg }};text-decoration:{{ q.deco }};border:2px solid {{ q.ring }}">{{ q.id }}</div>
+            </sc-for>
+          </div>
+          <span style="margin-left:auto;font-size:12px;color:#7a776f">{{ progressLabel }}</span>
+        </div>
+        <div style="flex:1;display:flex;align-items:center;font-size:36px;line-height:1.3;font-weight:500;padding:4px 10px;transition:filter .4s;filter:{{ qFilter }};user-select:none">
+          <span style="font-weight:600;color:oklch(55% 0.16 30);min-width:64px">{{ activeQId }}</span>
+          <span>{{ activeQText }}</span>
+        </div>
+        <sc-if value="{{ qHidden }}" hint-placeholder-val="{{ true }}">
+          <div style="position:absolute;inset:70px 0 0 0;display:flex;align-items:center;justify-content:center">
+            <div onClick="{{ showQuestion }}" style="display:flex;align-items:center;gap:14px;padding:16px 34px;border-radius:999px;background:oklch(55% 0.16 30);color:#fff;font-size:24px;font-weight:600;cursor:pointer;animation:pulse 1.6s ease-in-out infinite;user-select:none">
+              <span style="display:inline-block;font-size:28px;animation:wiggle 2.4s ease-in-out infinite">?</span>
+              Soruyu göster
+            </div>
+          </div>
+        </sc-if>
+        <sc-if value="{{ qShown }}" hint-placeholder-val="{{ false }}">
+          <div onClick="{{ hideQuestion }}" style="position:absolute;right:16px;bottom:12px;font-size:12px;color:#7a776f;cursor:pointer;text-decoration:underline">Gizle</div>
+        </sc-if>
+      </div>
+
+      <!-- 3 Akıllı ipuçları -->
+      <div style="grid-column:8 / 13;grid-row:1 / 6;border:2px solid #1c1b19;border-radius:4px;padding:18px 24px;display:flex;flex-direction:column;gap:12px;background:#fff">
+        <div style="display:flex;align-items:baseline;gap:14px">
+          <span style="font-family:'Caveat',cursive;font-size:44px;line-height:1">3</span>
+          <span style="font-size:15px;font-weight:600;letter-spacing:.14em;text-transform:uppercase">Akıllı ipuçları</span>
+          <div style="margin-left:auto;display:flex;gap:4px;background:#efede8;border-radius:999px;padding:3px">
+            <div onClick="{{ setBlur }}" style="padding:4px 12px;border-radius:999px;font-size:12px;font-weight:600;cursor:pointer;background:{{ blurBg }};color:{{ blurFg }}">Blur</div>
+            <div onClick="{{ setRedact }}" style="padding:4px 12px;border-radius:999px;font-size:12px;font-weight:600;cursor:pointer;background:{{ redactBg }};color:{{ redactFg }}">Siyah redakte</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;border:1px solid #e3e0d9;border-radius:8px;padding:8px 12px">
+          <span style="font-size:13px;font-weight:600">{{ hintQuestionLabel }}</span>
+          <span style="font-size:12px;color:#7a776f">{{ hintCounter }}</span>
+          <div style="margin-left:auto;display:flex;gap:6px">
+            <div onClick="{{ prevHint }}" style="width:32px;height:32px;border-radius:6px;border:2px solid #1c1b19;display:flex;align-items:center;justify-content:center;font-size:14px;cursor:pointer">◀</div>
+            <div onClick="{{ nextHint }}" style="width:32px;height:32px;border-radius:6px;border:2px solid #1c1b19;display:flex;align-items:center;justify-content:center;font-size:14px;cursor:pointer">▶</div>
+            <div onClick="{{ revealHint }}" style="height:32px;padding:0 12px;border-radius:6px;background:#1c1b19;color:#fff;display:flex;align-items:center;font-size:12px;font-weight:600;cursor:pointer">{{ revealLabel }}</div>
+          </div>
+        </div>
+        <div style="font-size:12px;color:#7a776f">Gizli ipuçları tıklanmadan açılmaz. ◀ ▶ ile ipuçları arasında geçilir.</div>
+        <div style="display:flex;flex-direction:column;gap:10px;font-size:22px;line-height:1.4">
+          <sc-for list="{{ hints }}" as="h" hint-placeholder-count="3">
+            <div onClick="{{ h.focus }}" style="display:flex;gap:14px;align-items:flex-start;padding:8px 10px;border-radius:8px;border:2px solid {{ h.border }};background:{{ h.rowBg }}">
+              <span style="font-weight:600;color:oklch(55% 0.16 30);min-width:64px;padding-top:2px;font-size:15px">{{ h.id }}</span>
+              <div onClick="{{ h.toggle }}" style="flex:1;cursor:pointer;border-radius:4px;padding:2px 6px;user-select:none;transition:filter .25s;filter:{{ h.filter }};background:{{ h.bg }};color:{{ h.fg }}">{{ h.text }}</div>
+              <span style="font-size:11px;color:#7a776f;padding-top:6px;min-width:46px;text-align:right">{{ h.state }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="margin-top:auto;display:flex;gap:10px;align-items:center;font-size:12px;color:#7a776f;border-top:1px solid #e3e0d9;padding-top:10px">
+          <span style="width:8px;height:8px;border-radius:50%;background:oklch(55% 0.16 150)"></span>
+          Keras · yazı tanıma etkin · son tanınan: <span style="font-family:'Caveat',cursive;font-size:18px;color:#1c1b19">{{ recognized }}</span>
+        </div>
+      </div>
+
+      <!-- 2 El çizimi -->
+      <div style="grid-column:1 / 8;grid-row:4 / 11;border:2px solid #1c1b19;border-radius:4px;position:relative;background:#fff;overflow:hidden;background-image:radial-gradient(#d9d6cf 1px, transparent 1px);background-size:28px 28px">
+        <div style="position:absolute;top:14px;left:22px;display:flex;align-items:baseline;gap:14px;pointer-events:none">
+          <span style="font-family:'Caveat',cursive;font-size:44px;line-height:1">2</span>
+          <span style="font-size:15px;font-weight:600;letter-spacing:.14em;text-transform:uppercase">El çizimi</span>
+          <span style="font-size:13px;color:#7a776f">{{ activeQuestionLabel }}</span>
+        </div>
+        <div style="position:absolute;top:18px;right:20px;font-size:12px;color:#7a776f;display:flex;gap:14px;pointer-events:none">
+          <span>Araç: <b style="color:#1c1b19">{{ toolLabel }}</b></span>
+          <span>Kalınlık: <b style="color:#1c1b19">{{ sizeLabel }}</b></span>
+          <span>Basınç: <b style="color:#1c1b19">XP-Pen</b></span>
+        </div>
+        <canvas ref="{{ canvasRef }}" width="1040" height="620" onPointerDown="{{ down }}" onPointerMove="{{ move }}" onPointerUp="{{ up }}" onPointerLeave="{{ up }}" style="position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:{{ cursor }}"></canvas>
+        <div style="position:absolute;bottom:14px;left:22px;font-family:'Caveat',cursive;font-size:22px;color:#b3afa6;pointer-events:none">{{ canvasHint }}</div>
+      </div>
+
+      <!-- 4 Webcam -->
+      <div style="grid-column:8 / 13;grid-row:6 / 11;border:2px solid #1c1b19;border-radius:4px;overflow:hidden;background:#fff;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:baseline;gap:12px;padding:10px 16px">
+          <span style="font-family:'Caveat',cursive;font-size:36px;line-height:1">4</span>
+          <span style="font-size:13px;font-weight:600;letter-spacing:.14em;text-transform:uppercase">Webcam</span>
+          <span style="margin-left:auto;font-size:11px;color:#7a776f">CANLI</span>
+          <span style="width:8px;height:8px;border-radius:50%;background:oklch(60% 0.2 30);align-self:center"></span>
+        </div>
+        <div onClick="{{ toggleGreen }}" title="Yeşil perdeyi aç/kapat" style="flex:1;position:relative;cursor:pointer;background:{{ camBg }};background-image:{{ camPattern }};background-size:28px 28px">
+          <div style="position:absolute;left:50%;bottom:0;transform:translateX(-50%);width:230px;height:230px;border-radius:115px 115px 0 0;background:#1c1b19"></div>
+          <div style="position:absolute;left:50%;bottom:172px;transform:translateX(-50%);width:110px;height:110px;border-radius:50%;background:#1c1b19"></div>
+          <div style="position:absolute;top:10px;left:12px;font-size:11px;font-family:monospace;color:{{ camLabelColor }}">{{ camLabel }} · tıkla: aç/kapat</div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- Kalem / imleç ayarları -->
+    <sc-if value="{{ isPen }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Kalem ayarları" style="flex:1;display:grid;grid-template-columns:1fr 1fr 1fr;grid-template-rows:auto 1fr 1fr;gap:24px;padding:40px 48px 70px 210px;box-sizing:border-box">
+      <div style="grid-column:1 / 4;display:flex;align-items:baseline;gap:16px">
+        <span style="font-family:'Caveat',cursive;font-size:52px;line-height:1">9</span>
+        <span style="font-size:26px;font-weight:600">Kalem, silgi &amp; imleç</span>
+        <span style="font-size:14px;color:#7a776f;margin-left:auto">XP-Pen Deco · macOS · 8192 basınç seviyesi</span>
+      </div>
+
+      <div style="border:2px solid #1c1b19;border-radius:4px;padding:22px;background:#fff;display:flex;flex-direction:column;gap:16px">
+        <span style="font-weight:600;font-size:15px">Özel imleçler</span>
+        <div style="font-size:13px;color:#7a776f">İmleç seçili araca ve renge göre değişir.</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;flex:1">
+          <sc-for list="{{ cursorPreviews }}" as="c" hint-placeholder-count="4">
+            <div style="border:1px solid #e3e0d9;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background-image:radial-gradient(#d9d6cf 1px, transparent 1px);background-size:20px 20px">
+              <div style="width:{{ c.w }}px;height:{{ c.h }}px;border-radius:{{ c.r }}px;background:{{ c.bg }};border:{{ c.border }}"></div>
+              <span style="font-size:12px;color:#7a776f">{{ c.label }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="border:2px solid #1c1b19;border-radius:4px;padding:22px;background:#fff;display:flex;flex-direction:column;gap:16px;font-size:15px">
+        <span style="font-weight:600">Kalem</span>
+        <sc-for list="{{ penSliders }}" as="s" hint-placeholder-count="4">
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div style="display:flex;justify-content:space-between"><span>{{ s.label }}</span><span style="color:#7a776f">{{ s.value }}</span></div>
+            <div style="height:4px;background:#e3e0d9;border-radius:2px;position:relative">
+              <div style="position:absolute;left:0;top:0;bottom:0;width:{{ s.pct }}%;background:#1c1b19;border-radius:2px"></div>
+              <div style="position:absolute;top:-6px;left:{{ s.pct }}%;width:16px;height:16px;margin-left:-8px;border-radius:50%;background:#fff;border:2px solid #1c1b19"></div>
+            </div>
+          </div>
+        </sc-for>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <span>Kalem ucu</span>
+          <div style="display:flex;gap:8px">
+            <div style="flex:1;height:40px;border-radius:6px;border:2px solid #1c1b19;display:flex;align-items:center;justify-content:center;font-size:12px">Yuvarlak</div>
+            <div style="flex:1;height:40px;border-radius:6px;border:1px solid #e3e0d9;display:flex;align-items:center;justify-content:center;font-size:12px;color:#7a776f">Keçeli</div>
+            <div style="flex:1;height:40px;border-radius:6px;border:1px solid #e3e0d9;display:flex;align-items:center;justify-content:center;font-size:12px;color:#7a776f">Tebeşir</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="border:2px solid #1c1b19;border-radius:4px;padding:22px;background:#fff;display:flex;flex-direction:column;gap:14px;font-size:15px">
+        <span style="font-weight:600">Otomatik FX (Keras)</span>
+        <div style="font-size:13px;color:#7a776f">El yazısı matematiksel anlama dönüşür; çizim estetiği düzeltilir.</div>
+        <sc-for list="{{ fxRows }}" as="f" hint-placeholder-count="5">
+          <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid #e3e0d9;padding-top:12px">
+            <div style="display:flex;flex-direction:column;gap:2px"><span>{{ f.label }}</span><span style="font-size:12px;color:#7a776f">{{ f.desc }}</span></div>
+            <div style="width:44px;height:24px;border-radius:12px;background:{{ f.bg }};position:relative;flex:none">
+              <div style="position:absolute;top:3px;left:{{ f.knob }}px;width:18px;height:18px;border-radius:50%;background:#fff"></div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="grid-column:1 / 4;border:2px solid #1c1b19;border-radius:4px;padding:22px;background:#fff;display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:20px;font-size:14px">
+        <div style="grid-column:1 / 5;font-weight:600;font-size:15px">Canlı tanıma önizlemesi</div>
+        <sc-for list="{{ fxDemo }}" as="d" hint-placeholder-count="4">
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div style="font-family:'Caveat',cursive;font-size:34px;color:#4b4843;line-height:1.1">{{ d.hand }}</div>
+            <div style="font-size:12px;color:#7a776f">↓ tanındı</div>
+            <div style="font-size:20px;font-weight:500">{{ d.typed }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+    </sc-if>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080},&quot;showToolbar&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Görünüm&quot;},&quot;hintMask&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;blur&quot;,&quot;redact&quot;],&quot;default&quot;:&quot;blur&quot;,&quot;tsType&quot;:&quot;'blur'|'redact'&quot;,&quot;section&quot;:&quot;Akıllı ipuçları&quot;}}">
+class Component extends DCLogic {
+  state = { screen: 'main', tool: 'pen', color: '#1c1b19', size: 4, hintMask: null, revealed: {}, recording: false, secs: 0, green: true, activeQ: 0, activeHint: 0, qShown: {}, qStatus: ['bekliyor', 'bekliyor', 'bekliyor'], recognized: '3x + 5 = 20', noteDraft: '', notes: [{ time: '00:00', q: 'S1', text: 'Öğrenciler denklemde "iki taraftan çıkarma" adımını karıştırıyor.' }] };
+  hintBank = [
+    ['Denklemin iki tarafından 5 çıkar: 3x = 15.', '3x = 15 ise x = 15 ÷ 3.', 'Cevap: x = 5. Kontrol: 3·5 + 5 = 20 ✓'],
+    ['Dikdörtgende karşılıklı kenarlar eşittir.', 'Çevre = 2 × (uzun + kısa) = 2 × (8 + 6).', 'Cevap: 28 cm.'],
+    ['Paydaları eşitle: 6 ortak payda.', '2/3 = 4/6 olur; 4/6 + 1/6.', 'Cevap: 5/6.']];
+  canvasRef = React.createRef();
+  drawing = false; last = null; history = [];
+  componentDidMount() { this.timer = setInterval(() => this.state.recording && this.setState(s => ({ secs: s.secs + 1 })), 1000); }
+  componentWillUnmount() { clearInterval(this.timer); }
+  pos(e) { const c = this.canvasRef.current, r = c.getBoundingClientRect(); return { x: (e.clientX - r.left) * c.width / r.width, y: (e.clientY - r.top) * c.height / r.height, p: e.pressure || 0.5 }; }
+  ctx() { return this.canvasRef.current && this.canvasRef.current.getContext('2d'); }
+  renderVals() {
+    const s = this.state, P = this.props, accent = 'oklch(55% 0.16 30)';
+    const mask = s.hintMask || P.hintMask || 'blur';
+    const green = s.green;
+    const set = (o) => () => this.setState(o);
+    const pad = n => String(n).padStart(2, '0');
+    const qTextsIds = ['S1', 'S2', 'S3'];
+    const addNote = () => { const t = s.noteDraft.trim(); if (!t) return; this.setState(st => ({ noteDraft: '', notes: [...st.notes, { time: pad(Math.floor(st.secs / 60)) + ':' + pad(st.secs % 60), q: qTextsIds[st.activeQ], text: t }] })); };
+    const screens = [['main', 'Anlatım'], ['pen', 'Kalem']].map(([k, label]) => ({ label, select: set({ screen: k }), bg: s.screen === k ? '#f7f6f3' : 'transparent', fg: s.screen === k ? '#1c1b19' : '#8e8b84' }));
+    const toolDefs = [['pen', 'Kalem', '✎'], ['eraser', 'Silgi', '▭'], ['text', 'Yazı', 'T'], ['shape', 'Şekil', '△'], ['laser', 'Lazer', '●']];
+    const tools = toolDefs.map(([k, label, glyph]) => ({ label, glyph, select: set({ tool: k }), bg: s.tool === k ? accent : 'transparent', fg: s.tool === k ? '#fff' : '#c9c6bf' }));
+    const colors = ['#1c1b19', '#c8322b', '#2456b8', '#1f8a4c'].map(hex => ({ hex, select: set({ color: hex, tool: 'pen' }), border: s.color === hex ? '3px solid #f7f6f3' : '3px solid transparent' }));
+    const sizes = [[2, 8], [4, 12], [8, 16]].map(([v, px]) => ({ px, select: set({ size: v }), bg: s.size === v ? '#f7f6f3' : '#5a5751' }));
+    const qTexts = [['S1', '3x + 5 = 20 ise x kaçtır?'], ['S2', 'Kenarları 6 cm ve 8 cm olan dikdörtgenin çevresi kaç cm?'], ['S3', '2/3 + 1/6 işleminin sonucu nedir?']];
+    const bank = this.hintBank[s.activeQ];
+    const hints = bank.map((text, i) => {
+      const key = s.activeQ + '-' + i, open = !!s.revealed[key], focused = s.activeHint === i;
+      return { id: 'İpucu ' + (i + 1), text, focus: set({ activeHint: i }),
+        toggle: (e) => { e.stopPropagation(); this.setState(st => ({ activeHint: i, revealed: { ...st.revealed, [key]: !st.revealed[key] } })); },
+        state: open ? 'açık' : 'gizli', border: focused ? '#1c1b19' : 'transparent', rowBg: focused ? '#f3ede6' : 'transparent',
+        filter: open ? 'none' : (mask === 'blur' ? 'blur(9px)' : 'none'),
+        bg: !open && mask === 'redact' ? '#1c1b19' : 'transparent', fg: '#1c1b19' };
+    });
+    const curKey = s.activeQ + '-' + s.activeHint, curOpen = !!s.revealed[curKey];
+    const statusStyle = { bekliyor: ['#efede8', '#7a776f'], işleniyor: ['oklch(55% 0.16 30)', '#fff'], tamamlandı: ['#1c1b19', '#fff'] };
+    const questions = qTexts.map(([id, text], i) => { const st = s.qStatus[i], [badgeBg, badgeFg] = statusStyle[st];
+      return { id, text, status: st, badgeBg, badgeFg, ring: s.activeQ === i ? '#1c1b19' : 'transparent', select: set({ activeQ: i, activeHint: 0 }), bg: s.activeQ === i ? '#f3ede6' : 'transparent',
+        fg: st === 'tamamlandı' ? '#7a776f' : '#1c1b19', deco: st === 'tamamlandı' ? 'line-through' : 'none' }; });
+    const setStatus = (i, v) => this.setState(st => { const q = st.qStatus.slice(); q[i] = v; return { qStatus: q }; });
+    const curStatus = s.qStatus[s.activeQ];
+    const done = s.qStatus.filter(x => x === 'tamamlandı').length;
+    const toolLabel = (toolDefs.find(t => t[0] === s.tool) || [])[1];
+    const cursor = s.tool === 'eraser' ? 'cell' : s.tool === 'text' ? 'text' : 'crosshair';
+    const slider = (label, value, pct) => ({ label, value, pct });
+    const toggleRow = (label, desc, on) => ({ label, desc, bg: on ? '#1c1b19' : '#d9d6cf', knob: on ? 23 : 3 });
+    return {
+      showToolbar: P.showToolbar ?? true, screens, tools, colors, sizes, hints, questions,
+      isMain: s.screen === 'main', isCam: s.screen === 'cam', isPen: s.screen === 'pen',
+      setBlur: set({ hintMask: 'blur' }), setRedact: set({ hintMask: 'redact' }),
+      blurBg: mask === 'blur' ? '#1c1b19' : 'transparent', blurFg: mask === 'blur' ? '#fff' : '#7a776f',
+      redactBg: mask === 'redact' ? '#1c1b19' : 'transparent', redactFg: mask === 'redact' ? '#fff' : '#7a776f',
+      hintQuestionLabel: qTexts[s.activeQ][0] + ' ipuçları', hintCounter: (s.activeHint + 1) + ' / ' + bank.length,
+      prevHint: set({ activeHint: Math.max(0, s.activeHint - 1) }), nextHint: set({ activeHint: Math.min(bank.length - 1, s.activeHint + 1) }),
+      revealHint: () => this.setState(st => ({ revealed: { ...st.revealed, [curKey]: !st.revealed[curKey] } })), revealLabel: curOpen ? 'Gizle' : 'Aç',
+      workQuestion: () => setStatus(s.activeQ, curStatus === 'işleniyor' ? 'tamamlandı' : 'işleniyor'),
+      workLabel: curStatus === 'işleniyor' ? 'Soruyu tamamla ✓' : 'Soruyu işle', workBg: curStatus === 'işleniyor' ? '#1c1b19' : 'transparent', workFg: curStatus === 'işleniyor' ? '#fff' : '#1c1b19',
+      continueQuestion: () => { setStatus(s.activeQ, 'işleniyor'); this.setState({ activeHint: Math.min(bank.length - 1, s.activeHint + 1) }); },
+      nextQuestion: () => { const nx = (s.activeQ + 1) % qTexts.length; this.setState(st => { const q = st.qStatus.slice(); if (q[s.activeQ] === 'işleniyor') q[s.activeQ] = 'tamamlandı'; return { qStatus: q, activeQ: nx, activeHint: 0 }; }); },
+      activeQId: qTexts[s.activeQ][0], activeQText: qTexts[s.activeQ][1],
+      qHidden: !s.qShown[s.activeQ], qShown: !!s.qShown[s.activeQ], qFilter: s.qShown[s.activeQ] ? 'none' : 'blur(14px)',
+      showQuestion: () => this.setState(st => ({ qShown: { ...st.qShown, [st.activeQ]: true } })),
+      hideQuestion: () => this.setState(st => ({ qShown: { ...st.qShown, [st.activeQ]: false } })),
+      progressLabel: done + '/' + qTexts.length + ' tamamlandı · ' + qTexts[s.activeQ][0],
+      notes: s.notes.map((n, i) => ({ ...n, remove: () => this.setState(st => ({ notes: st.notes.filter((_, j) => j !== i) })) })),
+      noteCount: s.notes.length + ' not', noteDraft: s.noteDraft, setNoteDraft: e => this.setState({ noteDraft: e.target.value }),
+      noteKey: e => { if (e.key === 'Enter') addNote(); }, addNote,
+      recognized: s.recognized, activeQuestionLabel: '· ' + qTexts[s.activeQ][0] + ' için çözüm alanı',
+      toolLabel, sizeLabel: s.size + ' px', cursor, canvasRef: this.canvasRef,
+      canvasHint: this.history.length ? '' : 'Buraya çizin — kalem basıncı kalınlığı değiştirir',
+      down: e => { const c = this.ctx(); if (!c) return; this.drawing = true; this.last = this.pos(e); this.history.push(c.getImageData(0, 0, c.canvas.width, c.canvas.height)); if (this.history.length > 30) this.history.shift(); this.forceUpdate(); },
+      move: e => { if (!this.drawing) return; const c = this.ctx(), p = this.pos(e); c.lineCap = 'round'; c.lineJoin = 'round';
+        if (s.tool === 'eraser') { c.globalCompositeOperation = 'destination-out'; c.lineWidth = 36; } else { c.globalCompositeOperation = 'source-over'; c.strokeStyle = s.tool === 'laser' ? '#ff3b30' : s.color; c.lineWidth = s.size * (0.6 + p.p * 1.2); }
+        c.beginPath(); c.moveTo(this.last.x, this.last.y); c.lineTo(p.x, p.y); c.stroke(); this.last = p; },
+      up: () => { this.drawing = false; },
+      undo: () => { const c = this.ctx(), img = this.history.pop(); if (c && img) c.putImageData(img, 0, 0); this.forceUpdate(); },
+      clearCanvas: () => { const c = this.ctx(); if (c) c.clearRect(0, 0, c.canvas.width, c.canvas.height); this.history = []; this.forceUpdate(); },
+      recording: s.recording, toggleRecord: () => this.setState(st => ({ recording: !st.recording, secs: st.recording ? st.secs : 0 })),
+      recBg: s.recording ? accent : 'transparent', recDot: s.recording ? 18 : 22, recRadius: s.recording ? 3 : 11, recLabel: s.recording ? 'DURDUR' : 'KAYIT',
+      recTime: pad(Math.floor(s.secs / 60)) + ':' + pad(s.secs % 60),
+      green, toggleGreen: set({ green: !green }),
+      camBg: green ? '#f7f6f3' : '#00ff3c', camPattern: green ? 'radial-gradient(#d9d6cf 1px, transparent 1px)' : 'none',
+      camLabel: green ? 'yeşil perde: kaldırıldı' : 'yeşil perde: ham görüntü', camLabelColor: green ? '#7a776f' : '#043d12',
+      greenToggleBg: green ? '#1c1b19' : '#d9d6cf', greenKnob: green ? 25 : 3, maskPct: green ? 97 : 0,
+      camSliders: [slider('Tolerans', '38', 38), slider('Kenar yumuşatma', '2 px', 20), slider('Dökülme bastırma', '%60', 60), slider('Boyut', '%24', 24)],
+      camCorners: [['top:6px;left:6px', false], ['top:6px;right:6px', false], ['bottom:6px;left:6px', false], ['bottom:6px;right:6px', true]].map(([pos, on]) => ({ pos, border: on ? '#1c1b19' : '#e3e0d9', bg: on ? '#f3ede6' : '#fff' })),
+      cursorPreviews: [
+        { label: 'Kalem · ' + s.color, w: 18, h: 18, r: 9, bg: s.color, border: '2px solid #fff' },
+        { label: 'Silgi', w: 34, h: 34, r: 3, bg: 'transparent', border: '2px dashed #1c1b19' },
+        { label: 'Lazer', w: 14, h: 14, r: 7, bg: '#ff3b30', border: '4px solid rgba(255,59,48,.3)' },
+        { label: 'Yazı', w: 2, h: 28, r: 0, bg: '#1c1b19', border: 'none' }],
+      penSliders: [slider('Basınç eğrisi', 'Doğrusal', 50), slider('Yumuşatma', '%35', 35), slider('Min. kalınlık', '1 px', 10), slider('Maks. kalınlık', '12 px', 60)],
+      fxRows: [toggleRow('Matematik tanıma', 'El yazısı denklemleri düzgün metne çevir', true), toggleRow('Şekil düzeltme', 'Titrek daire/çizgi → geometrik şekil', true), toggleRow('Otomatik kaydet', 'Her 30 sn ve soru değişiminde', true), toggleRow('Ön tanımlı soru tanıma', 'Yazılan soruyu şablonla eşleştir', false)],
+      fxDemo: [{ hand: '3x + 5 = 20', typed: '3x + 5 = 20' }, { hand: 'x = 15 / 3', typed: 'x = 15 ÷ 3' }, { hand: '2/3 + 1/6', typed: '²⁄₃ + ¹⁄₆ = ⁵⁄₆' }, { hand: 'Ç = 2(a+b)', typed: 'Ç = 2 · (a + b)' }],
+    };
+  }
+}
+</script>
+</body>
+</html>

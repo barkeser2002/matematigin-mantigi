@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600&family=Caveat:wght@700&display=swap" rel="stylesheet">
+<style>body{margin:0;background:#e9e7e2;font-family:'Work Sans',sans-serif;color:#1c1b19} a{color:oklch(55% 0.16 30)} a:hover{color:oklch(45% 0.16 30)}</style>
+</helmet>
+<div style="max-width:880px;margin:40px auto;background:#f7f6f3;padding:64px 72px;box-sizing:border-box;font-family:'Work Sans',sans-serif;color:#1c1b19;line-height:1.5">
+  <div style="display:flex;align-items:baseline;gap:18px;border-bottom:2px solid #1c1b19;padding-bottom:18px">
+    <span style="font-family:'Caveat',cursive;font-size:56px;line-height:1;color:oklch(55% 0.16 30)">50</span>
+    <div>
+      <div style="font-size:26px;font-weight:600">Grafik Tablet Öğretim Platformu — özellik listesi</div>
+      <div style="font-size:14px;color:#7a776f">Python · macOS · XP-Pen · pyautogui · OpenCV · Keras · Excel şablon</div>
+    </div>
+  </div>
+  <p style="font-size:14px;color:#7a776f;margin:18px 0 36px">Brief'te istenen çekirdek özellikler ilk bölümde. Sonraki 50 madde araştırma önerisi; her birinin yanında karar için soru var. Öncelik: <b style="color:#1c1b19">A</b> ilk sürüm, <b style="color:#1c1b19">B</b> ikinci, <b style="color:#1c1b19">C</b> sonra.</p>
+
+  <div style="font-size:12px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:oklch(55% 0.16 30);margin-bottom:12px">Çekirdek (brief)</div>
+  <div style="display:flex;flex-direction:column;gap:6px;font-size:15px;margin-bottom:40px">
+    <sc-for list="{{ core }}" as="c" hint-placeholder-count="10">
+      <div style="display:grid;grid-template-columns:28px 1fr;gap:12px;padding:6px 0;border-bottom:1px solid #e3e0d9"><span style="color:#7a776f">{{ c.n }}</span><span>{{ c.t }}</span></div>
+    </sc-for>
+  </div>
+
+  <sc-for list="{{ groups }}" as="g" hint-placeholder-count="6">
+    <div style="margin-bottom:36px">
+      <div style="font-size:12px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:oklch(55% 0.16 30);margin-bottom:12px">{{ g.title }}</div>
+      <div style="display:flex;flex-direction:column">
+        <sc-for list="{{ g.items }}" as="it" hint-placeholder-count="8">
+          <div style="display:grid;grid-template-columns:28px 24px 1fr;gap:12px;padding:9px 0;border-bottom:1px solid #e3e0d9;font-size:15px">
+            <span style="color:#7a776f">{{ it.n }}</span>
+            <span style="font-weight:600;font-size:12px;padding-top:3px">{{ it.p }}</span>
+            <div><div>{{ it.t }}</div><div style="font-size:13px;color:#7a776f;margin-top:2px">Soru: {{ it.q }}</div></div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </sc-for>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    const core = ['4 alanlı yerleşim: Sorular (1), El çizimi (2), Akıllı ipuçları (3), Webcam (4); dış araç çubuğu (9) kayıtta görünmez',
+      'Program içi yeşil perde (chroma-key) algılama, OBS gerekmez', 'Akıllı ipuçları blur veya siyah redakte; tıklanmadan açılmaz',
+      'Tam ekran video kaydı (ekran + webcam + ses)', 'pyautogui ile sistem düzeyi imleç ve kısayol kontrolü', 'macOS ve XP-Pen sürücü desteği, basınç hassasiyeti',
+      'Excel şablonundan soru ekleme (soru, ipucu, cevap, konu, sınıf)', 'Araca göre özel imleç: kalem renkli nokta, silgi kare, lazer kırmızı halka',
+      'Kalem, yazı boyutu, silgi, renk, kalem ucu şekilleri', 'Keras ile el yazısı matematik tanıma, şekil düzeltme, otomatik kaydet'].map((t, i) => ({ n: i + 1, t }));
+    let n = 0;
+    const G = (title, rows) => ({ title, items: rows.map(([p, t, q]) => ({ n: ++n, p, t, q })) });
+    const groups = [
+      G('Çizim & kalem', [
+        ['A', 'Düz çizgi kilidi: Shift basılı → mükemmel doğru', 'Kalem yan tuşuna mı, klavyeye mi bağlansın?'],
+        ['A', 'Sonsuz sayfa / yeni sayfa ekleme, sayfalar arası küçük resimle gezinme', 'Sayfa mı, kaydırılan sonsuz tuval mi?'],
+        ['A', 'Izgara / kareli / izometrik / koordinat düzlemi arka planı', 'Kayıtta ızgara görünsün mü?'],
+        ['B', 'Vurgulayıcı kalem (yarı saydam, çarpan karışım)', 'Renk paleti sınırlı mı kalsın?'],
+        ['B', 'Lazer işaretçi izi 1,5 sn sonra kaybolur', 'İz kalıcılık süresi ayarlanabilir olsun mu?'],
+        ['B', 'Seçim aracı: çizimi taşı, ölçekle, döndür', 'Kement mi dikdörtgen mi?'],
+        ['C', 'Katmanlar: soru katmanı kilitli, çözüm katmanı silinebilir', 'Öğretmen katman kavramını görmek ister mi?'],
+        ['B', 'Cetvel, açıölçer, pergel araçları (ekranda döndürülebilir)', 'Geometri dersinde şart mı?'],
+        ['C', 'Zaman geri sarma: son 30 sn çizimi kaydırıcıyla geri al', 'Undo yeterli mi?'],
+        ['A', 'XP-Pen ekspres tuş eşleme paneli', 'Hangi model? Tuş sayısı?']]),
+      G('Yapay zekâ & tanıma', [
+        ['A', 'El yazısı denklemi LaTeX/Unicode\'a çevirip yanında gösterme', 'Otomatik mı, "dönüştür" düğmesiyle mi?'],
+        ['B', 'Çizilen şekli tanıyıp düzgün geometriye çevirme (daire, üçgen, ok)', 'Hemen mi, kalem kalkınca mı?'],
+        ['B', 'Adım adım çözüm doğrulama: yazılan ara sonuç yanlışsa sessiz uyarı', 'Kayıtta uyarı görünsün mü?'],
+        ['C', 'Cevap anahtarıyla eşleştirip "doğru" işareti', 'Öğrenci görmeli mi?'],
+        ['B', 'Konuşmadan otomatik altyazı (Whisper) ve konu zaman damgası', 'Türkçe model kalitesi yeterli mi?'],
+        ['C', 'Grafik çizim: y = f(x) yazınca fonksiyon grafiği', 'Ortaokul için gerekli mi?'],
+        ['B', 'Soruya göre ipucu üretme (LLM), öğretmen onayıyla', 'Çevrimdışı çalışmak zorunda mı?'],
+        ['C', 'Çizim estetiği: titreme filtresi ve çizgi kalınlığı normalize', 'Yumuşatma gecikmesi kabul edilir mi?']]),
+      G('Soru & içerik yönetimi', [
+        ['A', 'Excel şablonu: sütun doğrulama ve hata raporu', 'Görsel/formül sütunu gerekir mi?'],
+        ['A', 'Soru bankası: konu, sınıf, zorluk filtreleri', 'Kaç soru hedefleniyor?'],
+        ['B', 'Soruya görsel ekleme (sürükle bırak PNG/PDF)', 'PDF sayfa kesme gerekir mi?'],
+        ['B', 'Soru sırasını sürükleyerek değiştirme, karıştırma', 'Ders planı kavramı olsun mu?'],
+        ['C', 'Aynı sorunun varyantını üretme (sayıları değiştir)', 'Cevap otomatik hesaplanabilir mi?'],
+        ['B', 'Bulanık soru modu: tüm sorular gizli, tek tek açılır', 'Alan 1 de gizlenebilir mi?'],
+        ['C', 'Ders şablonları: konu başlığı, hedefler, özet kartı', 'Standart bir ders akışı var mı?']]),
+      G('Kayıt & yayın', [
+        ['A', 'Bölge seçimli kayıt: araç çubuğu otomatik dışarıda', 'Çözünürlük 1080p mi 4K mı?'],
+        ['A', 'Duraklat / devam, bölüm işaretçisi (chapter)', 'Kısayol kalem tuşunda mı?'],
+        ['B', 'Ayrı parçalar: ekran, webcam, mikrofon ayrı dosyalar', 'Sonradan montaj yapılıyor mu?'],
+        ['B', 'Soru başına otomatik klip kesme', 'Klip adı soru ID\'si mi?'],
+        ['C', 'Canlı yayın (RTMP) ve Zoom/Meet için sanal kamera', 'Canlı ders yapılıyor mu?'],
+        ['B', 'Ses seviyesi göstergesi, gürültü bastırma', 'Harici mikrofon mu?'],
+        ['C', 'Çıktı: MP4 + çizim PDF + tanınan metin (Markdown)', 'Öğrenciye hangi format gidiyor?']]),
+      G('Webcam & sahne', [
+        ['A', 'Yeşil perde tolerans/kenar/dökülme ayarı ve otomatik kalibrasyon', 'Işık sabit mi?'],
+        ['B', 'Perde yokken AI arka plan kaldırma (MediaPipe)', 'Yeşil perde her zaman var mı?'],
+        ['B', 'Kamerayı köşe/yuvarlak/tam boy silüet olarak gösterme', 'Tam boy ihtiyacı var mı?'],
+        ['C', 'Kamera arkası çizim: öğretmen çizimin arkasında', 'Tercih edilir mi?'],
+        ['B', 'Yüz takibiyle otomatik kadraj', 'Hareketli anlatım mı?'],
+        ['C', 'Kısayolla webcam anlık büyüt/küçült', 'Vurgu anları var mı?']]),
+      G('Sunum & etkileşim', [
+        ['A', 'Sunum modu: tüm başlıklar/numaralar gizli, sadece içerik', 'Numaralar kayıtta kalsın mı?'],
+        ['B', 'Büyüteç / yakınlaştırma (z tuşu)', 'Küçük yazı problemi var mı?'],
+        ['B', 'Zamanlayıcı ve geri sayım (soru çözüm süresi)', 'Ekranda görünsün mü?'],
+        ['C', 'İkinci ekran: öğrenci görünümü ayrı', 'Sınıfta projeksiyon var mı?'],
+        ['C', 'Öğrenci QR ile soruya bağlanma', 'Öğrenci etkileşimi hedef mi?']]),
+      G('Sistem & ergonomi', [
+        ['A', 'Tam klavye kısayol haritası ve düzenleyici', 'Kalem tuşları öncelik mi?'],
+        ['A', 'Otomatik kaydetme ve çökme sonrası kurtarma', 'Kayıt dosyası da kurtarılmalı mı?'],
+        ['B', 'Karanlık / açık tema ve yüksek kontrast', 'Sadece beyaz tahta yeter mi?'],
+        ['B', 'Sol el modu (araç çubuğu sağa)', 'Kullanıcı sayısı?'],
+        ['C', 'Eklenti sistemi (Python betiği ile yeni araç)', 'Geliştirici topluluğu hedef mi?'],
+        ['B', 'Uygulama içi eğitim turu ve örnek ders', 'İlk kullanım kim?'],
+        ['C', 'Bulut yedek ve cihazlar arası soru bankası', 'Birden fazla Mac var mı?'],
+        ['B', 'Performans: 120 Hz çizim, düşük gecikme kalem (Metal)', 'Gecikme şikâyeti var mı?']])
+    ];
+    return { core, groups };
+  }
+}
+</script>
+</body>
+</html>

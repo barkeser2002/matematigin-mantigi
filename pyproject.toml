@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "matematigin-mantigi"
+version = "0.1.0"
+description = "Grafik tablet ile ders anlatım ve kayıt uygulaması (görünüş demosu)"
+requires-python = ">=3.11"
+dependencies = [
+  "PyQt6>=6.6",
+  "opencv-python>=4.8",
+  "numpy>=1.26",
+  "openpyxl>=3.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-qt>=4.4"]
+
+[project.scripts]
+matematigin-mantigi = "matematigin_mantigi.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+matematigin_mantigi = ["assets/fonts/*.ttf", "assets/fonts/*.txt"]
+
+[tool.pytest.ini_options]
+qt_api = "pyqt6"
+testpaths = ["tests"]

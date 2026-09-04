@@ -71,8 +71,10 @@ def ini_settings(tmp_path):
 def window(qtbot, tmp_path, ini_settings, dead_camera):
     from matematigin_mantigi.core.recorder import NullRecorder
     from matematigin_mantigi.core.session_store import SessionStore
+    from matematigin_mantigi.core.models import PenSettings
     from matematigin_mantigi.ui.main_window import MainWindow
     from matematigin_mantigi.ui.theme import FontFamilies
+    ini_settings.set_pen(PenSettings(reading_ms=0))      # testlerde okuma animasyonu kapalı
     win = MainWindow(FontFamilies("Arial", "Arial", False), list(SAMPLE_QUESTIONS), ini_settings,
                      NullRecorder(), SessionStore(tmp_path / "oturum"), lambda: dead_camera,
                      tmp_path / "duzen.json")

@@ -1,9 +1,9 @@
 from PyQt6.QtCore import QPoint, Qt
 
 from matematigin_mantigi.core import layout_model as lm
-from matematigin_mantigi.ui.panel import PanelFrame
 from matematigin_mantigi.ui.theme import FontFamilies
 from matematigin_mantigi.ui.work_area import WorkArea
+from matematigin_mantigi.ui.zone import Zone
 
 FAM = FontFamilies("Arial", "Arial", False)
 
@@ -11,70 +11,72 @@ FAM = FontFamilies("Arial", "Arial", False)
 def make(qtbot):
     wa = WorkArea(FAM)
     qtbot.addWidget(wa)
-    panels = {}
-    for key, num, title in (("soru", "1", "Soru"), ("ipucu", "3", "Akıllı ipuçları"),
-                            ("cizim", "2", "El çizimi"), ("webcam", "4", "Webcam")):
-        p = PanelFrame(num, title, FAM)
-        wa.add_panel(key, p)
-        panels[key] = p
+    zones = {}
+    for key in lm.ZONE_KEYS:
+        z = Zone()
+        wa.add_zone(key, z)
+        zones[key] = z
     wa.resize(1832, 1080)
     wa.show()
-    return wa, panels
+    qtbot.waitExposed(wa)
+    return wa, zones
 
 
-def test_default_layout_places_panels(qtbot):
-    wa, panels = make(qtbot)
-    soru, cizim, ipucu = panels["soru"].geometry(), panels["cizim"].geometry(), panels["ipucu"].geometry()
-    assert soru.left() == 210 and soru.top() == 30                     # padding left/top
-    assert cizim.top() - soru.bottom() - 1 == 14                       # gap
-    assert ipucu.right() == wa.width() - 30 - 1                        # padding right
-    assert abs(soru.width() / ipucu.width() - 7 / 5) < 0.02
+def test_board_fills_area_and_zones_use_defaults(qtbot):
+    wa, zones = make(qtbot)
+    assert wa.board.geometry() == wa.rect()
+    soru, ipucu, webcam = (zones[k].geometry() for k in ("soru", "ipucu", "webcam"))
+    assert soru.left() == 0 and soru.top() == 0                       # kenar boşluğu yok
+    assert ipucu.right() == wa.width() - 1
+    assert webcam.right() == wa.width() - 1 and webcam.bottom() == wa.height() - 1
+    assert abs(soru.width() / ipucu.width() - 1) < 0.02
+
+
+def test_zone_forwards_drawing_to_board(qtbot):
+    wa, zones = make(qtbot)
+    z = zones["soru"]
+    start, end = QPoint(100, 100), QPoint(180, 160)
+    qtbot.mousePress(z, Qt.MouseButton.LeftButton, pos=start)
+    qtbot.mouseMove(z, end)
+    qtbot.mouseRelease(z, Qt.MouseButton.LeftButton, pos=end)
+    assert not wa.board.is_empty()
+    assert wa.board.strokes_image().pixelColor(140, 130).alpha() > 0    # soru bölgesi (0,0)'da: tahta koordinatı aynı
 
 
 def test_edit_mode_drag_moves_and_snaps(qtbot):
-    wa, panels = make(qtbot)
+    wa, zones = make(qtbot)
     wa.set_edit_mode(True)
-    webcam = panels["webcam"]
-    start = webcam.geometry().topLeft() + QPoint(40, 20)      # inside header
-    cw, ch = lm.cell_size(wa.width() - 240, wa.height() - 90, 14)
+    start = zones["webcam"].geometry().center()
+    cw, ch = lm.cell_size(wa.width(), wa.height(), 14)
     qtbot.mousePress(wa, Qt.MouseButton.LeftButton, pos=start)
     qtbot.mouseMove(wa, start + QPoint(-int(cw * 2), 0))
     qtbot.mouseMove(wa, start + QPoint(-int(cw * 2), 0))
     with qtbot.waitSignal(wa.layoutChanged) as sig:
         qtbot.mouseRelease(wa, Qt.MouseButton.LeftButton, pos=start + QPoint(-int(cw * 2), 0))
-    assert sig.args[0]["webcam"] == lm.PanelGeom(5, 5, 5, 5)
+    assert sig.args[0]["webcam"] == lm.PanelGeom(7, 7, 3, 3)
+    assert wa.board.is_empty()                                        # düzen modunda çizim olmaz
 
 
 def test_edit_mode_resize_from_corner(qtbot):
-    wa, panels = make(qtbot)
+    wa, zones = make(qtbot)
     wa.set_edit_mode(True)
-    soru = panels["soru"]
-    corner = soru.geometry().bottomRight() - QPoint(6, 6)
-    cw, ch = lm.cell_size(wa.width() - 240, wa.height() - 90, 14)
+    corner = zones["soru"].geometry().bottomRight() - QPoint(6, 6)
+    cw, ch = lm.cell_size(wa.width(), wa.height(), 14)
     qtbot.mousePress(wa, Qt.MouseButton.LeftButton, pos=corner)
     qtbot.mouseMove(wa, corner + QPoint(0, int(ch)))
     with qtbot.waitSignal(wa.layoutChanged) as sig:
         qtbot.mouseRelease(wa, Qt.MouseButton.LeftButton, pos=corner + QPoint(0, int(ch)))
-    assert sig.args[0]["soru"] == lm.PanelGeom(0, 0, 7, 4)
+    assert sig.args[0]["soru"] == lm.PanelGeom(0, 0, 6, 5)
 
 
 def test_no_drag_outside_edit_mode(qtbot):
-    wa, panels = make(qtbot)
-    before = panels["webcam"].geometry()
-    start = before.topLeft() + QPoint(40, 20)
+    wa, zones = make(qtbot)
+    before = zones["webcam"].geometry()
+    start = before.center()
     qtbot.mousePress(wa, Qt.MouseButton.LeftButton, pos=start)
     qtbot.mouseMove(wa, start + QPoint(-300, 0))
     qtbot.mouseRelease(wa, Qt.MouseButton.LeftButton, pos=start + QPoint(-300, 0))
-    assert panels["webcam"].geometry() == before
-
-
-def test_maximize_and_restore(qtbot):
-    wa, panels = make(qtbot)
-    wa.set_maximized("cizim")
-    g = panels["cizim"].geometry()
-    assert g.left() == 210 and g.right() == wa.width() - 30 - 1 and not panels["soru"].isVisible()
-    wa.set_maximized(None)
-    assert panels["soru"].isVisible() and panels["cizim"].geometry().top() > 30
+    assert zones["webcam"].geometry() == before
 
 
 def test_reset_layout_emits_default(qtbot):
@@ -92,14 +94,19 @@ def test_recording_rect_covers_whole_work_area(qtbot):
 
 
 def test_no_lines_outside_edit_mode(qtbot):
-    wa, panels = make(qtbot)
-    qtbot.waitExposed(wa)
+    wa, _ = make(qtbot)
     img = wa.grab().toImage()
-    assert img.pixelColor(3, 300).name() == "#e9e7e2"          # çerçeve çizilmedi, sayfa rengi
-    assert all(not p.border_visible for p in panels.values())
+    assert img.pixelColor(3, 300).name() == "#ffffff"          # düz beyaz tahta, çerçeve yok
     wa.set_edit_mode(True)
     img = wa.grab().toImage()
     assert img.pixelColor(3, 300).name() == "#1c1b19"          # düzen modunda 10px çerçeve
-    assert all(p.border_visible for p in panels.values())
     wa.set_edit_mode(False)
-    assert all(not p.border_visible for p in panels.values())
+    img = wa.grab().toImage()
+    assert img.pixelColor(3, 300).name() == "#ffffff"
+
+
+def test_status_line(qtbot):
+    wa, _ = make(qtbot)
+    wa.set_status("Araç: Kalem · Kalınlık: 4 px · Basınç: XP-Pen")
+    assert wa.status_label.text().startswith("Araç: Kalem")
+    assert wa.status_label.y() > wa.height() - 60 and wa.status_label.x() == 16

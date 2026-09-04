@@ -57,11 +57,14 @@ class PenSettingsDialog(QDialog):
         self.smoothing_slider = self._slider(0, 100, current.smoothing)
         self.min_slider = self._slider(1, 30, current.min_width)
         self.max_slider = self._slider(1, 40, current.max_width)
+        self.reading_slider = self._slider(0, 400, current.reading_ms)
         self.curve_value = QLabel(); self.smoothing_value = QLabel(); self.min_value = QLabel(); self.max_value = QLabel()
+        self.reading_value = QLabel()
         for name, slider, value in (("Basınç eğrisi", self.curve_slider, self.curve_value),
                                     ("Yumuşatma", self.smoothing_slider, self.smoothing_value),
                                     ("Min. kalınlık", self.min_slider, self.min_value),
-                                    ("Maks. kalınlık", self.max_slider, self.max_value)):
+                                    ("Maks. kalınlık", self.max_slider, self.max_value),
+                                    ("Okuma hızı", self.reading_slider, self.reading_value)):
             row = QHBoxLayout(); row.addWidget(slider, 1); row.addWidget(value)
             lab = QLabel(name); lab.setFont(theme.font(fam, 11, 500))
             form.addRow(lab, row)
@@ -115,7 +118,7 @@ class PenSettingsDialog(QDialog):
         buttons.addWidget(self.cancel_button); buttons.addWidget(self.apply_button)
         root.addLayout(buttons)
 
-        for s in (self.curve_slider, self.smoothing_slider, self.min_slider, self.max_slider):
+        for s in (self.curve_slider, self.smoothing_slider, self.min_slider, self.max_slider, self.reading_slider):
             s.valueChanged.connect(self._refresh_values)
         self.min_slider.valueChanged.connect(lambda v: self.max_slider.setValue(max(v, self.max_slider.value())))
         self.max_slider.valueChanged.connect(lambda v: self.min_slider.setValue(min(v, self.min_slider.value())))
@@ -130,6 +133,8 @@ class PenSettingsDialog(QDialog):
         self.smoothing_value.setText(f"%{self.smoothing_slider.value()}")
         self.min_value.setText(f"{self.min_slider.value()} px")
         self.max_value.setText(f"{self.max_slider.value()} px")
+        r = self.reading_slider.value()
+        self.reading_value.setText("kapalı" if r == 0 else f"{r} ms/kelime")
 
     def value(self) -> PenSettings:
         nib = next(n for n, b in self.nib_buttons.items() if b.isChecked())
@@ -138,7 +143,8 @@ class PenSettingsDialog(QDialog):
                            math_recognition=self.toggles["math_recognition"].isChecked(),
                            shape_correction=self.toggles["shape_correction"].isChecked(),
                            autosave=self.toggles["autosave"].isChecked(),
-                           template_matching=self.toggles["template_matching"].isChecked())
+                           template_matching=self.toggles["template_matching"].isChecked(),
+                           reading_ms=self.reading_slider.value())
 
     def _apply(self) -> None:
         self.applied.emit(self.value())

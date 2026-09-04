@@ -28,6 +28,14 @@ TOOLBAR_DIM = "#5a5751"
 CAM_RAW = "#00ff3c"
 LASER = "#ff3b30"
 
+# Beyaz tahta (PDF stili)
+QUESTION_NUMBER = "#c8322b"
+HINT_HEADING = "#a3551b"
+HINT_CARD_BG = "#fff4d6"
+HINT_CARD_BORDER = "#e8a23a"
+HINT_CARD_BORDER_FOCUS = "#c77d12"
+BULB = "#f6c343"
+
 # Ölçüler
 GRID_GAP = 14
 PANEL_RADIUS = 4
@@ -35,7 +43,7 @@ PANEL_BORDER = 2
 FRAME_INSET = 10
 TOOLBAR_WIDTH = 88
 DOT_SPACING = 28
-WORK_PADDING = (30, 30, 60, 210)   # top, right, bottom, left
+WORK_PADDING = (0, 0, 0, 0)        # tahta kenardan kenara; top, right, bottom, left
 
 
 def tr_upper(text: str) -> str:

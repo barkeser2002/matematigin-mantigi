@@ -3,7 +3,6 @@ from PyQt6.QtCore import Qt
 from matematigin_mantigi.core.models import PALETTE, Tool
 from matematigin_mantigi.ui.theme import FontFamilies
 from matematigin_mantigi.ui.toolbar import ToolBar
-from matematigin_mantigi.ui.panel import PanelFrame
 
 FAM = FontFamilies("Arial", "Arial", False)
 
@@ -66,24 +65,10 @@ def test_layout_edit_button(qtbot):
     assert sig.args == [True]
 
 
-def test_panel_frame_header(qtbot):
-    p = PanelFrame("1", "Soru", FAM)
-    qtbot.addWidget(p)
-    p.show()
-    assert p.number_label.text() == "1" and p.title_label.text() == "SORU"
-    with qtbot.waitSignal(p.headerPressed):
-        qtbot.mousePress(p.header_widget, Qt.MouseButton.LeftButton)
-
-
-def test_panel_frame_has_no_border_by_default(qtbot):
-    p = PanelFrame("1", "Soru", FAM)
-    qtbot.addWidget(p)
-    p.resize(200, 120)
-    p.show()
-    qtbot.waitExposed(p)
-    assert p.border_visible is False
-    img = p.grab().toImage()
-    assert img.pixelColor(1, 60).name() == "#ffffff"      # kenar çizgisi yok, beyaz dolgu
-    p.set_border_visible(True)
-    img = p.grab().toImage()
-    assert img.pixelColor(1, 60).name() == "#1c1b19"      # düzen modunda mürekkep kenar
+def test_prev_and_next_buttons(qtbot):
+    tb = make(qtbot)
+    assert tb.prev_button.text() == "← Önceki soru" and tb.next_button.text() == "Sıradaki soru →"
+    with qtbot.waitSignal(tb.prevRequested):
+        qtbot.mouseClick(tb.prev_button, Qt.MouseButton.LeftButton)
+    with qtbot.waitSignal(tb.nextRequested):
+        qtbot.mouseClick(tb.next_button, Qt.MouseButton.LeftButton)

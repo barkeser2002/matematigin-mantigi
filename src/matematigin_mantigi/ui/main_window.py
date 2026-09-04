@@ -1,4 +1,4 @@
-"""Ana pencere: bileşenleri kurar ve sinyalleri bağlar. İş mantığı core/ içindedir."""
+"""Ana pencere: beyaz tahta + bölgeleri kurar ve sinyalleri bağlar. İş mantığı core/ içindedir."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,17 +8,16 @@ from PyQt6.QtGui import QColor, QKeySequence, QShortcut
 from PyQt6.QtWidgets import QHBoxLayout, QMainWindow, QWidget
 
 from matematigin_mantigi.core import layout_model as lm
-from matematigin_mantigi.core.models import TOOL_META, Question, QuestionStatus, Tool
+from matematigin_mantigi.core.models import TOOL_META, PenSettings, Question, QuestionStatus, Tool
 from matematigin_mantigi.core.question_flow import QuestionFlow
 from matematigin_mantigi.core.recorder import Recorder, record_rect_for
 from matematigin_mantigi.core.session_store import SessionStore
 from matematigin_mantigi.core.settings import AppSettings
 from matematigin_mantigi.ui.camera_worker import FrameSource
-from matematigin_mantigi.ui.canvas_panel import CanvasPanel
 from matematigin_mantigi.ui.cursors import cursor_for
-from matematigin_mantigi.ui.hint_panel import HintPanel
+from matematigin_mantigi.ui.hint_zone import HintZone
 from matematigin_mantigi.ui.pen_settings import PenSettingsDialog
-from matematigin_mantigi.ui.question_panel import QuestionPanel
+from matematigin_mantigi.ui.question_zone import QuestionZone
 from matematigin_mantigi.ui.record_badge import RecordBadge
 from matematigin_mantigi.ui.theme import FontFamilies
 from matematigin_mantigi.ui.toolbar import ToolBar
@@ -39,15 +38,13 @@ class MainWindow(QMainWindow):
         row.setContentsMargins(0, 0, 0, 0); row.setSpacing(0)
         self.toolbar = ToolBar(fam)
         self.work_area = WorkArea(fam)
-        self.question_panel = QuestionPanel(fam)
-        self.hint_panel = HintPanel(fam)
-        self.canvas_panel = CanvasPanel(fam)
-        self.canvas = self.canvas_panel.canvas
+        self.canvas = self.work_area.board
+        self.question_zone = QuestionZone(fam)
+        self.hint_zone = HintZone(fam)
         self.webcam_panel = WebcamPanel(fam, camera_source_factory or (lambda: _NoCamera()),
                                         settings.chroma, settings.chroma_enabled)
-        for key, panel in (("soru", self.question_panel), ("ipucu", self.hint_panel),
-                           ("cizim", self.canvas_panel), ("webcam", self.webcam_panel)):
-            self.work_area.add_panel(key, panel)
+        for key, zone in (("soru", self.question_zone), ("ipucu", self.hint_zone), ("webcam", self.webcam_panel)):
+            self.work_area.add_zone(key, zone)
         self.work_area.set_layout(lm.load_layout(self.layout_path))
         self.badge = RecordBadge(fam, self.work_area)
         self.work_area.badge_slot = self.badge
@@ -58,8 +55,8 @@ class MainWindow(QMainWindow):
         self._wire()
         self._shortcuts()
         self._restore_settings()
-        self.question_panel.set_questions(questions)
-        self._on_question_changed(self.flow.index if questions else 0)
+        if questions:
+            self._on_question_changed(self.flow.index)
         if camera_source_factory is not None:
             self.webcam_panel.start()
 
@@ -72,6 +69,7 @@ class MainWindow(QMainWindow):
         tb.undoRequested.connect(c.undo)
         tb.clearRequested.connect(c.clear)
         tb.workToggled.connect(flow.toggle_work)
+        tb.prevRequested.connect(flow.prev_question)
         tb.nextRequested.connect(flow.next_question)
         tb.recordToggled.connect(self.toggle_recording)
         tb.penSettingsRequested.connect(self.open_pen_settings)
@@ -87,19 +85,18 @@ class MainWindow(QMainWindow):
         flow.questionChanged.connect(self._on_question_changed)
         flow.statusChanged.connect(self._on_status_changed)
         flow.progressChanged.connect(lambda _d, _t: self._refresh_progress())
-        flow.questionVisibilityChanged.connect(self.question_panel.set_shown)
-        flow.hintChanged.connect(lambda i, _n: self.hint_panel.set_focus(i))
+        flow.questionVisibilityChanged.connect(self.question_zone.set_shown)
+        flow.hintChanged.connect(lambda i, _n: self.hint_zone.set_focus(i))
         flow.hintRevealChanged.connect(
-            lambda q, h, on: self.hint_panel.set_revealed(h, on) if q == flow.index else None)
+            lambda q, h, on: self.hint_zone.set_revealed(h, on) if q == flow.index else None)
 
-        qp, hp = self.question_panel, self.hint_panel
-        qp.questionSelected.connect(flow.select)
-        qp.showRequested.connect(flow.show_question)
-        qp.hideRequested.connect(flow.hide_question)
-        hp.prevRequested.connect(flow.hint_prev)
-        hp.nextRequested.connect(flow.hint_next)
-        hp.revealToggled.connect(flow.toggle_reveal)
-        hp.maskModeChanged.connect(self._on_mask_mode)
+        qz, hz = self.question_zone, self.hint_zone
+        qz.showRequested.connect(flow.show_question)
+        qz.hideRequested.connect(flow.hide_question)
+        hz.prevRequested.connect(flow.hint_prev)
+        hz.nextRequested.connect(flow.hint_next)
+        hz.revealToggled.connect(flow.toggle_reveal)
+        hz.maskModeChanged.connect(self._on_mask_mode)
         self.webcam_panel.chromaToggled.connect(self._on_chroma_toggled)
 
     def _shortcuts(self) -> None:
@@ -110,6 +107,7 @@ class MainWindow(QMainWindow):
         sc("Ctrl+Z", self.canvas.undo)
         sc("Ctrl+Shift+X", self.canvas.clear)
         sc("N", self.flow.next_question)
+        sc("P", self.flow.prev_question)
         sc("Space", self.flow.toggle_work)
         sc("R", lambda: self.toggle_recording(not self.recorder.is_recording))
         sc("H", lambda: self.flow.show_question() if not self.flow.is_question_shown() else self.flow.hide_question())
@@ -130,7 +128,8 @@ class MainWindow(QMainWindow):
         s = self.settings
         self.canvas.set_tool(s.tool); self.canvas.set_color(QColor(s.color)); self.canvas.set_base_width(s.width)
         self.toolbar.set_tool(s.tool); self.toolbar.set_color(s.color); self.toolbar.set_width(s.width)
-        self.hint_panel.set_mask_mode(s.hint_mask)
+        self.hint_zone.set_mask_mode(s.hint_mask)
+        self.question_zone.set_reading_ms(s.pen().reading_ms)
         self.refresh_cursor()
         self._status("XP-Pen")
 
@@ -141,7 +140,7 @@ class MainWindow(QMainWindow):
 
     def _on_color(self, hx: str) -> None:
         self.canvas.set_color(QColor(hx)); self.settings.color = hx
-        if self.canvas.tool != Tool.PEN:              # mockup: renk seçimi kalemi seçer
+        if self.canvas.tool != Tool.PEN:              # renk seçimi kalemi seçer
             self._on_tool(Tool.PEN); self.toolbar.set_tool(Tool.PEN)
         self.refresh_cursor()
 
@@ -154,7 +153,8 @@ class MainWindow(QMainWindow):
                                          self.canvas.devicePixelRatioF()))
 
     def _status(self, pressure_text: str) -> None:
-        self.canvas_panel.set_status(TOOL_META[self.canvas.tool][0], self.canvas.base_width, pressure_text)
+        self.work_area.set_status(f"Araç: {TOOL_META[self.canvas.tool][0]} · Kalınlık: {self.canvas.base_width} px"
+                                  f" · Basınç: {pressure_text}")
 
     def _on_question_leaving(self, i: int) -> None:
         if not self.canvas.is_empty():
@@ -165,20 +165,17 @@ class MainWindow(QMainWindow):
         if not self.flow.questions:
             return
         q = self.flow.questions[i]
-        self.question_panel.set_current(i)
-        self.hint_panel.set_hints(q.id, q.hints)
+        self.question_zone.set_question(q, i + 1, animate=True)
+        self.hint_zone.set_hints(q.id, q.hints)
         for h in range(len(q.hints)):
-            self.hint_panel.set_revealed(h, self.flow.is_revealed(h))
-        self.canvas_panel.set_question_label(f"· {q.id} için çözüm alanı")
+            self.hint_zone.set_revealed(h, self.flow.is_revealed(h))
         self._refresh_progress()
 
     def _on_status_changed(self, i: int, s: QuestionStatus) -> None:
-        self.question_panel.set_status(i, s)
         self._refresh_progress()
 
     def _refresh_progress(self) -> None:
-        text = self.flow.progress_label()
-        self.toolbar.set_progress(text); self.question_panel.set_progress(text)
+        self.toolbar.set_progress(self.flow.progress_label())
         self.toolbar.set_work_label(self.flow.work_label())
 
     def _on_mask_mode(self, m) -> None:
@@ -202,8 +199,12 @@ class MainWindow(QMainWindow):
 
     def open_pen_settings(self) -> None:
         dlg = PenSettingsDialog(self.settings.pen(), self.canvas.color, self.canvas.base_width, self.fam, self)
-        dlg.applied.connect(self.settings.set_pen)
+        dlg.applied.connect(self._apply_pen_settings)
         dlg.exec()
+
+    def _apply_pen_settings(self, p: PenSettings) -> None:
+        self.settings.set_pen(p)
+        self.question_zone.set_reading_ms(p.reading_ms)
 
     def closeEvent(self, e):
         self.webcam_panel.shutdown()

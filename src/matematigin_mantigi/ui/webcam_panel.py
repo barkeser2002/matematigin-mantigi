@@ -1,3 +1,4 @@
+"""Webcam bölgesi: çerçevesiz, tahtanın sağ alt köşesinde. Yeşil perde kalkınca zemin tahta beyazı."""
 from __future__ import annotations
 
 from typing import Callable
@@ -9,8 +10,8 @@ from PyQt6.QtWidgets import QLabel, QWidget
 from matematigin_mantigi.core.chroma_key import ChromaParams
 from matematigin_mantigi.ui import theme
 from matematigin_mantigi.ui.camera_worker import CameraWorker, FrameSource
-from matematigin_mantigi.ui.panel import PanelFrame
 from matematigin_mantigi.ui.theme import FontFamilies
+from matematigin_mantigi.ui.zone import Zone
 
 
 class CameraView(QWidget):
@@ -40,54 +41,51 @@ class CameraView(QWidget):
     def mousePressEvent(self, e: QMouseEvent) -> None:
         if e.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
-        super().mousePressEvent(e)
+        e.accept()                          # kamera tıklaması tahtaya çizim olarak gitmez
 
     def paintEvent(self, _e):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        p.fillRect(self.rect(), QColor(theme.CAM_RAW if self.raw_mode else theme.PANEL_SOFT))
+        if self.raw_mode:
+            p.fillRect(self.rect(), QColor(theme.CAM_RAW))
         if self._frame is None:
-            # siluet: gövde 230x230 üstü yuvarlak + baş 110 daire (mockup)
+            # siluet: baş + gövde (mockup), tahta zemininde açık gri
             p.setRenderHint(QPainter.RenderHint.Antialiasing)
             p.setPen(Qt.PenStyle.NoPen); p.setBrush(QColor(theme.DOT))
             cx, base = self.width() / 2, self.height()
-            p.drawEllipse(QPointF(cx, base - 190), 55, 55)
-            p.drawRoundedRect(QRectF(cx - 115, base - 120, 230, 230), 115, 115)
-            p.fillRect(QRectF(cx - 115, base - 5, 230, 5), QColor(theme.DOT))
+            r = min(self.width(), self.height()) / 2
+            p.drawEllipse(QPointF(cx, base - r * 1.25), r * 0.36, r * 0.36)
+            p.drawRoundedRect(QRectF(cx - r * 0.8, base - r * 0.8, r * 1.6, r * 1.6), r * 0.8, r * 0.8)
             p.setPen(QColor(theme.MUTED))
-            p.drawText(self.rect().adjusted(0, 12, 0, 0), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+            p.drawText(self.rect().adjusted(8, 8, -8, 0), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
                        self.placeholder_text)
         else:
             target = self._frame.size().scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio)
             x = (self.width() - target.width()) // 2
-            y = (self.height() - target.height()) // 2
+            y = self.height() - target.height()               # alt kenara yaslı
             p.drawImage(QRect(x, y, target.width(), target.height()), self._frame)
         p.end()
 
 
-class WebcamPanel(PanelFrame):
+class WebcamPanel(Zone):
     chromaToggled = pyqtSignal(bool)
 
     def __init__(self, fam: FontFamilies, source_factory: Callable[[], FrameSource],
                  params: ChromaParams, chroma_enabled: bool = True, parent=None):
-        super().__init__("4", "Webcam", fam, parent)
+        super().__init__(parent)
         self._params = params
         self.chroma_enabled = chroma_enabled
         self.has_camera = False
-
-        live = QLabel("CANLI"); live.setFont(theme.font(fam, 9, 700, spacing_pct=112))
-        live.setStyleSheet(f"color: {theme.REC_DOT};")
-        self.header.insertWidget(2, live)
-
         self.body.setContentsMargins(0, 0, 0, 0)
+
         self.view = CameraView(self)
         self.view.clicked.connect(self._toggle)
         self.body.addWidget(self.view, 1)
 
         self.overlay_label = QLabel(self.view)
-        self.overlay_label.setFont(theme.font(fam, 10, 600))
-        self.overlay_label.setStyleSheet(f"color: {theme.PANEL_SOFT}; background: rgba(28,27,25,180);"
-                                         f" border-radius: 6px; padding: 3px 8px;")
+        self.overlay_label.setFont(theme.font(fam, 9, 600))
+        self.overlay_label.setStyleSheet(f"color: {theme.PANEL_SOFT}; background: rgba(28,27,25,170);"
+                                         f" border-radius: 6px; padding: 2px 7px;")
         self.overlay_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         # İş parçacığı kurucuda oluşturulur; start() sadece başlatır. OpenCvSource open() öncesi kamera açmaz.
@@ -101,7 +99,7 @@ class WebcamPanel(PanelFrame):
         mode = "kaldırıldı" if self.chroma_enabled else "ham görüntü"
         self.overlay_label.setText(f"yeşil perde: {mode} · tıkla: aç/kapat")
         self.overlay_label.adjustSize()
-        self.overlay_label.move(10, 10)
+        self.overlay_label.move(8, 8)
         self.view.set_raw_mode(not self.chroma_enabled)
 
     def start(self) -> None:

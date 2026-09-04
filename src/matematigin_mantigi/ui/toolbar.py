@@ -22,6 +22,7 @@ class ToolBar(QWidget):
     colorSelected = pyqtSignal(str)        # hex
     widthSelected = pyqtSignal(int)
     workToggled = pyqtSignal()
+    prevRequested = pyqtSignal()
     nextRequested = pyqtSignal()
     undoRequested = pyqtSignal()
     clearRequested = pyqtSignal()
@@ -93,11 +94,14 @@ class ToolBar(QWidget):
         col.addWidget(self._caption("SORU AKIŞI"))
         self.work_button = WrapButton("Soruyu işle"); self.work_button.setStyleSheet(_BTN_CSS)
         self.work_button.clicked.connect(self.workToggled)
+        self.prev_button = WrapButton("← Önceki soru"); self.prev_button.setStyleSheet(_BTN_CSS)
+        self.prev_button.clicked.connect(self.prevRequested)
         self.next_button = WrapButton("Sıradaki soru →"); self.next_button.setStyleSheet(_BTN_CSS)
         self.next_button.clicked.connect(self.nextRequested)
         self.progress_label = self._caption("0/0")
         self.progress_label.setWordWrap(True)         # "0/3 tamamlandı · S1" iki satıra kırılır
-        col.addWidget(self.work_button); col.addWidget(self.next_button); col.addWidget(self.progress_label)
+        col.addWidget(self.work_button); col.addWidget(self.prev_button); col.addWidget(self.next_button)
+        col.addWidget(self.progress_label)
         col.addWidget(self._rule())
 
         hrow = QHBoxLayout(); hrow.setSpacing(4)

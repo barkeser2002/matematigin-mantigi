@@ -39,6 +39,7 @@ class DrawingCanvas(QWidget):
     pressureChanged = pyqtSignal(float)
     inputSourceChanged = pyqtSignal(str)        # "tablet" | "mouse"
     MAX_UNDO = 30
+    show_grid = False                           # düz beyaz tahta; True ise 28px nokta ızgarası
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -157,7 +158,8 @@ class DrawingCanvas(QWidget):
     def paintEvent(self, e: QPaintEvent) -> None:
         p = QPainter(self)
         p.fillRect(e.rect(), QColor(theme.PANEL))
-        p.fillRect(e.rect(), QBrush(self._tile))
+        if self.show_grid:
+            p.fillRect(e.rect(), QBrush(self._tile))
         p.drawImage(0, 0, self._strokes)
         p.drawImage(0, 0, self._overlay)
         p.end()

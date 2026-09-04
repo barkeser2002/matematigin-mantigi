@@ -79,9 +79,11 @@ def hand_font(fam: FontFamilies, px: int, weight: int = 500) -> QFont:
 
 
 def build_stylesheet(fam: FontFamilies) -> str:
+    """Uygulama stil sayfası. Yazı ailesi burada DEĞİL, QApplication.setFont ile verilir:
+    stil sayfasındaki font-family, setFont ile verilen Caveat gibi özel fontları ezer."""
     return f"""
     QMainWindow, QDialog {{ background: {PAGE}; }}
-    QWidget {{ font-family: "{fam.sans}"; color: {INK}; }}
+    QWidget {{ color: {INK}; }}
     QToolTip {{ background: {INK}; color: {PANEL_SOFT}; border: none; padding: 4px 8px; }}
     QPushButton#pill {{ background: {CHIP}; border: 1px solid {LINE}; border-radius: 12px;
                         padding: 3px 10px; font-size: 11px; font-weight: 600; }}

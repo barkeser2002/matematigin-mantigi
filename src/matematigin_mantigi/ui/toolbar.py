@@ -7,10 +7,10 @@ from PyQt6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushBut
 from matematigin_mantigi.core.models import PALETTE, TOOL_META, WIDTHS, Tool
 from matematigin_mantigi.ui import theme
 from matematigin_mantigi.ui.theme import FontFamilies
-from matematigin_mantigi.ui.widgets import DotButton, GlyphButton, RecordButton, SwatchButton
+from matematigin_mantigi.ui.widgets import DotButton, GlyphButton, RecordButton, SwatchButton, WrapButton
 
 _BTN_CSS = (f"QPushButton {{ background: {theme.TOOLBAR_BTN}; color: {theme.TOOLBAR_MUTED}; border: none;"
-            f" border-radius: 6px; padding: 6px 4px; font-size: 10px; font-weight: 600; }}"
+            f" border-radius: 6px; padding: 5px 3px; font-size: 10px; font-weight: 600; }}"
             f"QPushButton:checked {{ background: {theme.ACCENT}; color: white; }}"
             f"QPushButton:disabled {{ color: {theme.TOOLBAR_DIM}; }}")
 
@@ -38,7 +38,7 @@ class ToolBar(QWidget):
         self.setAutoFillBackground(True)
 
         col = QVBoxLayout(self)
-        col.setContentsMargins(16, 14, 16, 14)
+        col.setContentsMargins(10, 14, 10, 14)
         col.setSpacing(6)
         col.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
@@ -91,9 +91,9 @@ class ToolBar(QWidget):
         col.addWidget(self._rule())
 
         col.addWidget(self._caption("SORU AKIŞI"))
-        self.work_button = QPushButton("Soruyu işle"); self.work_button.setStyleSheet(_BTN_CSS)
+        self.work_button = WrapButton("Soruyu işle"); self.work_button.setStyleSheet(_BTN_CSS)
         self.work_button.clicked.connect(self.workToggled)
-        self.next_button = QPushButton("Sıradaki soru →"); self.next_button.setStyleSheet(_BTN_CSS)
+        self.next_button = WrapButton("Sıradaki soru →"); self.next_button.setStyleSheet(_BTN_CSS)
         self.next_button.clicked.connect(self.nextRequested)
         self.progress_label = self._caption("0/0")
         col.addWidget(self.work_button); col.addWidget(self.next_button); col.addWidget(self.progress_label)

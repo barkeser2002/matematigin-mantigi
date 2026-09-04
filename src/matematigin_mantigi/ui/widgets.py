@@ -2,9 +2,29 @@ from __future__ import annotations
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont, QMouseEvent, QPainter, QPen
-from PyQt6.QtWidgets import QAbstractButton, QLabel
+from PyQt6.QtWidgets import QAbstractButton, QLabel, QPushButton
 
 from matematigin_mantigi.ui import theme
+
+
+class WrapButton(QPushButton):
+    """Dar araç çubuğu düğmesi: uzun etiketi ilk boşluktan iki satıra kırar.
+    text() her zaman mantıksal (tek satır) metni döndürür."""
+
+    WRAP_OVER = 9
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(parent)
+        self._logical = ""
+        self.setText(text)
+
+    def setText(self, text: str) -> None:
+        self._logical = text
+        shown = text.replace(" ", "\n", 1) if len(text) > self.WRAP_OVER and " " in text else text
+        super().setText(shown)
+
+    def text(self) -> str:
+        return self._logical
 
 
 class GlyphButton(QAbstractButton):

@@ -35,4 +35,5 @@ def test_font_helpers(qapp):
 
 def test_stylesheet_mentions_page_background(qapp):
     css = theme.build_stylesheet(theme.FontFamilies("Arial", "Arial", False))
-    assert theme.PAGE in css and "Arial" in css
+    assert theme.PAGE in css
+    assert "font-family" not in css      # stil sayfası fontu setFont ile verilen Caveat'i ezer; app.setFont kullanılır

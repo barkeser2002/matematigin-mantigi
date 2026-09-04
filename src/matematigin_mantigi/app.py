@@ -6,12 +6,13 @@ from pathlib import Path
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QGuiApplication
-from PyQt6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QWidget
+from PyQt6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QMessageBox, QWidget
 
 from matematigin_mantigi import paths
 from matematigin_mantigi.core import layout_model as lm
 from matematigin_mantigi.core.chroma_key import ChromaParams
-from matematigin_mantigi.core.models import TOOL_META
+from matematigin_mantigi.core.models import SAMPLE_QUESTIONS, TOOL_META
+from matematigin_mantigi.core.question_loader import QuestionTemplateError, ensure_template, load_questions
 from matematigin_mantigi.ui import theme
 from matematigin_mantigi.ui.camera_worker import OpenCvSource
 from matematigin_mantigi.ui.canvas_panel import CanvasPanel
@@ -34,6 +35,13 @@ def build_window(args: argparse.Namespace, fam: theme.FontFamilies | None = None
     fam = fam or theme.FontFamilies("sans-serif", "cursive", False)
     win = QMainWindow()
     win.setWindowTitle("Matematiğin Mantığı")
+    template = Path(args.sorular) if args.sorular else paths.default_template_path()
+    try:
+        questions = load_questions(ensure_template(template))
+    except QuestionTemplateError as err:
+        QMessageBox.warning(None, "Soru şablonu", f"{err}\n\nÖrnek sorularla devam ediliyor.")
+        questions = list(SAMPLE_QUESTIONS)
+    win.questions = questions
     central = QWidget(); row = QHBoxLayout(central); row.setContentsMargins(0, 0, 0, 0); row.setSpacing(0)
     toolbar = ToolBar(fam); work = WorkArea(fam)
     for key, num, title in (("soru", "1", "Soru"), ("ipucu", "3", "Akıllı ipuçları")):

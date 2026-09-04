@@ -7,6 +7,9 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import QApplication, QMainWindow
 
+from matematigin_mantigi import paths
+from matematigin_mantigi.ui import theme
+
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="matematigin-mantigi")
@@ -16,11 +19,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return p.parse_args(argv[1:])
 
 
-def build_window(args: argparse.Namespace) -> QMainWindow:
+def build_window(args: argparse.Namespace, fam: theme.FontFamilies | None = None) -> QMainWindow:
+    fam = fam or theme.FontFamilies("sans-serif", "cursive", False)
     win = QMainWindow()
     win.setWindowTitle("Matematiğin Mantığı")
     win.resize(1920, 1080)
-    win.setStyleSheet("QMainWindow { background: #e9e7e2; }")
     return win
 
 
@@ -29,6 +32,8 @@ def main(argv: list[str] | None = None) -> int:
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(argv)
-    win = build_window(parse_args(argv))
+    fam = theme.load_fonts(paths.FONTS_DIR)
+    app.setStyleSheet(theme.build_stylesheet(fam))
+    win = build_window(parse_args(argv), fam)
     win.show()
     return app.exec()

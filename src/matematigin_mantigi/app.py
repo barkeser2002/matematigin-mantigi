@@ -13,6 +13,7 @@ from matematigin_mantigi.core import layout_model as lm
 from matematigin_mantigi.core.models import TOOL_META
 from matematigin_mantigi.ui import theme
 from matematigin_mantigi.ui.canvas_panel import CanvasPanel
+from matematigin_mantigi.ui.cursors import cursor_for
 from matematigin_mantigi.ui.panel import PanelFrame
 from matematigin_mantigi.ui.toolbar import ToolBar
 from matematigin_mantigi.ui.work_area import WorkArea
@@ -45,6 +46,13 @@ def build_window(args: argparse.Namespace, fam: theme.FontFamilies | None = None
     toolbar.clearRequested.connect(canvas.clear)
     canvas.historyChanged.connect(lambda can_undo, _e: toolbar.set_undo_enabled(can_undo))
     toolbar.toolSelected.connect(lambda t: canvas_panel.set_status(TOOL_META[t][0], canvas.base_width, "XP-Pen"))
+
+    def refresh_cursor(*_):
+        canvas.setCursor(cursor_for(canvas.tool, canvas.color, canvas.base_width, canvas.devicePixelRatioF()))
+    toolbar.toolSelected.connect(refresh_cursor)
+    toolbar.colorSelected.connect(refresh_cursor)
+    toolbar.widthSelected.connect(refresh_cursor)
+    refresh_cursor()
     layout_path = Path.cwd() / "duzen.json"
     work.set_layout(lm.load_layout(layout_path))
     work.layoutChanged.connect(lambda lay: lm.save_layout(layout_path, lay))

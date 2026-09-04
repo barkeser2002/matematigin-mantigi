@@ -20,18 +20,36 @@ class FrameSource(Protocol):
 
 
 class OpenCvSource:
+    """OpenCV kamera kaynağı. İstenen indeks açılmazsa 0-3 arası diğer indeksleri de dener
+    (ör. bağlı olmayan bir sanal kamera 0'ı işgal ederken gerçek kamera 1'de olabilir)."""
+
+    SCAN_INDICES = (0, 1, 2, 3)
+
     def __init__(self, index: int = 0):
         self.index = index
         self._cap: cv2.VideoCapture | None = None
 
     def open(self) -> bool:
         backends = [cv2.CAP_DSHOW, cv2.CAP_ANY] if sys.platform == "win32" else [cv2.CAP_ANY]
-        for backend in backends:                      # DSHOW hızlı açılır; olmazsa varsayılan (MSMF/AVFoundation)
-            cap = cv2.VideoCapture(self.index, backend)
-            if cap.isOpened():
-                self._cap = cap
-                return True
-            cap.release()
+        candidates = [self.index] + [i for i in self.SCAN_INDICES if i != self.index]
+        log = cv2.utils.logging
+        prev = log.getLogLevel()
+        log.setLogLevel(log.LOG_LEVEL_SILENT)         # deneme sırasındaki sürücü uyarıları konsolu kirletmesin
+        try:
+            for index in candidates:
+                for backend in backends:              # DSHOW hızlı açılır; olmazsa varsayılan (MSMF/AVFoundation)
+                    cap = cv2.VideoCapture(index, backend)
+                    if cap.isOpened():
+                        ok, frame = cap.read()        # açılan ama kare vermeyen sürücüleri ele
+                        if ok and frame is not None:
+                            self._cap = cap
+                            if index != self.index:
+                                print(f"Kamera {self.index} açılmadı, {index} kullanılıyor", file=sys.stderr)
+                                self.index = index
+                            return True
+                    cap.release()
+        finally:
+            log.setLogLevel(prev)
         self._cap = None
         return False
 

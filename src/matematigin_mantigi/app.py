@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, qInstallMessageHandler
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
@@ -50,8 +50,19 @@ def build_window(args: argparse.Namespace, fam: theme.FontFamilies, settings: Ap
     return win
 
 
+_HARMLESS_QT_MESSAGES = ("cached device pixel ratio value was stale",)
+
+
+def _qt_message_filter(mode, context, message: str) -> None:
+    """Bilinen zararsız Qt uyarılarını süzer; gerisini stderr'e yazar."""
+    if any(s in message for s in _HARMLESS_QT_MESSAGES):
+        return
+    print(message, file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
+    qInstallMessageHandler(_qt_message_filter)
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(argv)
     app.setApplicationName("Matematiğin Mantığı")

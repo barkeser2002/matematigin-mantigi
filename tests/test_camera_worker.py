@@ -50,6 +50,30 @@ def test_dead_camera_reports_error_and_finishes(qtbot, dead_camera):
     assert w.wait(2000)
 
 
+def test_opencv_source_scans_other_indices(monkeypatch):
+    import cv2
+    from matematigin_mantigi.ui import camera_worker as cw
+
+    class FakeCapture:
+        def __init__(self, index, backend):
+            self.index = index
+        def isOpened(self):
+            return self.index == 1                     # sadece 1 numaralı kamera var
+        def read(self):
+            frame = np.zeros((4, 4, 3), np.uint8)
+            return (True, frame) if self.index == 1 else (False, None)
+        def release(self):
+            pass
+
+    monkeypatch.setattr(cv2, "VideoCapture", FakeCapture)
+    src = cw.OpenCvSource(0)
+    assert src.open() is True and src.index == 1
+    src.release()
+    dead = cw.OpenCvSource(5)
+    monkeypatch.setattr(FakeCapture, "isOpened", lambda self: False)
+    assert dead.open() is False
+
+
 def test_stream_end_reports_error(qtbot):
     w = CameraWorker(FakeCamera(frames=2), ChromaParams(), target_fps=200)
     with qtbot.waitSignal(w.cameraError, timeout=5000) as sig:

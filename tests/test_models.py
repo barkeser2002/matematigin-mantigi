@@ -29,7 +29,10 @@ def test_parse_args_defaults():
     assert ns.sorular is None and ns.kamera is None and ns.kamera_yok is False
 
 
-def test_build_window_offscreen(qtbot):
-    win = app.build_window(app.parse_args(["prog"]))
+def test_build_window_offscreen(qtbot, tmp_path, ini_settings, monkeypatch):
+    from matematigin_mantigi.ui.theme import FontFamilies
+    monkeypatch.chdir(tmp_path)
+    win = app.build_window(app.parse_args(["prog", "--kamera-yok"]), FontFamilies("Arial", "Arial", False), ini_settings)
     qtbot.addWidget(win)
     assert win.windowTitle() == "Matematiğin Mantığı"
+    assert (tmp_path / "sorular_sablon.xlsx").exists()

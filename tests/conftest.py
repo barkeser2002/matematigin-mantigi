@@ -65,3 +65,20 @@ def ini_settings(tmp_path):
     from PyQt6.QtCore import QSettings
     from matematigin_mantigi.core.settings import AppSettings
     return AppSettings(QSettings(str(tmp_path / "test.ini"), QSettings.Format.IniFormat))
+
+
+@pytest.fixture
+def window(qtbot, tmp_path, ini_settings, dead_camera):
+    from matematigin_mantigi.core.recorder import NullRecorder
+    from matematigin_mantigi.core.session_store import SessionStore
+    from matematigin_mantigi.ui.main_window import MainWindow
+    from matematigin_mantigi.ui.theme import FontFamilies
+    win = MainWindow(FontFamilies("Arial", "Arial", False), list(SAMPLE_QUESTIONS), ini_settings,
+                     NullRecorder(), SessionStore(tmp_path / "oturum"), lambda: dead_camera,
+                     tmp_path / "duzen.json")
+    qtbot.addWidget(win)
+    win.resize(1920, 1080)
+    win.show()
+    qtbot.waitExposed(win)
+    win.activateWindow()          # Task 18 kısayolları WindowShortcut bağlamında çalışır
+    return win

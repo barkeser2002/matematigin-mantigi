@@ -5,22 +5,18 @@ import sys
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QGuiApplication
-from PyQt6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QMessageBox, QWidget
+from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from matematigin_mantigi import paths
-from matematigin_mantigi.core import layout_model as lm
-from matematigin_mantigi.core.chroma_key import ChromaParams
-from matematigin_mantigi.core.models import SAMPLE_QUESTIONS, TOOL_META
+from matematigin_mantigi.core.models import SAMPLE_QUESTIONS
 from matematigin_mantigi.core.question_loader import QuestionTemplateError, ensure_template, load_questions
+from matematigin_mantigi.core.recorder import NullRecorder
+from matematigin_mantigi.core.session_store import SessionStore
+from matematigin_mantigi.core.settings import AppSettings
 from matematigin_mantigi.ui import theme
 from matematigin_mantigi.ui.camera_worker import OpenCvSource
-from matematigin_mantigi.ui.canvas_panel import CanvasPanel
-from matematigin_mantigi.ui.cursors import cursor_for
-from matematigin_mantigi.ui.panel import PanelFrame
-from matematigin_mantigi.ui.toolbar import ToolBar
-from matematigin_mantigi.ui.webcam_panel import WebcamPanel
-from matematigin_mantigi.ui.work_area import WorkArea
+from matematigin_mantigi.ui.main_window import MainWindow
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -28,68 +24,37 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--sorular", help="Soru şablonu (.xlsx) yolu")
     p.add_argument("--kamera", type=int, default=None, help="Kamera indeksi (varsayılan: ayarlardan)")
     p.add_argument("--kamera-yok", action="store_true", help="Kamerayı açma")
+    p.add_argument("--duzen", default=None, help="Düzen dosyası (varsayılan: ./duzen.json)")
     return p.parse_args(argv[1:])
 
 
-def build_window(args: argparse.Namespace, fam: theme.FontFamilies | None = None) -> QMainWindow:
-    fam = fam or theme.FontFamilies("sans-serif", "cursive", False)
-    win = QMainWindow()
-    win.setWindowTitle("Matematiğin Mantığı")
-    template = Path(args.sorular) if args.sorular else paths.default_template_path()
+def load_questions_or_samples(template: Path):
     try:
-        questions = load_questions(ensure_template(template))
+        return load_questions(ensure_template(template))
     except QuestionTemplateError as err:
         QMessageBox.warning(None, "Soru şablonu", f"{err}\n\nÖrnek sorularla devam ediliyor.")
-        questions = list(SAMPLE_QUESTIONS)
-    win.questions = questions
-    central = QWidget(); row = QHBoxLayout(central); row.setContentsMargins(0, 0, 0, 0); row.setSpacing(0)
-    toolbar = ToolBar(fam); work = WorkArea(fam)
-    for key, num, title in (("soru", "1", "Soru"), ("ipucu", "3", "Akıllı ipuçları")):
-        work.add_panel(key, PanelFrame(num, title, fam))
-    cam_index = 0 if args.kamera is None else args.kamera
-    webcam_panel = WebcamPanel(fam, lambda: OpenCvSource(cam_index), ChromaParams())
-    work.add_panel("webcam", webcam_panel)
-    if not args.kamera_yok:
-        webcam_panel.start()
-    original_close = win.closeEvent
+        return list(SAMPLE_QUESTIONS)
 
-    def close_event(e):
-        webcam_panel.shutdown()
-        original_close(e)
-    win.closeEvent = close_event
-    canvas_panel = CanvasPanel(fam)
-    work.add_panel("cizim", canvas_panel)
-    canvas = canvas_panel.canvas
-    toolbar.toolSelected.connect(canvas.set_tool)
-    toolbar.colorSelected.connect(lambda hx: canvas.set_color(QColor(hx)))
-    toolbar.widthSelected.connect(canvas.set_base_width)
-    toolbar.undoRequested.connect(canvas.undo)
-    toolbar.clearRequested.connect(canvas.clear)
-    canvas.historyChanged.connect(lambda can_undo, _e: toolbar.set_undo_enabled(can_undo))
-    toolbar.toolSelected.connect(lambda t: canvas_panel.set_status(TOOL_META[t][0], canvas.base_width, "XP-Pen"))
 
-    def refresh_cursor(*_):
-        canvas.setCursor(cursor_for(canvas.tool, canvas.color, canvas.base_width, canvas.devicePixelRatioF()))
-    toolbar.toolSelected.connect(refresh_cursor)
-    toolbar.colorSelected.connect(refresh_cursor)
-    toolbar.widthSelected.connect(refresh_cursor)
-    refresh_cursor()
-    layout_path = Path.cwd() / "duzen.json"
-    work.set_layout(lm.load_layout(layout_path))
-    work.layoutChanged.connect(lambda lay: lm.save_layout(layout_path, lay))
-    toolbar.layoutEditToggled.connect(work.set_edit_mode)
-    work.editModeChanged.connect(toolbar.set_layout_edit)
-    row.addWidget(toolbar); row.addWidget(work, 1)
-    win.setCentralWidget(central)
+def build_window(args: argparse.Namespace, fam: theme.FontFamilies, settings: AppSettings | None = None) -> MainWindow:
+    settings = settings or AppSettings()
+    template = Path(args.sorular) if args.sorular else paths.default_template_path()
+    questions = load_questions_or_samples(template)
+    cam_index = settings.camera_index if args.kamera is None else args.kamera
+    if args.kamera is not None:
+        settings.camera_index = args.kamera
+    factory = None if args.kamera_yok else (lambda: OpenCvSource(cam_index))
+    layout_path = Path(args.duzen) if args.duzen else Path.cwd() / "duzen.json"
+    win = MainWindow(fam, questions, settings, NullRecorder(), SessionStore(), factory, layout_path)
     win.resize(1920, 1080)
     return win
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
-    QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
-        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+    QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(argv)
+    app.setApplicationName("Matematiğin Mantığı")
     fam = theme.load_fonts(paths.FONTS_DIR)
     app.setFont(theme.font(fam, 13))            # varsayılan aile; stil sayfası font-family kullanmaz
     app.setStyleSheet(theme.build_stylesheet(fam))

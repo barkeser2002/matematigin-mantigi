@@ -113,6 +113,25 @@ def test_close_is_clean(window):
     window.close()
 
 
+def test_keyboard_shortcuts(window, qtbot):
+    qtbot.keyClick(window, Qt.Key.Key_2)
+    assert window.canvas.tool == Tool.ERASER and window.toolbar.tool_buttons[Tool.ERASER].isChecked()
+    qtbot.keyClick(window, Qt.Key.Key_N)
+    assert window.flow.index == 1
+    qtbot.keyClick(window, Qt.Key.Key_Right)
+    assert window.hint_panel.counter_label.text() == "2 / 3"
+    qtbot.keyClick(window, Qt.Key.Key_Return)
+    assert window.hint_panel.rows[1].revealed
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    assert window.recorder.is_recording
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    assert not window.recorder.is_recording
+    qtbot.keyClick(window, Qt.Key.Key_L)
+    assert window.work_area.edit_mode
+    qtbot.keyClick(window, Qt.Key.Key_Escape)
+    assert not window.work_area.edit_mode
+
+
 def test_pen_settings_round_trip_through_window(window, qtbot, monkeypatch):
     from matematigin_mantigi.core.models import PenSettings
     from matematigin_mantigi.ui import pen_settings as ps

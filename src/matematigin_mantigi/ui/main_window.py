@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Sequence
 
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QKeySequence, QShortcut
 from PyQt6.QtWidgets import QHBoxLayout, QMainWindow, QWidget
 
 from matematigin_mantigi.core import layout_model as lm
@@ -56,6 +56,7 @@ class MainWindow(QMainWindow):
 
         self.flow = QuestionFlow(questions, self)
         self._wire()
+        self._shortcuts()
         self._restore_settings()
         self.question_panel.set_questions(questions)
         self._on_question_changed(self.flow.index if questions else 0)
@@ -100,6 +101,30 @@ class MainWindow(QMainWindow):
         hp.revealToggled.connect(flow.toggle_reveal)
         hp.maskModeChanged.connect(self._on_mask_mode)
         self.webcam_panel.chromaToggled.connect(self._on_chroma_toggled)
+
+    def _shortcuts(self) -> None:
+        def sc(keys: str, fn) -> None:
+            QShortcut(QKeySequence(keys), self, activated=fn)
+        for i, tool in enumerate(Tool, start=1):
+            sc(str(i), lambda t=tool: (self._on_tool(t), self.toolbar.set_tool(t)))
+        sc("Ctrl+Z", self.canvas.undo)
+        sc("Ctrl+Shift+X", self.canvas.clear)
+        sc("N", self.flow.next_question)
+        sc("Space", self.flow.toggle_work)
+        sc("R", lambda: self.toggle_recording(not self.recorder.is_recording))
+        sc("H", lambda: self.flow.show_question() if not self.flow.is_question_shown() else self.flow.hide_question())
+        sc("Left", self.flow.hint_prev)
+        sc("Right", self.flow.hint_next)
+        sc("Return", self.flow.toggle_reveal)
+        sc("L", lambda: self.work_area.set_edit_mode(not self.work_area.edit_mode))
+        sc("F11", lambda: self.showNormal() if self.isFullScreen() else self.showFullScreen())
+        sc("Escape", self._escape)
+
+    def _escape(self) -> None:
+        if self.work_area.edit_mode:
+            self.work_area.set_edit_mode(False)
+        elif self.isFullScreen():
+            self.showNormal()
 
     def _restore_settings(self) -> None:
         s = self.settings

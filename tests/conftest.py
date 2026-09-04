@@ -58,3 +58,10 @@ def fake_camera():
 @pytest.fixture
 def dead_camera():
     return DeadCamera()
+
+
+@pytest.fixture
+def ini_settings(tmp_path):
+    from PyQt6.QtCore import QSettings
+    from matematigin_mantigi.core.settings import AppSettings
+    return AppSettings(QSettings(str(tmp_path / "test.ini"), QSettings.Format.IniFormat))

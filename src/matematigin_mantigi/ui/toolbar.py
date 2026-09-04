@@ -96,6 +96,7 @@ class ToolBar(QWidget):
         self.next_button = WrapButton("Sıradaki soru →"); self.next_button.setStyleSheet(_BTN_CSS)
         self.next_button.clicked.connect(self.nextRequested)
         self.progress_label = self._caption("0/0")
+        self.progress_label.setWordWrap(True)         # "0/3 tamamlandı · S1" iki satıra kırılır
         col.addWidget(self.work_button); col.addWidget(self.next_button); col.addWidget(self.progress_label)
         col.addWidget(self._rule())
 

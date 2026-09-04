@@ -5,6 +5,13 @@ from matematigin_mantigi import paths
 from matematigin_mantigi.ui import theme
 
 
+def test_tr_upper_handles_dotted_i():
+    assert theme.tr_upper("Silgi") == "SİLGİ"
+    assert theme.tr_upper("El çizimi") == "EL ÇİZİMİ"
+    assert theme.tr_upper("Akıllı ipuçları") == "AKILLI İPUÇLARI"
+    assert theme.tr_upper("Soru") == "SORU"
+
+
 def test_palette_constants():
     assert theme.INK == "#1c1b19" and theme.PAGE == "#e9e7e2" and theme.ACCENT == "#bd4334"
     assert theme.TOOLBAR_WIDTH == 88 and theme.GRID_GAP == 14 and theme.DOT_SPACING == 28

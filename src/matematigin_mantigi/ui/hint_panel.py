@@ -19,7 +19,8 @@ class HintRow(QWidget):
     def __init__(self, n: int, text: str, fam: FontFamilies, parent=None):
         super().__init__(parent)
         self.revealed = False
-        self.setAutoFillBackground(True)
+        self.setObjectName("hintRow")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         row = QHBoxLayout(self); row.setContentsMargins(10, 8, 10, 8); row.setSpacing(12)
         self.name_label = ClickableLabel(f"İpucu {n}")
         self.name_label.setFont(theme.font(fam, 10, 600, spacing_pct=108))
@@ -29,6 +30,8 @@ class HintRow(QWidget):
         self.text_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self.state_label = QLabel("gizli"); self.state_label.setFont(theme.font(fam, 10, 600))
         self.state_label.setStyleSheet(f"color: {theme.MUTED};")
+        self.state_label.setFixedWidth(44)
+        self.state_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         for lab in (self.name_label, self.text_label):
             lab.clicked.connect(self.clicked)
         row.addWidget(self.name_label); row.addWidget(self.text_label, 1); row.addWidget(self.state_label)
@@ -36,7 +39,8 @@ class HintRow(QWidget):
     def apply(self, mode: HintMaskMode, revealed: bool, focused: bool) -> None:
         self.revealed = revealed
         self.state_label.setText("açık" if revealed else "gizli")
-        self.setStyleSheet(f"background: {theme.ROW_FOCUS if focused else 'transparent'}; border-radius: 6px;")
+        self.setStyleSheet(f"#hintRow {{ background: {theme.ROW_FOCUS if focused else 'transparent'};"
+                           f" border-radius: 6px; }}")
         if revealed:
             self.text_label.setGraphicsEffect(None)
             self.text_label.setStyleSheet("background: transparent;")
@@ -80,6 +84,7 @@ class HintPanel(PanelFrame):
         self.counter_label.setStyleSheet(f"color: {theme.MUTED};")
         self.prev_button = QPushButton("◀"); self.next_button = QPushButton("▶")
         self.reveal_button = QPushButton("Aç"); self.reveal_button.setObjectName("accent")
+        self.reveal_button.setMinimumWidth(72)        # "Gizle" etiketi de sığsın
         for b in (self.prev_button, self.next_button):
             b.setObjectName("pill"); b.setFixedWidth(36)
         self.prev_button.clicked.connect(self.prevRequested); self.next_button.clicked.connect(self.nextRequested)

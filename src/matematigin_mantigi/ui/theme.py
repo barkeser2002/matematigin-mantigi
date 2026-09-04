@@ -38,6 +38,11 @@ DOT_SPACING = 28
 WORK_PADDING = (30, 30, 60, 210)   # top, right, bottom, left
 
 
+def tr_upper(text: str) -> str:
+    """Türkçe büyük harf: i -> İ, ı -> I (str.upper 'Silgi' için 'SILGI' üretir)."""
+    return text.replace("i", "İ").replace("ı", "I").upper()
+
+
 @dataclass(frozen=True)
 class FontFamilies:
     sans: str

@@ -52,7 +52,7 @@ class PanelFrame(QWidget):
 
         self.number_label = QLabel(number)
         self.number_label.setFont(theme.hand_font(fam, 34, 700))
-        self.title_label = QLabel(title.upper())
+        self.title_label = QLabel(theme.tr_upper(title))
         self.title_label.setFont(theme.font(fam, 11, 600, spacing_pct=114))
         self.title_label.setStyleSheet(f"color: {theme.MUTED};")
         self.header.addWidget(self.number_label)

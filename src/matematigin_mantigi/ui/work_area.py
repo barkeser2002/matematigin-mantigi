@@ -40,7 +40,9 @@ class WorkArea(QWidget):
         self.badge_slot.hide()
 
         self.edit_bar = QWidget(self)
-        self.edit_bar.setStyleSheet(f"background: {theme.INK}; border-radius: 8px;")
+        self.edit_bar.setObjectName("editBar")
+        self.edit_bar.setStyleSheet(f"#editBar {{ background: {theme.INK}; border-radius: 8px; }}")
+        self.edit_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         bar = QHBoxLayout(self.edit_bar); bar.setContentsMargins(14, 6, 10, 6); bar.setSpacing(10)
         info = QLabel("DÜZEN MODU · başlıktan sürükle, sağ-alt köşeden boyutlandır, çift tık = büyüt")
         info.setFont(theme.font(fam, 10, 600, spacing_pct=108)); info.setStyleSheet(f"color: {theme.TOOLBAR_MUTED};")

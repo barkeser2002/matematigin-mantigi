@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
 from matematigin_mantigi.ui import theme
@@ -14,8 +14,9 @@ class RecordBadge(QWidget):
         self.active = False
         self._fmt = "1920×1080"
         self._fps = 60
-        self.setStyleSheet(f"background: {theme.INK}; border-radius: 12px;")
-        self.setAutoFillBackground(True)
+        self.setObjectName("recordBadge")
+        self.setStyleSheet(f"#recordBadge {{ background: {theme.INK}; border-radius: 12px; }}")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)   # düz QWidget stil zeminini ancak böyle boyar
         row = QHBoxLayout(self); row.setContentsMargins(12, 4, 14, 4); row.setSpacing(8)
         self.dot = QLabel(); self.dot.setFixedSize(10, 10)
         self.dot.setStyleSheet(f"background: {theme.REC_DOT}; border-radius: 5px;")

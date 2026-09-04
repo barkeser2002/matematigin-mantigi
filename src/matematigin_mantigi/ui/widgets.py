@@ -48,7 +48,7 @@ class GlyphButton(QAbstractButton):
         f = QFont(self.font()); f.setPixelSize(18); p.setFont(f)
         p.drawText(QRectF(0, 4, 56, 24), Qt.AlignmentFlag.AlignCenter, self.glyph)
         f.setPixelSize(9); f.setWeight(QFont.Weight(600)); p.setFont(f)
-        p.drawText(QRectF(0, 28, 56, 16), Qt.AlignmentFlag.AlignCenter, self.label.upper())
+        p.drawText(QRectF(0, 28, 56, 16), Qt.AlignmentFlag.AlignCenter, theme.tr_upper(self.label))
         p.end()
 
 

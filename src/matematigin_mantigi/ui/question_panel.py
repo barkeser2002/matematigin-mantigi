@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtWidgets import QButtonGroup, QGraphicsBlurEffect, QHBoxLayout, QLabel, QPushButton, QWidget
 
 from matematigin_mantigi.core.models import Question, QuestionStatus
@@ -35,6 +35,7 @@ class QuestionPanel(PanelFrame):
         self.body.addLayout(self.chip_row)
 
         self.text_host = QWidget(self)
+        self.text_host.installEventFilter(self)      # host boyutlanınca metni ve düğmeyi yerleştir
         self.text_label = QLabel("", self.text_host)
         self.text_label.setWordWrap(True)
         self.text_label.setFont(theme.font(fam, 26, 500))
@@ -100,3 +101,8 @@ class QuestionPanel(PanelFrame):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self._place_button()
+
+    def eventFilter(self, obj, e):
+        if obj is self.text_host and e.type() == QEvent.Type.Resize:
+            self._place_button()
+        return super().eventFilter(obj, e)

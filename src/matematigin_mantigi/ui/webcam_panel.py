@@ -112,6 +112,9 @@ class WebcamPanel(Zone):
         self._params = p
         self.worker.set_params(p)
 
+    def set_auto_key(self, on: bool) -> None:
+        self.worker.set_auto_key(on)
+
     def _toggle(self) -> None:
         self.set_chroma_enabled(not self.chroma_enabled)
         self.chromaToggled.emit(self.chroma_enabled)

@@ -14,13 +14,18 @@ def test_dialog_reflects_current_and_returns_edits(qtbot):
     assert d.curve_slider.value() == 50 and d.smoothing_slider.value() == 35
     assert d.min_slider.value() == 1 and d.max_slider.value() == 12
     assert d.nib_buttons[Nib.ROUND].isChecked()
-    assert d.reading_slider.value() == 350 and d.reading_value.text() == "350 ms/kelime"
     assert d.toggles["math_recognition"].isChecked() and not d.toggles["template_matching"].isChecked()
     d.smoothing_slider.setValue(60); d.max_slider.setValue(20)
     d.nib_buttons[Nib.CHALK].click()
     d.toggles["autosave"].setChecked(False)
     v = d.value()
     assert v == PenSettings(smoothing=60, max_width=20, nib=Nib.CHALK, autosave=False)
+
+
+def test_reading_speed_passes_through_unchanged(qtbot):
+    d = PenSettingsDialog(PenSettings(reading_ms=90), QColor("#000"), 4, FAM)
+    qtbot.addWidget(d)
+    assert d.value().reading_ms == 90            # hız Ayarlar penceresinde; burada korunur
 
 
 def test_apply_emits_and_accepts(qtbot):
@@ -30,13 +35,6 @@ def test_apply_emits_and_accepts(qtbot):
     with qtbot.waitSignal(d.applied) as sig:
         qtbot.mouseClick(d.apply_button, Qt.MouseButton.LeftButton)
     assert sig.args[0].min_width == 3 and d.result() == d.DialogCode.Accepted.value
-
-
-def test_reading_speed_zero_means_off(qtbot):
-    d = PenSettingsDialog(PenSettings(), QColor("#000"), 4, FAM)
-    qtbot.addWidget(d)
-    d.reading_slider.setValue(0)
-    assert d.reading_value.text() == "kapalı" and d.value().reading_ms == 0
 
 
 def test_min_never_exceeds_max(qtbot):

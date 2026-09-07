@@ -10,6 +10,7 @@ class Tool(str, Enum):
     TEXT = "text"
     SHAPE = "shape"
     LASER = "laser"
+    CLICK = "click"      # tıklama modu: kartlar, kamera ve düğmeler tıklanır; çizim yapılmaz
 
 
 TOOL_META: dict[Tool, tuple[str, str]] = {
@@ -18,7 +19,9 @@ TOOL_META: dict[Tool, tuple[str, str]] = {
     Tool.TEXT: ("Yazı", "T"),
     Tool.SHAPE: ("Şekil", "△"),
     Tool.LASER: ("Lazer", "●"),
+    Tool.CLICK: ("Tıkla", "↖"),
 }
+DRAWING_TOOLS = (Tool.PEN, Tool.ERASER, Tool.TEXT, Tool.SHAPE, Tool.LASER)
 
 
 class QuestionStatus(str, Enum):
@@ -66,7 +69,7 @@ class PenSettings:
     shape_correction: bool = True
     autosave: bool = True
     template_matching: bool = False
-    reading_ms: int = 350      # soru okuma animasyonu, ms/kelime; 0 = kapalı
+    reading_ms: int = 40       # soru yazma animasyonu, ms/harf; 0 = kapalı
 
 
 SAMPLE_QUESTIONS: tuple[Question, ...] = (

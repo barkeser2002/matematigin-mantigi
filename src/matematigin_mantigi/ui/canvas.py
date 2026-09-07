@@ -137,7 +137,7 @@ class DrawingCanvas(QWidget):
     # --- painting ------------------------------------------------------------
     def _draw_segment(self, a: QPointF, b: QPointF, pressure: float) -> None:
         tool = self._active_tool
-        if tool in (Tool.TEXT, Tool.SHAPE):       # bu sürümde arayüz taslağı
+        if tool in (Tool.TEXT, Tool.SHAPE, Tool.CLICK):   # yazı/şekil taslak; tıklama modu çizmez
             return
         target = self._overlay if tool == Tool.LASER else self._strokes
         p = QPainter(target)

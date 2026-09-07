@@ -96,4 +96,6 @@ def cursor_for(tool: Tool, color: QColor, base_width: int, dpr: float = 1.0) -> 
         return laser_cursor(dpr)
     if tool == Tool.TEXT:
         return text_cursor()
+    if tool == Tool.CLICK:
+        return QCursor(Qt.CursorShape.ArrowCursor)
     return shape_cursor()

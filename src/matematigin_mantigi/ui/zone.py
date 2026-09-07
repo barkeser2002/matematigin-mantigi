@@ -12,6 +12,7 @@ class Zone(QWidget):
         super().__init__(parent)
         self.key = ""
         self.board: QWidget | None = None
+        self._click_through = False
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         self.setTabletTracking(True)
@@ -21,6 +22,18 @@ class Zone(QWidget):
 
     def set_board(self, board: QWidget | None) -> None:
         self.board = board
+
+    # --- tıklama geçirgenliği --------------------------------------------------
+    def set_click_through(self, on: bool) -> None:
+        """on: çizim aracı aktif; kart, düğme, kamera gibi çocuklar fareye şeffaf olur, her basış tahtaya gider.
+        off: 'Tıkla' aracı; çocuklar normal tıklanır."""
+        self._click_through = on
+        self._apply_click_through()
+
+    def _apply_click_through(self) -> None:
+        on = getattr(self, "_click_through", False)
+        for w in self.findChildren(QWidget):
+            w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, on)
 
     # --- olay iletimi ---------------------------------------------------------
     def _to_board(self, pos: QPointF) -> QPointF:

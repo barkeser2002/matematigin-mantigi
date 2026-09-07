@@ -8,6 +8,17 @@ from PyQt6.QtCore import QSettings
 from matematigin_mantigi.core.chroma_key import ChromaParams
 from matematigin_mantigi.core.models import HintMaskMode, Nib, PenSettings, Tool
 
+# Tahtadaki gizlenebilir yazısal öğeler: (anahtar, etiket)
+VISIBILITY_KEYS: tuple[tuple[str, str], ...] = (
+    ("hint_controls", "İpucu kontrolleri (1/3 ◀ ▶ Blur Redakte)"),
+    ("hint_heading", "\"AKILLI İPUÇLARI\" başlığı"),
+    ("status", "Durum satırı (Araç · Kalınlık · Basınç)"),
+    ("cam_label", "Kamera etiketi (yeşil perde: …)"),
+    ("brand", "Marka plakası (Matematiğin Mantığı)"),
+    ("hide_link", "Sorudaki \"gizle\" bağlantısı"),
+    ("question_number", "Soru numarası"),
+)
+
 
 class AppSettings:
     def __init__(self, backend: QSettings | None = None):
@@ -72,6 +83,23 @@ class AppSettings:
     def chroma_enabled(self) -> bool: return self._bool("chroma/enabled", True)
     @chroma_enabled.setter
     def chroma_enabled(self, on: bool) -> None: self._q.setValue("chroma/enabled", bool(on))
+
+    @property
+    def auto_key(self) -> bool: return self._bool("chroma/auto_key", True)
+    @auto_key.setter
+    def auto_key(self, on: bool) -> None: self._q.setValue("chroma/auto_key", bool(on))
+
+    @property
+    def font_file(self) -> str: return self._str("ui/font_file", "")
+    @font_file.setter
+    def font_file(self, path: str) -> None: self._q.setValue("ui/font_file", path or "")
+
+    def visible(self, key: str) -> bool:
+        """Tahtadaki yazısal öğe görünürlüğü; anahtarlar VISIBILITY_KEYS içinde."""
+        return self._bool(f"ui/show_{key}", True)
+
+    def set_visible(self, key: str, on: bool) -> None:
+        self._q.setValue(f"ui/show_{key}", bool(on))
 
     @property
     def chroma(self) -> ChromaParams:

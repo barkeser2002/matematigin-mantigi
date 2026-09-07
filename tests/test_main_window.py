@@ -88,6 +88,22 @@ def test_question_hide_show(window, qtbot):
     assert window.question_zone.shown
 
 
+def test_pen_draws_over_hint_card_and_click_tool_reveals(window, qtbot):
+    from PyQt6.QtTest import QTest
+    win = window.windowHandle()
+    card = window.hint_zone.cards[0]
+    center = card.mapTo(window, card.rect().center())
+    QTest.mousePress(win, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, center)
+    QTest.mouseMove(win, center + QPointF(40, 20).toPoint())
+    QTest.mouseRelease(win, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, center + QPointF(40, 20).toPoint())
+    assert not window.canvas.is_empty() and not card.revealed             # kalem: kartın üstüne çizdi
+    qtbot.mouseClick(window.toolbar.tool_buttons[Tool.CLICK], Qt.MouseButton.LeftButton)
+    assert window.canvas.tool == Tool.CLICK and window.canvas.cursor().shape() == Qt.CursorShape.ArrowCursor
+    window.canvas.clear()
+    QTest.mouseClick(win, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, center)
+    assert card.revealed and window.canvas.is_empty()                       # tıkla: kart açıldı, çizim yok
+
+
 def test_drawing_over_question_zone_reaches_board(window, qtbot):
     z = window.question_zone
     qtbot.mousePress(z, Qt.MouseButton.LeftButton, pos=z.rect().center())
@@ -164,15 +180,57 @@ def test_keyboard_shortcuts(window, qtbot):
 def test_pen_settings_round_trip_through_window(window, qtbot, monkeypatch):
     from matematigin_mantigi.core.models import PenSettings
     from matematigin_mantigi.ui import pen_settings as ps
-    captured = {}
 
     def fake_exec(self):
-        captured["dialog"] = self
         self.smoothing_slider.setValue(80)
-        self.reading_slider.setValue(90)
         self._apply()
         return 1
     monkeypatch.setattr(ps.PenSettingsDialog, "exec", fake_exec)
     qtbot.mouseClick(window.toolbar.pen_settings_button, Qt.MouseButton.LeftButton)
-    assert window.settings.pen() == PenSettings(smoothing=80, reading_ms=90)
-    assert window.question_zone.reading_ms == 90
+    assert window.settings.pen() == PenSettings(smoothing=80, reading_ms=0)     # hız korunur (fixture: 0)
+
+
+def test_settings_dialog_applies_speed_visibility_and_auto_key(window, qtbot, monkeypatch):
+    from matematigin_mantigi.ui import settings_dialog as sd
+
+    def fake_exec(self):
+        self.reading_slider.setValue(90)
+        self.auto_key_check.setChecked(False)
+        self.visibility_checks["status"].setChecked(False)
+        self.visibility_checks["cam_label"].setChecked(False)
+        self.visibility_checks["hint_controls"].setChecked(False)
+        self.visibility_checks["brand"].setChecked(False)
+        self.visibility_checks["question_number"].setChecked(False)
+        self._apply()
+        return 1
+    monkeypatch.setattr(sd.SettingsDialog, "exec", fake_exec)
+    qtbot.mouseClick(window.toolbar.settings_button, Qt.MouseButton.LeftButton)
+    s = window.settings
+    assert s.pen().reading_ms == 90 and window.question_zone.reading_ms == 90
+    assert s.auto_key is False and s.visible("status") is False
+    assert window.work_area.status_label.isHidden() and window.webcam_panel.overlay_label.isHidden()
+    assert window.hint_zone.blur_button.isHidden() and window.work_area.brand.isHidden()
+    assert window.question_zone.number_label.isHidden()
+    assert not window.hint_zone.title_label.isHidden()                 # dokunulmayan öğe açık kalır
+
+
+def test_visibility_and_font_restored_on_start(qtbot, tmp_path, ini_settings, dead_camera):
+    import pytest
+    from matematigin_mantigi import paths
+    from matematigin_mantigi.core.models import PenSettings
+    from matematigin_mantigi.core.recorder import NullRecorder
+    from matematigin_mantigi.core.session_store import SessionStore
+    from matematigin_mantigi.ui.main_window import MainWindow
+    from matematigin_mantigi.ui.theme import FontFamilies
+    caveat = next(iter(paths.FONTS_DIR.glob("Caveat*.ttf")), None)
+    if caveat is None:
+        pytest.skip("bundled fonts not downloaded")
+    ini_settings.set_pen(PenSettings(reading_ms=0))
+    ini_settings.set_visible("brand", False); ini_settings.set_visible("hide_link", False)
+    ini_settings.font_file = str(caveat)
+    win = MainWindow(FontFamilies("Arial", "Arial", False), list(SAMPLE_QUESTIONS), ini_settings,
+                     NullRecorder(), SessionStore(tmp_path / "o"), lambda: dead_camera, tmp_path / "d.json")
+    qtbot.addWidget(win); win.show()
+    assert win.work_area.brand.isHidden() and win.question_zone.hide_link.isHidden()
+    assert win.question_zone.text_label.font().family() == "Caveat"
+    assert win.hint_zone.cards[0].text_label.font().family() == "Caveat"

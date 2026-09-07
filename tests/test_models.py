@@ -11,6 +11,7 @@ def test_palette_and_widths_match_mockup():
 def test_every_tool_has_label_and_glyph():
     assert set(TOOL_META) == set(Tool)
     assert TOOL_META[Tool.PEN] == ("Kalem", "✎")
+    assert TOOL_META[Tool.CLICK] == ("Tıkla", "↖") and list(Tool)[-1] == Tool.CLICK   # kısayol 6
 
 
 def test_sample_questions_have_three_hints():
@@ -21,7 +22,7 @@ def test_sample_questions_have_three_hints():
 def test_pen_settings_defaults():
     p = PenSettings()
     assert (p.pressure_curve, p.smoothing, p.min_width, p.max_width) == (50, 35, 1, 12)
-    assert p.template_matching is False and p.reading_ms == 350
+    assert p.template_matching is False and p.reading_ms == 40
 
 
 def test_question_optional_fields_default():

@@ -55,11 +55,13 @@ def apply_chroma_key(bgr: np.ndarray, p: ChromaParams) -> np.ndarray:
     return composite(suppress_spill(bgr, alpha, p.spill), alpha, p.bg_bgr)
 
 
-GREEN_HUE_RANGE = (35, 95)      # OpenCV ton birimi; bu aralık dışı "perde" sayılmaz
+GREEN_HUE_RANGE = (45, 80)      # OpenCV ton birimi; tipik yeşil perdeler 55-75. Dışı "perde" sayılmaz.
+MIN_GREEN_BORDER = 0.6          # kenar piksellerinin en az bu oranı perde olmalı
 
 
 def estimate_key_hue(bgr: np.ndarray, border: float = 0.1) -> int | None:
-    """Karenin kenar şeridinden perde tonunu ölçer. Kenarların en az %40'ı doygun ve yeşilimsi değilse None."""
+    """Karenin kenar şeridinden perde tonunu ölçer. Kenarların en az %60'ı doygun ve yeşil değilse None
+    (varsayılan ton korunur); yanlış ölçüm anahtarlamayı bozmasın diye temkinli."""
     h, w = bgr.shape[:2]
     bh, bw = max(1, int(h * border)), max(1, int(w * border))
     strip = np.concatenate([bgr[:bh].reshape(-1, 3), bgr[-bh:].reshape(-1, 3),
@@ -70,6 +72,6 @@ def estimate_key_hue(bgr: np.ndarray, border: float = 0.1) -> int | None:
     hue = hsv[:, 0]
     greenish = (hue >= GREEN_HUE_RANGE[0]) & (hue <= GREEN_HUE_RANGE[1])
     good = sat & val & greenish
-    if good.sum() < 0.4 * len(hue):
+    if good.sum() < MIN_GREEN_BORDER * len(hue):
         return None
     return int(np.median(hue[good]))

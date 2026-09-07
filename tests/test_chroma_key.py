@@ -65,6 +65,9 @@ def test_estimate_key_hue_from_green_border():
     assert estimate_key_hue(grey) is None                 # doygun yeşil kenar yok
     inner = grey.copy(); inner[30:90, 40:120] = (30, 200, 40)
     assert estimate_key_hue(inner) is None                # yeşil sadece ortada, kenarlar gri
+    import cv2
+    yellowish = cv2.cvtColor(np.full((60, 80, 3), (38, 220, 200), np.uint8), cv2.COLOR_HSV2BGR)
+    assert estimate_key_hue(yellowish) is None            # ton 38: yeşil perde aralığı (45-80) dışında
 
 
 def test_input_not_mutated():

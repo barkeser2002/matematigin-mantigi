@@ -75,6 +75,18 @@ def load_fonts(fonts_dir: Path) -> FontFamilies:
     return FontFamilies(sans=sans, hand=hand, loaded=("Work Sans" in found and "Caveat" in found))
 
 
+def load_font_file(path: str | Path) -> str | None:
+    """Tek bir .ttf/.otf dosyasını yükler, aile adını döndürür; yüklenemezse None."""
+    p = Path(path)
+    if not p.is_file():
+        return None
+    fid = QFontDatabase.addApplicationFont(str(p))
+    if fid == -1:
+        return None
+    fams = QFontDatabase.applicationFontFamilies(fid)
+    return fams[0] if fams else None
+
+
 def font(fam: FontFamilies, px: int, weight: int = 400, spacing_pct: int | None = None) -> QFont:
     f = QFont(fam.sans)
     f.setPixelSize(px)

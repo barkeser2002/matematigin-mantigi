@@ -57,6 +57,24 @@ def test_edit_mode_drag_moves_and_snaps(qtbot):
     assert wa.board.is_empty()                                        # düzen modunda çizim olmaz
 
 
+def test_edit_mode_drag_through_real_event_path(qtbot):
+    """Gerçek olay yolu (pencere -> çocuk isabet testi): bölge ve tuval şeffaf olmalı, sürükleme buraya ulaşmalı."""
+    from PyQt6.QtTest import QTest
+    wa, zones = make(qtbot)
+    wa.set_edit_mode(True)
+    win = wa.windowHandle()
+    start = zones["webcam"].geometry().center()
+    cw, ch = lm.cell_size(wa.width(), wa.height(), 14)
+    end = start + QPoint(-int(cw * 2), 0)
+    QTest.mousePress(win, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start)
+    QTest.mouseMove(win, end)
+    QTest.mouseMove(win, end + QPoint(1, 0))
+    with qtbot.waitSignal(wa.layoutChanged) as sig:
+        QTest.mouseRelease(win, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, end + QPoint(1, 0))
+    assert sig.args[0]["webcam"] == lm.PanelGeom(7, 7, 3, 3)
+    assert wa.board.is_empty()                                        # tıklama tuvale çizim olarak gitmedi
+
+
 def test_edit_mode_resize_from_corner(qtbot):
     wa, zones = make(qtbot)
     wa.set_edit_mode(True)

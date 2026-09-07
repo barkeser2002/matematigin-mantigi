@@ -1,6 +1,7 @@
 """Ana pencere: beyaz tahta + bölgeleri kurar ve sinyalleri bağlar. İş mantığı core/ içindedir."""
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -19,6 +20,8 @@ from matematigin_mantigi.ui.hint_zone import HintZone
 from matematigin_mantigi.ui.pen_settings import PenSettingsDialog
 from matematigin_mantigi.ui.question_zone import QuestionZone
 from matematigin_mantigi.ui.record_badge import RecordBadge
+from matematigin_mantigi.ui.settings_dialog import SettingsDialog, SettingsValues
+from matematigin_mantigi.ui import theme
 from matematigin_mantigi.ui.theme import FontFamilies
 from matematigin_mantigi.ui.toolbar import ToolBar
 from matematigin_mantigi.ui.webcam_panel import WebcamPanel
@@ -30,6 +33,7 @@ class MainWindow(QMainWindow):
                  recorder: Recorder, session_store: SessionStore,
                  camera_source_factory: Callable[[], FrameSource] | None, layout_path: Path, parent=None):
         super().__init__(parent)
+        self.base_fam = fam                       # paketle gelen aile; Ayarlar'daki dosya bunun üstüne biner
         self.fam, self.settings, self.recorder, self.session_store = fam, settings, recorder, session_store
         self.layout_path = Path(layout_path)
         self.setWindowTitle("Matematiğin Mantığı")
@@ -55,6 +59,7 @@ class MainWindow(QMainWindow):
         self._wire()
         self._shortcuts()
         self._restore_settings()
+        self.apply_ui_settings()
         if questions:
             self._on_question_changed(self.flow.index)
         if camera_source_factory is not None:
@@ -73,6 +78,7 @@ class MainWindow(QMainWindow):
         tb.nextRequested.connect(flow.next_question)
         tb.recordToggled.connect(self.toggle_recording)
         tb.penSettingsRequested.connect(self.open_pen_settings)
+        tb.settingsRequested.connect(self.open_settings)
         tb.layoutEditToggled.connect(self.work_area.set_edit_mode)
         self.work_area.editModeChanged.connect(tb.set_layout_edit)
         self.work_area.layoutChanged.connect(lambda lay: lm.save_layout(self.layout_path, lay))
@@ -130,12 +136,14 @@ class MainWindow(QMainWindow):
         self.toolbar.set_tool(s.tool); self.toolbar.set_color(s.color); self.toolbar.set_width(s.width)
         self.hint_zone.set_mask_mode(s.hint_mask)
         self.question_zone.set_reading_ms(s.pen().reading_ms)
+        self.work_area.set_click_mode(s.tool == Tool.CLICK)
         self.refresh_cursor()
         self._status("XP-Pen")
 
     # --- handlers -----------------------------------------------------------------
     def _on_tool(self, t: Tool) -> None:
         self.canvas.set_tool(t); self.settings.tool = t
+        self.work_area.set_click_mode(t == Tool.CLICK)
         self.refresh_cursor(); self._status("XP-Pen")
 
     def _on_color(self, hx: str) -> None:
@@ -205,6 +213,37 @@ class MainWindow(QMainWindow):
     def _apply_pen_settings(self, p: PenSettings) -> None:
         self.settings.set_pen(p)
         self.question_zone.set_reading_ms(p.reading_ms)
+
+    def open_settings(self) -> None:
+        dlg = SettingsDialog(self.settings, self.fam, self)
+        dlg.applied.connect(self.apply_settings_values)
+        dlg.exec()
+
+    def apply_settings_values(self, v: SettingsValues) -> None:
+        s = self.settings
+        s.font_file = v.font_file
+        s.set_pen(replace(s.pen(), reading_ms=v.reading_ms))
+        s.auto_key = v.auto_key
+        for key, on in v.visible.items():
+            s.set_visible(key, on)
+        self.apply_ui_settings()
+
+    def apply_ui_settings(self) -> None:
+        """Ayarlardaki yazı tipi, yazma hızı, otomatik perde tonu ve görünürlükleri arayüze uygular."""
+        s = self.settings
+        family = theme.load_font_file(s.font_file) if s.font_file else None
+        self.fam = replace(self.base_fam, sans=family) if family else self.base_fam
+        self.question_zone.set_families(self.fam)
+        self.hint_zone.set_families(self.fam)
+        self.question_zone.set_reading_ms(s.pen().reading_ms)
+        self.webcam_panel.set_auto_key(s.auto_key)
+        self.hint_zone.set_controls_visible(s.visible("hint_controls"))
+        self.hint_zone.set_heading_visible(s.visible("hint_heading"))
+        self.work_area.status_label.setVisible(s.visible("status"))
+        self.webcam_panel.overlay_label.setVisible(s.visible("cam_label"))
+        self.work_area.brand.setVisible(s.visible("brand"))
+        self.question_zone.set_hide_link_enabled(s.visible("hide_link"))
+        self.question_zone.set_number_visible(s.visible("question_number"))
 
     def closeEvent(self, e):
         self.webcam_panel.shutdown()

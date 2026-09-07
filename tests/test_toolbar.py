@@ -65,6 +65,12 @@ def test_layout_edit_button(qtbot):
     assert sig.args == [True]
 
 
+def test_settings_button(qtbot):
+    tb = make(qtbot)
+    with qtbot.waitSignal(tb.settingsRequested):
+        qtbot.mouseClick(tb.settings_button, Qt.MouseButton.LeftButton)
+
+
 def test_prev_and_next_buttons(qtbot):
     tb = make(qtbot)
     assert tb.prev_button.text() == "← Önceki soru" and tb.next_button.text() == "Sıradaki soru →"

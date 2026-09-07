@@ -133,6 +133,9 @@ class WorkArea(QWidget):
         self.edit_mode = on
         for zone in self._zones.values():
             zone.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, on)
+        # Tahta ve rozet de şeffaf olmalı; yoksa tıklama en üstteki çocuğa (tuvale) gider, buraya ulaşmaz.
+        self.board.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, on)
+        self.badge_slot.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, on)
         self.overlay.setVisible(on)
         self.edit_bar.setVisible(on)
         self.setCursor(Qt.CursorShape.ArrowCursor)
@@ -178,6 +181,11 @@ class WorkArea(QWidget):
     def set_status(self, text: str) -> None:
         self.status_label.setText(text)
         self.status_label.adjustSize()
+
+    def set_click_mode(self, on: bool) -> None:
+        """on: 'Tıkla' aracı, bölge çocukları tıklanır. off: çizim aracı, her basış tahtaya gider."""
+        for zone in self._zones.values():
+            zone.set_click_through(not on)
 
     def set_tool_cursor(self, cursor) -> None:
         """Araç imleci tahtada ve bölgelerde aynı; tıklanabilir çocuklar (kart, kamera, düğme) kendi imlecini korur."""

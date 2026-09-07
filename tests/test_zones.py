@@ -28,8 +28,8 @@ def test_question_zone_without_animation(qtbot):
     assert z.image_label.isHidden()
 
 
-def test_reading_animation_reveals_words_then_options(qtbot):
-    z = qzone(qtbot, ms=20)
+def test_reading_animation_reveals_letters_then_options(qtbot):
+    z = qzone(qtbot, ms=5)
     with qtbot.waitSignal(z.readingFinished, timeout=3000):
         z.set_question(Q0, 3)
         assert z.is_animating and z.text_label.text() == "" and not z.options_widget.isVisible()
@@ -37,13 +37,31 @@ def test_reading_animation_reveals_words_then_options(qtbot):
     assert z.number_label.text() == "3."
 
 
-def test_current_word_is_highlighted_during_reading(qtbot):
+def test_letters_fade_in_one_by_one(qtbot):
     z = qzone(qtbot, ms=60)
     z.set_question(Q0, 1)
     qtbot.waitUntil(lambda: z.text_label.text() != "", timeout=2000)
-    assert "<span" in z.text_label.text() and z.text_label.textFormat() == Qt.TextFormat.RichText
+    t = z.text_label.text()
+    assert z.text_label.textFormat() == Qt.TextFormat.RichText
+    assert 'color:#40' in t                                    # en yeni harf en saydam
+    qtbot.waitUntil(lambda: z._n >= 3, timeout=2000)
+    t = z.text_label.text()
+    assert t.count("<span") == 3 and "#c0" in t and "#80" in t and "#40" in t
     z.skip_animation()
     assert z.text_label.text() == Q0.soru and z.text_label.textFormat() == Qt.TextFormat.PlainText
+
+
+def test_font_family_and_visibility_switches(qtbot):
+    z = qzone(qtbot)
+    z.set_question(Q0, 1)
+    z.set_families(FontFamilies("Courier New", "Arial", False))
+    assert z.text_label.font().family() == "Courier New" and z.option_labels[0].font().family() == "Courier New"
+    z.set_number_visible(False)
+    assert z.number_label.isHidden()
+    z.set_hide_link_enabled(False)
+    assert z.hide_link.isHidden()
+    z.set_shown(False); z.set_shown(True)
+    assert z.hide_link.isHidden()                               # kapalıysa göster/gizle döngüsü açmaz
 
 
 def test_animation_waits_until_zone_is_shown(qtbot):
@@ -140,3 +158,40 @@ def test_nav_buttons(qtbot):
         qtbot.mouseClick(h.next_button, Qt.MouseButton.LeftButton)
     with qtbot.waitSignal(h.prevRequested):
         qtbot.mouseClick(h.prev_button, Qt.MouseButton.LeftButton)
+
+
+def test_click_through_sends_card_presses_past_the_card(qtbot):
+    """Çizim aracı aktifken (click-through) kart tıklaması açmaz; Tıkla aracında açar."""
+    from PyQt6.QtTest import QTest
+    h = hzone(qtbot)
+    qtbot.waitExposed(h)
+    win = h.windowHandle()
+    fired = []
+    h.revealToggled.connect(lambda i: fired.append(i))
+
+    def click(card):                                   # her seferinde farklı kart: aynı noktaya ikinci tık çift tık sayılır
+        c = card.mapTo(h, card.rect().center())
+        QTest.mouseClick(win, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, c)
+        qtbot.wait(30)
+
+    h.set_click_through(True)
+    click(h.cards[0])
+    assert fired == []
+    h.set_click_through(False)
+    click(h.cards[1])
+    assert fired == [1]
+    h.set_click_through(True)
+    h.set_hints("S2", Q0.hints)                                       # yeni kartlar da geçirgen
+    qtbot.wait(30)
+    click(h.cards[2])
+    assert fired == [1]
+
+
+def test_hint_controls_heading_and_font_switches(qtbot):
+    h = hzone(qtbot)
+    h.set_controls_visible(False)
+    assert h.counter_label.isHidden() and h.blur_button.isHidden() and h.next_button.isHidden()
+    h.set_heading_visible(False)
+    assert h.title_label.isHidden() and h.rule.isHidden()
+    h.set_families(FontFamilies("Courier New", "Arial", False))
+    assert h.cards[0].text_label.font().family() == "Courier New"

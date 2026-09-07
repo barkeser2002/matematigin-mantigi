@@ -17,12 +17,17 @@ Windows PowerShell'de önce `$env:PYTHONUTF8 = "1"`.
 
 Çalışma alanının tamamı düz beyaz tuval; her yerine çizilir. Üstünde üç şeffaf bölge: sol üstte soru (kırmızı
 numara, kalın metin, görsel, A) B) C) D)), sağ üstte "AKILLI İPUÇLARI" kartları, sağ alt köşede çerçevesiz webcam.
-Sayfa başına tek soru; "Sıradaki soru →" (N) ve "← Önceki soru" (P) ile gezilir. Soru değişince metin kelime
-kelime belirir, o an okunan kelime kırmızı vurgulanır (varsayılan 350 ms/kelime; Kalem ayarlarında "Okuma hızı",
-0 = kapalı); tıklayınca tamamlanır. İpucu kartları blur veya redakte ile gizlidir, tıklanmadan açılmaz; açılırken
-bulanıklık 300 ms'de çözülür.
+Sayfa başına tek soru; "Sıradaki soru →" (N) ve "← Önceki soru" (P) ile gezilir. Soru değişince metin harf harf
+belirir, son harfler solarak gelir (varsayılan 40 ms/harf; ⚙ Ayarlar > "Soru yazma hızı", 0 = kapalı); tıklayınca
+tamamlanır. İpucu kartları blur veya redakte ile gizlidir, tıklanmadan açılmaz; açılırken bulanıklık 300 ms'de çözülür.
 
-Araçlar: kalem (5 kalınlık: 1/2/4/8/12 px), silgi, lazer (izi 1,5 sn'de sönerek kaybolur), yazı ve şekil (taslak).
+⚙ Ayarlar: yazı tipi dosyası (.ttf/.otf; soru, seçenekler ve ipucu kartlarına uygulanır), soru yazma hızı, yeşil perde
+tonunun otomatik ölçümü (aç/kapat) ve tahtadaki yazısal öğelerin görünürlüğü: ipucu kontrolleri (1/3 ◀ ▶ Blur Redakte),
+"AKILLI İPUÇLARI" başlığı, durum satırı, kamera etiketi, marka plakası, "gizle" bağlantısı, soru numarası.
+
+Araçlar: kalem (5 kalınlık: 1/2/4/8/12 px), silgi, lazer (izi 1,5 sn'de sönerek kaybolur), yazı ve şekil (taslak),
+Tıkla (6). Çizim araçlarında her basış tahtaya gider, soru ve ipucu kartlarının üstüne de çizilir; kartı açmak,
+kamerayı değiştirmek veya düğmelere basmak için Tıkla aracına geçilir (ya da klavye: Enter, H, ←/→).
 İmleç araca göre ikon: renkli kurşun kalem (ucunda çizgi kalınlığı), silme alanı kadar silgi bloğu, kırmızı lazer
 noktası; tahtanın ve bölgelerin her yerinde geçerli.
 
@@ -33,7 +38,7 @@ Normal kullanımda çerçeve ve bölge çizgisi yoktur; sadece düzen modunda g�
 
 ## Kısayollar
 
-1-5 araçlar · Ctrl+Z geri al · Ctrl+Shift+X temizle · N sıradaki · P önceki · Space işle/tamamla · R kayıt ·
+1-6 araçlar (6 = Tıkla) · Ctrl+Z geri al · Ctrl+Shift+X temizle · N sıradaki · P önceki · Space işle/tamamla · R kayıt ·
 H soruyu gizle/göster · ←/→ ipucu · Enter ipucunu aç · L düzen · F11 tam ekran · Esc çık
 
 ## Soru şablonu ve PDF aktarımı

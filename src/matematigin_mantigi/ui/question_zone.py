@@ -1,4 +1,5 @@
-"""Soru bölgesi: kırmızı numara, kalın soru metni, görsel, A) B) C) D). Soru değişince okuma animasyonu."""
+"""Soru bölgesi: kırmızı numara, kalın soru metni, görsel, A) B) C) D).
+Soru değişince metin harf harf belirir; son harfler solarak (fade) gelir."""
 from __future__ import annotations
 
 import html
@@ -14,6 +15,7 @@ from matematigin_mantigi.ui.theme import FontFamilies
 from matematigin_mantigi.ui.zone import Zone
 
 IMAGE_MAX_HEIGHT = 260
+FADE_ALPHAS = ("c0", "80", "40")     # son üç harf: eskiden yeniye doğru saydamlaşır (#AARRGGBB)
 
 
 class QuestionZone(Zone):
@@ -25,9 +27,10 @@ class QuestionZone(Zone):
         super().__init__(parent)
         self.fam = fam
         self.shown = True
-        self.reading_ms = 350
+        self.reading_ms = 40                   # ms/harf; 0 = animasyon yok
+        self.hide_link_enabled = True
         self.question: Question | None = None
-        self._words: list[str] = []
+        self._text = ""
         self._n = 0
         self._pending = False                  # bölge görünene kadar animasyon bekler
         self._timer = QTimer(self)
@@ -38,7 +41,6 @@ class QuestionZone(Zone):
         grid = QGridLayout(self.content)
         grid.setContentsMargins(0, 0, 0, 0); grid.setHorizontalSpacing(18); grid.setVerticalSpacing(8)
         self.number_label = QLabel("")
-        self.number_label.setFont(theme.font(fam, 34, 700))
         self.number_label.setStyleSheet(f"color: {theme.QUESTION_NUMBER}; background: transparent;")
         grid.addWidget(self.number_label, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
@@ -47,7 +49,6 @@ class QuestionZone(Zone):
         self.image_label.setStyleSheet("background: transparent;")
         self.text_label = QLabel("")
         self.text_label.setWordWrap(True)
-        self.text_label.setFont(theme.font(fam, 30, 700))
         self.text_label.setStyleSheet("background: transparent;")
         self.text_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self.options_widget = QWidget()
@@ -64,7 +65,6 @@ class QuestionZone(Zone):
 
         head = QHBoxLayout(); head.setContentsMargins(0, 0, 0, 0)
         self.hide_link = QPushButton("gizle"); self.hide_link.setObjectName("link")
-        self.hide_link.setFont(theme.font(fam, 11, 500))
         self.hide_link.setCursor(Qt.CursorShape.PointingHandCursor)
         self.hide_link.clicked.connect(self.hideRequested)
         head.addStretch(1); head.addWidget(self.hide_link)
@@ -76,6 +76,7 @@ class QuestionZone(Zone):
         self.show_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.show_button.clicked.connect(self.showRequested)
         self.show_button.hide()
+        self.set_families(fam)
 
     # --- API ----------------------------------------------------------------
     @property
@@ -85,22 +86,38 @@ class QuestionZone(Zone):
     def set_reading_ms(self, ms: int) -> None:
         self.reading_ms = max(0, int(ms))
 
+    def set_families(self, fam: FontFamilies) -> None:
+        """Yazı tipini değiştirir (Ayarlar > yazı tipi dosyası)."""
+        self.fam = fam
+        self.number_label.setFont(theme.font(fam, 34, 700))
+        self.text_label.setFont(theme.font(fam, 30, 700))
+        self.hide_link.setFont(theme.font(fam, 11, 500))
+        for lab in self.option_labels:
+            lab.setFont(theme.font(fam, 24, 400))
+
+    def set_number_visible(self, on: bool) -> None:
+        self.number_label.setVisible(on)
+
+    def set_hide_link_enabled(self, on: bool) -> None:
+        self.hide_link_enabled = on
+        self.hide_link.setVisible(self.shown and on)
+
     def set_question(self, q: Question, display_no: int, animate: bool = True) -> None:
         self._timer.stop()
         self.question = q
         self.number_label.setText(f"{display_no}.")
         self._set_image(q.image)
         self._build_options(q.options)
-        self._words = q.soru.split()
+        self._text = " ".join(q.soru.split())
         self._n = 0
         self._pending = False
-        if animate and self.reading_ms > 0 and self._words:
+        if animate and self.reading_ms > 0 and self._text:
             self.text_label.setText("")
             self.options_widget.hide()
             if self.isVisible():
                 self._timer.start(self.reading_ms)
             else:
-                self._pending = True           # pencere açılınca başlar, ilk soru da kelime kelime gelir
+                self._pending = True           # pencere açılınca başlar, ilk soru da harf harf gelir
         else:
             self._finish()
 
@@ -120,26 +137,33 @@ class QuestionZone(Zone):
         if not shown:
             self.content.graphicsEffect().setBlurRadius(16)
         self.show_button.setVisible(not shown)
-        self.hide_link.setVisible(shown)
+        self.hide_link.setVisible(shown and self.hide_link_enabled)
         self._place_button()
 
     # --- internals -------------------------------------------------------------
     def _tick(self) -> None:
         self._n += 1
-        done = " ".join(html.escape(w) for w in self._words[:self._n - 1])
-        current = html.escape(self._words[self._n - 1])
-        self.text_label.setTextFormat(Qt.TextFormat.RichText)
-        self.text_label.setText((done + " " if done else "")
-                                + f'<span style="color:{theme.QUESTION_NUMBER}">{current}</span>')   # okunan kelime vurgulu
-        if self._n >= len(self._words):
+        self._render_partial()
+        if self._n >= len(self._text):
             self._finish()
+
+    def _render_partial(self) -> None:
+        n, text = self._n, self._text
+        trail = min(len(FADE_ALPHAS), n)
+        ink = theme.INK.lstrip("#")
+        parts = [html.escape(text[:n - trail])]
+        alphas = FADE_ALPHAS[len(FADE_ALPHAS) - trail:]           # en yeni harf en saydam
+        for alpha, ch in zip(alphas, text[n - trail:n]):
+            parts.append(f'<span style="color:#{alpha}{ink}">{html.escape(ch)}</span>')
+        self.text_label.setTextFormat(Qt.TextFormat.RichText)
+        self.text_label.setText("".join(parts))
 
     def _finish(self) -> None:
         self._timer.stop()
         self._pending = False
-        self._n = len(self._words)
+        self._n = len(self._text)
         self.text_label.setTextFormat(Qt.TextFormat.PlainText)
-        self.text_label.setText(" ".join(self._words))
+        self.text_label.setText(self._text)
         self.options_widget.setVisible(bool(self.option_labels))
         self.readingFinished.emit()
 

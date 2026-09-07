@@ -115,7 +115,8 @@ class HintZone(Zone):
         self.body.setSpacing(10)
 
         head = QHBoxLayout(); head.setSpacing(8)
-        head.addWidget(BulbIcon(28))
+        self.heading_icon = BulbIcon(28)
+        head.addWidget(self.heading_icon)
         self.title_label = QLabel("AKILLI İPUÇLARI")
         self.title_label.setFont(theme.font(fam, 20, 700, spacing_pct=104))
         self.title_label.setStyleSheet(f"color: {theme.HINT_HEADING}; background: transparent;")
@@ -137,8 +138,9 @@ class HintZone(Zone):
             head.addWidget(w)
         self.body.addLayout(head)
 
-        rule = QFrame(); rule.setFixedHeight(2); rule.setStyleSheet(f"background: {theme.HINT_CARD_BORDER};")
-        self.body.addWidget(rule)
+        self.rule = QFrame(); self.rule.setFixedHeight(2)
+        self.rule.setStyleSheet(f"background: {theme.HINT_CARD_BORDER};")
+        self.body.addWidget(self.rule)
 
         self.cards_host = QWidget(); self.cards_layout = QVBoxLayout(self.cards_host)
         self.cards_layout.setContentsMargins(0, 4, 0, 0); self.cards_layout.setSpacing(10)
@@ -155,6 +157,7 @@ class HintZone(Zone):
             card.clicked.connect(lambda k=i: self.revealToggled.emit(k))
             self.cards_layout.addWidget(card); self.cards.append(card)
         self._focus = 0
+        self._apply_click_through()          # yeni kartlar da geçerli moda uysun
         self._refresh()
 
     def set_focus(self, i: int) -> None:
@@ -170,6 +173,22 @@ class HintZone(Zone):
         self.mask_mode = m
         (self.blur_button if m == HintMaskMode.BLUR else self.redact_button).setChecked(True)
         self._refresh()
+
+    def set_controls_visible(self, on: bool) -> None:
+        for w in (self.counter_label, self.prev_button, self.next_button, self.blur_button, self.redact_button):
+            w.setVisible(on)
+
+    def set_heading_visible(self, on: bool) -> None:
+        self.title_label.setVisible(on)
+        self.heading_icon.setVisible(on)
+        self.rule.setVisible(on)
+
+    def set_families(self, fam: FontFamilies) -> None:
+        """Yazı tipini değiştirir (Ayarlar > yazı tipi dosyası)."""
+        self.fam = fam
+        self.title_label.setFont(theme.font(fam, 20, 700, spacing_pct=104))
+        for c in self.cards:
+            c.text_label.setFont(theme.font(fam, 16, 500))
 
     # --- internals ----------------------------------------------------------------
     def _set_mode_from_ui(self, m: HintMaskMode) -> None:

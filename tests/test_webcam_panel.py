@@ -12,11 +12,11 @@ def test_shows_frames_and_toggles_on_click(qtbot, fake_camera):
     qtbot.addWidget(panel); panel.resize(600, 400); panel.show()
     with qtbot.waitSignal(panel.worker.frameReady, timeout=2000):
         panel.start()
-    assert panel.has_camera and panel.overlay_label.text().startswith("yeşil perde: kaldırıldı")
-    with qtbot.waitSignal(panel.chromaToggled) as sig:
-        qtbot.mouseClick(panel.view, Qt.MouseButton.LeftButton)
-    assert sig.args == [False] and panel.chroma_enabled is False
-    assert panel.overlay_label.text().startswith("yeşil perde: ham görüntü")
+    assert panel.has_camera and panel.overlay_label.text() == "yeşil perde: kaldırıldı"
+    qtbot.mouseClick(panel.view, Qt.MouseButton.LeftButton)
+    assert panel.chroma_enabled is True                        # tıklama değiştirmez; Ayarlar'dan
+    panel.set_chroma_enabled(False)
+    assert panel.overlay_label.text() == "yeşil perde: ham görüntü"
     panel.shutdown()
     assert panel.worker.isFinished()
 

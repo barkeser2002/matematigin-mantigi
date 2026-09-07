@@ -1,4 +1,5 @@
 from PyQt6.QtCore import QPointF, QSize, Qt
+from PyQt6.QtGui import QColor
 
 from matematigin_mantigi.core import layout_model as lm
 from matematigin_mantigi.core.models import SAMPLE_QUESTIONS, HintMaskMode, QuestionStatus, Tool
@@ -105,6 +106,47 @@ def test_pen_draws_over_hint_card_and_click_tool_reveals(window, qtbot):
     assert card.revealed and window.canvas.is_empty()                       # tıkla: kart açıldı, çizim yok
 
 
+def test_shape_button_cycles_and_draws(window, qtbot):
+    from matematigin_mantigi.core.models import Shape
+    btn = window.toolbar.tool_buttons[Tool.SHAPE]
+    qtbot.mouseClick(btn, Qt.MouseButton.LeftButton)
+    assert window.canvas.tool == Tool.SHAPE and window.canvas.shape == Shape.RECT and btn.glyph == "▭"
+    assert "Şekil (Dikdörtgen)" in window.work_area.status_label.text()
+    qtbot.mouseClick(btn, Qt.MouseButton.LeftButton)                  # seçiliyken tekrar: elips
+    assert window.canvas.shape == Shape.ELLIPSE and btn.glyph == "○"
+    c = window.canvas
+    c.begin_stroke(QPointF(300, 300), 0.5); c.extend_stroke(QPointF(500, 420), 0.5); c.end_stroke()
+    assert not c.is_empty()
+    qtbot.mouseClick(window.toolbar.tool_buttons[Tool.PEN], Qt.MouseButton.LeftButton)
+    assert window.canvas.shape == Shape.ELLIPSE                        # seçim hatırlanır
+
+
+def test_text_tool_through_window(window, qtbot):
+    qtbot.mouseClick(window.toolbar.tool_buttons[Tool.TEXT], Qt.MouseButton.LeftButton)
+    assert window.canvas.cursor().shape() == Qt.CursorShape.IBeamCursor
+    window.canvas.begin_stroke(QPointF(300, 400), 0.5)
+    assert window.canvas.text_edit.isVisible()
+    qtbot.keyClicks(window.canvas.text_edit, "Cevap: N ve H")      # N/H harfleri kısayol olarak çalışmamalı
+    assert window.flow.index == 0 and window.flow.is_question_shown()
+    qtbot.keyClick(window.canvas.text_edit, Qt.Key.Key_Return)
+    assert not window.canvas.is_empty() and window.toolbar.undo_button.isEnabled()
+    assert window.canvas.text_edit.isHidden()
+    window.canvas.begin_stroke(QPointF(300, 500), 0.5)
+    qtbot.keyClicks(window.canvas.text_edit, "iptal")
+    qtbot.keyClick(window.canvas.text_edit, Qt.Key.Key_Escape)
+    assert window.canvas.text_edit.isHidden() and window.canvas._stroke_count == 1
+
+
+def test_ink_is_visible_on_top_of_hint_card(window, qtbot):
+    card = window.hint_zone.cards[1]
+    center = card.mapTo(window.work_area, card.rect().center())
+    bpos = QPointF(window.work_area.board.mapFrom(window.work_area, center))
+    c = window.canvas; c.set_color(QColor("#2456b8")); c.set_base_width(12)
+    c.begin_stroke(bpos + QPointF(-40, 0), 1.0); c.extend_stroke(bpos + QPointF(40, 0), 1.0); c.end_stroke()
+    img = window.work_area.grab().toImage()
+    assert img.pixelColor(center.x(), center.y()).name() == "#2456b8"     # kartın üstünde mürekkep görünür
+
+
 def test_drawing_over_question_zone_reaches_board(window, qtbot):
     z = window.question_zone
     qtbot.mousePress(z, Qt.MouseButton.LeftButton, pos=z.rect().center())
@@ -150,7 +192,7 @@ def test_restores_settings_on_start(qtbot, tmp_path, ini_settings, dead_camera):
     assert win.canvas.tool == Tool.LASER and win.canvas.color.name() == "#1f8a4c" and win.canvas.base_width == 2
     assert win.toolbar.tool_buttons[Tool.LASER].isChecked() and win.toolbar.width_buttons[2].isChecked()
     assert win.hint_zone.mask_mode == HintMaskMode.REDACT
-    assert win.webcam_panel.chroma_enabled is True            # kayıtlı ayar ne olursa olsun perde kaldırılmış başlar
+    assert win.webcam_panel.chroma_enabled is False           # Ayarlar'daki perde anahtarı geri gelir
     assert win.question_zone.reading_ms == 0 and not win.question_zone.is_animating
 
 
@@ -205,11 +247,13 @@ def test_settings_dialog_applies_speed_visibility_and_auto_key(window, qtbot, mo
         self.visibility_checks["question_number"].setChecked(False)
         self.visibility_checks["frame"].setChecked(False)
         self.presenter_edit.setText("Barış Keser")
+        self.chroma_check.setChecked(False)
         self._apply()
         return 1
     monkeypatch.setattr(sd.SettingsDialog, "exec", fake_exec)
     qtbot.mouseClick(window.toolbar.settings_button, Qt.MouseButton.LeftButton)
     s = window.settings
+    assert s.chroma_enabled is False and window.webcam_panel.chroma_enabled is False
     assert s.presenter_name == "Barış Keser" and window.work_area.name_label.text() == "Barış Keser"
     assert not window.work_area.frame_visible and window.canvas.geometry() == window.work_area.rect()
     assert s.pen().reading_ms == 90 and window.question_zone.reading_ms == 90

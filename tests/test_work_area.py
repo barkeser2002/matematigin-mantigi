@@ -63,6 +63,14 @@ def test_title_plate_and_presenter_name_positions(qtbot):
     assert wa.name_label.isHidden()
 
 
+def test_ink_layer_sits_above_zones_but_below_webcam(qtbot):
+    wa, zones = make(qtbot)
+    assert wa.ink.geometry() == wa.board.geometry()
+    order = [c for c in wa.children() if c in (wa.board, wa.ink, zones["soru"], zones["ipucu"], zones["webcam"])]
+    assert order.index(wa.board) < order.index(zones["soru"]) < order.index(wa.ink) < order.index(zones["webcam"])
+    assert order.index(zones["ipucu"]) < order.index(wa.ink)
+
+
 def test_zone_forwards_drawing_to_board(qtbot):
     wa, zones = make(qtbot)
     z = zones["soru"]

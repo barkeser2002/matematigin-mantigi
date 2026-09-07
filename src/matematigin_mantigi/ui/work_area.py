@@ -53,6 +53,22 @@ class _EditOverlay(QWidget):
         p.end()
 
 
+class InkLayer(QWidget):
+    """Mürekkep katmanı: tuvalin çizgilerini soru ve ipucu bölgelerinin ÜSTÜNDE, webcam'in altında gösterir."""
+
+    def __init__(self, board: DrawingCanvas, parent=None):
+        super().__init__(parent)
+        self.board = board
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        board.set_mirror(self)
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        self.board.paint_ink(p)
+        p.end()
+
+
 class WorkArea(QWidget):
     layoutChanged = pyqtSignal(object)     # Layout dict
     editModeChanged = pyqtSignal(bool)
@@ -68,6 +84,7 @@ class WorkArea(QWidget):
         self.setMouseTracking(True)
 
         self.board = DrawingCanvas(self)
+        self.ink = InkLayer(self.board, self)
 
         self.status_label = QLabel("", self)
         self.status_label.setFont(theme.font(fam, 10, 500))
@@ -180,6 +197,10 @@ class WorkArea(QWidget):
             x, y, w, h = lm.pixel_rect(self._layout[key], inner.width(), inner.height(), theme.GRID_GAP)
             zone.setGeometry(inner.x() + x, inner.y() + y, w, h)
             zone.raise_()
+        self.ink.setGeometry(inner)
+        self.ink.raise_()                                   # mürekkep soru/ipucu üstünde
+        if "webcam" in self._zones:
+            self._zones["webcam"].raise_()                  # kişi mürekkebin üstünde
         self.status_label.adjustSize()
         self.status_label.move(inner.x() + 12, inner.bottom() - self.status_label.height() - 6)
         self.status_label.raise_()

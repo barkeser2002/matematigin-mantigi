@@ -18,10 +18,13 @@ def test_dialog_reflects_settings_and_returns_values(qtbot, ini_settings):
     assert d.auto_key_check.isChecked()
     assert set(d.visibility_checks) == {k for k, _ in VISIBILITY_KEYS}
     assert not d.visibility_checks["status"].isChecked() and d.visibility_checks["brand"].isChecked()
+    assert d.chroma_check.isChecked()
+    d.chroma_check.setChecked(False)
     d.reading_slider.setValue(0); d.auto_key_check.setChecked(False)
     d.visibility_checks["cam_label"].setChecked(False)
     v = d.value()
     assert v.reading_ms == 0 and d.reading_value.text() == "kapalı" and v.auto_key is False
+    assert v.chroma_enabled is False
     assert v.visible["cam_label"] is False and v.visible["status"] is False and v.visible["brand"] is True
     assert v.font_file == "" and v.presenter_name == "Koray Varol"
     d.presenter_edit.setText("  Ad Soyad ")

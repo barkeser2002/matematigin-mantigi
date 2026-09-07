@@ -24,6 +24,26 @@ TOOL_META: dict[Tool, tuple[str, str]] = {
 DRAWING_TOOLS = (Tool.PEN, Tool.ERASER, Tool.TEXT, Tool.SHAPE, Tool.LASER)
 
 
+class Shape(str, Enum):
+    LINE = "line"
+    RECT = "rect"
+    ELLIPSE = "ellipse"
+    TRIANGLE = "triangle"
+
+
+SHAPE_META: dict[Shape, tuple[str, str]] = {
+    Shape.LINE: ("Çizgi", "╱"),
+    Shape.RECT: ("Dikdörtgen", "▭"),
+    Shape.ELLIPSE: ("Elips", "○"),
+    Shape.TRIANGLE: ("Üçgen", "△"),
+}
+SHAPE_ORDER = (Shape.RECT, Shape.ELLIPSE, Shape.TRIANGLE, Shape.LINE)
+
+
+def next_shape(s: Shape) -> Shape:
+    return SHAPE_ORDER[(SHAPE_ORDER.index(s) + 1) % len(SHAPE_ORDER)]
+
+
 class QuestionStatus(str, Enum):
     WAITING = "bekliyor"
     WORKING = "işleniyor"

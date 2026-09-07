@@ -25,13 +25,16 @@ tamamlanır. İpucu kartları blur veya redakte ile gizlidir, tıklanmadan açı
 tonunun otomatik ölçümü (aç/kapat) ve tahtadaki yazısal öğelerin görünürlüğü: ipucu kontrolleri (1/3 ◀ ▶ Blur Redakte),
 "AKILLI İPUÇLARI" başlığı, durum satırı, kamera etiketi, marka plakası, "gizle" bağlantısı, soru numarası.
 
-Araçlar: kalem (5 kalınlık: 1/2/4/8/12 px), silgi, lazer (izi 1,5 sn'de sönerek kaybolur), yazı ve şekil (taslak),
-Tıkla (6). Çizim araçlarında her basış tahtaya gider, soru ve ipucu kartlarının üstüne de çizilir; kartı açmak,
+Araçlar: kalem (5 kalınlık: 1/2/4/8/12 px), silgi, lazer (izi 1,5 sn'de sönerek kaybolur), yazı (tıkla, yaz,
+Enter ile tahtaya işle, Esc iptal; punto kalınlık kademesine göre), şekil (sürükle; Şekil düğmesine tekrar basınca
+dikdörtgen → elips → üçgen → çizgi), Tıkla (6). Çizim araçlarında her basış tahtaya gider; mürekkep soru ve ipucu kartlarının üstünde, sadece webcam'in
+altında görünür; kartı açmak,
 kamerayı değiştirmek veya düğmelere basmak için Tıkla aracına geçilir (ya da klavye: Enter, H, ←/→).
 İmleç araca göre ikon: renkli kurşun kalem (ucunda çizgi kalınlığı), silme alanı kadar silgi bloğu, kırmızı lazer
 noktası; tahtanın ve bölgelerin her yerinde geçerli.
 
-Webcam: perde pikselleri saydam olur, kişi tahtanın ve çizimlerin üstüne biner. Yeşil perde kamera karesinin
+Webcam: perde pikselleri saydam olur, kişi tahtanın ve çizimlerin üstüne biner. Perdeyi kaldırma ⚙ Ayarlar'dan
+açılıp kapanır (kameraya tıklamak değiştirmez). Yeşil perde kamera karesinin
 kenarlarından otomatik ölçülür (yeşilimsi ve doygunsa), böylece #00ff3c olmayan
 gerçek perdeler de temizlenir; kamera yokken sadece kısa bir durum yazısı görünür.
 "⧉ Düzen" (L) modunda bölgeler OBS gibi taşınır/boyutlandırılır, 12x10 ızgaraya yapışır, `duzen.json`'a kaydedilir.
@@ -79,4 +82,4 @@ kalır, Excel'de doldurulur. `pymupdf` gerekir (`pip install pymupdf`).
 
 ## Bu sürümde taslak olan kısımlar
 
-Kayıt düğmesi (NullRecorder + rozet), Keras tanıma, Yazı ve Şekil araçları.
+Kayıt düğmesi (NullRecorder + rozet), Keras tanıma.

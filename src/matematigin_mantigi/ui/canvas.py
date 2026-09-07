@@ -1,14 +1,15 @@
-"""Bölge 2 çizim yüzeyi: tablet basıncı, fare geri dönüşü, silgi, lazer, 30 adım geri al."""
+"""Tahta çizim yüzeyi: tablet basıncı, fare geri dönüşü, silgi, lazer (sönen iz), şekil (sürükle),
+yazı (tıkla, yaz, Enter), 30 adım geri al."""
 from __future__ import annotations
 
 from collections import deque
 
 from PyQt6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import (QBrush, QColor, QImage, QMouseEvent, QPainter, QPaintEvent, QPen, QPixmap,
-                         QPointingDevice, QResizeEvent, QTabletEvent)
-from PyQt6.QtWidgets import QWidget
+from PyQt6.QtGui import (QBrush, QColor, QFont, QImage, QKeyEvent, QMouseEvent, QPainter, QPaintEvent, QPen, QPixmap,
+                         QPointingDevice, QPolygonF, QResizeEvent, QTabletEvent)
+from PyQt6.QtWidgets import QLineEdit, QWidget
 
-from matematigin_mantigi.core.models import Tool
+from matematigin_mantigi.core.models import Shape, Tool
 from matematigin_mantigi.core.stroke import LASER_COLOR, MOUSE_PRESSURE, eraser_diameter, pressure_width
 from matematigin_mantigi.ui import theme
 
@@ -32,6 +33,11 @@ def _dot_tile(dpr: float) -> QPixmap:
     return pm
 
 
+def text_pixel_size(base_width: int) -> int:
+    """Yazı aracının punto büyüklüğü kalınlık kademesinden türer: 1 -> 19 px, 12 -> 52 px."""
+    return 16 + int(base_width) * 3
+
+
 class DrawingCanvas(QWidget):
     strokeStarted = pyqtSignal()
     strokeFinished = pyqtSignal()
@@ -47,6 +53,7 @@ class DrawingCanvas(QWidget):
         self.setTabletTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         self.tool = Tool.PEN
+        self.shape = Shape.RECT
         self.color = QColor(theme.INK)
         self.base_width = 4
         self._strokes = QImage()
@@ -57,16 +64,29 @@ class DrawingCanvas(QWidget):
         self._mouse_down = False
         self._last: QPointF | None = None
         self._last_p = MOUSE_PRESSURE
+        self._shape_start: QPointF | None = None
         self._active_tool = Tool.PEN
         self._tile = _dot_tile(1.0)
         self._laser_alpha = 1.0
         self._laser_timer = QTimer(self)
         self._laser_timer.setInterval(30)
         self._laser_timer.timeout.connect(self._laser_step)
+        self._text_pos: QPointF | None = None
+        self.mirror: QWidget | None = None
+        self.text_edit = QLineEdit(self)
+        self.text_edit.setPlaceholderText("Yaz, Enter ile işle, Esc iptal")
+        self.text_edit.hide()
+        self.text_edit.returnPressed.connect(self.commit_text)
+        self.text_edit.installEventFilter(self)
         self._ensure_layers(QSize(1, 1))
 
     # --- public state --------------------------------------------------------
-    def set_tool(self, t: Tool) -> None: self.tool = t
+    def set_tool(self, t: Tool) -> None:
+        if t != Tool.TEXT and self.text_edit.isVisible():
+            self.commit_text()
+        self.tool = t
+
+    def set_shape(self, s: Shape) -> None: self.shape = s
     def set_color(self, c: QColor) -> None: self.color = QColor(c)
     def set_base_width(self, w: int) -> None: self.base_width = int(w)
     def can_undo(self) -> bool: return len(self._undo) > 0
@@ -84,11 +104,16 @@ class DrawingCanvas(QWidget):
     def begin_stroke(self, pos: QPointF, pressure: float, eraser_tip: bool = False) -> None:
         self._active_tool = Tool.ERASER if eraser_tip else self.tool
         if self._active_tool in (Tool.PEN, Tool.ERASER):
-            self._undo.append((self._strokes.copy(), self._stroke_count))
+            self._push_undo()
             self._stroke_count += 1
         elif self._active_tool == Tool.LASER:
             self._laser_timer.stop()
             self._laser_alpha = 1.0
+        elif self._active_tool == Tool.SHAPE:
+            self._shape_start = pos
+        elif self._active_tool == Tool.TEXT:
+            self.begin_text(pos)
+            return
         self._last, self._last_p = pos, pressure
         self._draw_segment(pos, pos, pressure)
         self.strokeStarted.emit()
@@ -96,27 +121,29 @@ class DrawingCanvas(QWidget):
     def extend_stroke(self, pos: QPointF, pressure: float) -> None:
         if self._last is None:
             return
+        if self._active_tool == Tool.SHAPE:
+            self._preview_shape(pos)
+            self._last = pos
+            return
         self._draw_segment(self._last, pos, (self._last_p + pressure) / 2)
         self._last, self._last_p = pos, pressure
 
     def end_stroke(self) -> None:
+        if self._active_tool == Tool.SHAPE and self._shape_start is not None and self._last is not None:
+            self._overlay.fill(Qt.GlobalColor.transparent)
+            self._push_undo()
+            self._stroke_count += 1
+            p = QPainter(self._strokes)
+            self._paint_shape(p, self._shape_start, self._last)
+            p.end()
+            self._shape_start = None
+            self.update()
         self._last = None
         if self._active_tool == Tool.LASER:
             self._laser_alpha = 1.0
             self._laser_timer.start()                 # iz hemen silinmez, sönerek kaybolur
         self.strokeFinished.emit()
         self.historyChanged.emit(self.can_undo(), self.is_empty())
-
-    def _laser_step(self) -> None:
-        self._laser_alpha -= self._laser_timer.interval() / self.LASER_FADE_MS
-        if self._laser_alpha <= 0:
-            self._laser_timer.stop()
-            self._laser_alpha = 1.0
-            self._overlay.fill(Qt.GlobalColor.transparent)
-        self.update()
-
-    def laser_trail_visible(self) -> bool:
-        return self._laser_timer.isActive() or self._last is not None and self._active_tool == Tool.LASER
 
     def undo(self) -> None:
         if not self._undo:
@@ -128,16 +155,90 @@ class DrawingCanvas(QWidget):
     def clear(self) -> None:
         if self.is_empty():
             return
-        self._undo.append((self._strokes.copy(), self._stroke_count))
+        self._push_undo()
         self._strokes.fill(Qt.GlobalColor.transparent)
         self._stroke_count = 0
         self.update()
         self.historyChanged.emit(self.can_undo(), True)
 
+    def _push_undo(self) -> None:
+        self._undo.append((self._strokes.copy(), self._stroke_count))
+
+    # --- yazı aracı ------------------------------------------------------------
+    def begin_text(self, pos: QPointF) -> None:
+        """Tıklanan yerde yazı kutusu açar; Enter tahtaya işler, Esc iptal eder."""
+        if self.text_edit.isVisible():
+            self.commit_text()
+        self._text_pos = pos
+        px = text_pixel_size(self.base_width)
+        f = QFont(self.font()); f.setPixelSize(px); f.setWeight(QFont.Weight(600))
+        self.text_edit.setFont(f)
+        self.text_edit.setStyleSheet(f"QLineEdit {{ color: {self.color.name()}; background: rgba(255,255,255,230);"
+                                     f" border: 1px dashed {theme.MUTED}; padding: 2px 6px; }}")
+        self.text_edit.clear()
+        self.text_edit.setMinimumWidth(min(480, max(220, self.width() - int(pos.x()) - 8)))
+        self.text_edit.adjustSize()
+        self.text_edit.move(int(pos.x()), int(pos.y()) - self.text_edit.height() // 2)
+        self.text_edit.show(); self.text_edit.raise_(); self.text_edit.setFocus()
+
+    def commit_text(self) -> None:
+        text = self.text_edit.text().strip()
+        pos = self._text_pos
+        self.text_edit.hide(); self.text_edit.clear(); self._text_pos = None
+        if not text or pos is None:
+            return
+        self.draw_text(pos, text)
+
+    def cancel_text(self) -> None:
+        self.text_edit.hide(); self.text_edit.clear(); self._text_pos = None
+
+    def draw_text(self, pos: QPointF, text: str) -> None:
+        self._push_undo()
+        self._stroke_count += 1
+        p = QPainter(self._strokes)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        f = QFont(self.font()); f.setPixelSize(text_pixel_size(self.base_width)); f.setWeight(QFont.Weight(600))
+        p.setFont(f); p.setPen(self.color)
+        p.drawText(QPointF(pos.x() + 6, pos.y() + text_pixel_size(self.base_width) * 0.35), text)   # taban çizgisi ~ tıklanan y
+        p.end()
+        self.update()
+        self.historyChanged.emit(self.can_undo(), self.is_empty())
+
+    def eventFilter(self, obj, e):
+        if obj is self.text_edit and e.type() == QEvent.Type.KeyPress and isinstance(e, QKeyEvent) \
+                and e.key() == Qt.Key.Key_Escape:
+            self.cancel_text()
+            return True
+        return super().eventFilter(obj, e)
+
+    # --- şekil aracı ---------------------------------------------------------------
+    def _preview_shape(self, pos: QPointF) -> None:
+        self._overlay.fill(Qt.GlobalColor.transparent)
+        p = QPainter(self._overlay)
+        self._paint_shape(p, self._shape_start, pos)
+        p.end()
+        self.update()
+
+    def _paint_shape(self, p: QPainter, a: QPointF, b: QPointF) -> None:
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        width = pressure_width(self.base_width, 0.7)
+        p.setPen(QPen(self.color, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        rect = QRectF(a, b).normalized()
+        if self.shape == Shape.LINE:
+            p.drawLine(a, b)
+        elif self.shape == Shape.RECT:
+            p.drawRect(rect)
+        elif self.shape == Shape.ELLIPSE:
+            p.drawEllipse(rect)
+        else:  # TRIANGLE: tepe üst-orta, taban alt kenar
+            p.drawPolygon(QPolygonF([QPointF(rect.center().x(), rect.top()), rect.bottomRight(), rect.bottomLeft()]))
+
     # --- painting ------------------------------------------------------------
     def _draw_segment(self, a: QPointF, b: QPointF, pressure: float) -> None:
         tool = self._active_tool
-        if tool in (Tool.TEXT, Tool.SHAPE, Tool.CLICK):   # yazı/şekil taslak; tıklama modu çizmez
+        if tool in (Tool.TEXT, Tool.SHAPE, Tool.CLICK):   # yazı kutuyla, şekil bırakınca, tıklama hiç çizmez
             return
         target = self._overlay if tool == Tool.LASER else self._strokes
         p = QPainter(target)
@@ -160,6 +261,17 @@ class DrawingCanvas(QWidget):
         m = int(width) + 2
         self.update(QRectF(a, b).normalized().toAlignedRect().adjusted(-m, -m, m, m))
 
+    def _laser_step(self) -> None:
+        self._laser_alpha -= self._laser_timer.interval() / self.LASER_FADE_MS
+        if self._laser_alpha <= 0:
+            self._laser_timer.stop()
+            self._laser_alpha = 1.0
+            self._overlay.fill(Qt.GlobalColor.transparent)
+        self.update()
+
+    def laser_trail_visible(self) -> bool:
+        return self._laser_timer.isActive() or self._last is not None and self._active_tool == Tool.LASER
+
     def _ensure_layers(self, logical: QSize) -> None:
         dpr = self.devicePixelRatioF()
         need = QSize(max(1, int(logical.width() * dpr)), max(1, int(logical.height() * dpr)))
@@ -174,15 +286,30 @@ class DrawingCanvas(QWidget):
         self._ensure_layers(e.size())
         super().resizeEvent(e)
 
+    def paint_ink(self, p: QPainter) -> None:
+        """Çizgi katmanı + lazer/şekil önizlemesi; tuval veya mürekkep katmanı çağırır."""
+        p.drawImage(0, 0, self._strokes)
+        p.setOpacity(self._laser_alpha if self._active_tool == Tool.LASER or self._laser_timer.isActive() else 1.0)
+        p.drawImage(0, 0, self._overlay)
+        p.setOpacity(1.0)
+
+    def set_mirror(self, widget: QWidget | None) -> None:
+        """Mürekkep bu widget'ta çizilir (bölgelerin üstünde); tuval sadece zemin boyar."""
+        self.mirror = widget
+
+    def update(self, *args) -> None:                          # type: ignore[override]
+        super().update(*args)
+        m = getattr(self, "mirror", None)
+        if m is not None:
+            m.update(*args)
+
     def paintEvent(self, e: QPaintEvent) -> None:
         p = QPainter(self)
         p.fillRect(e.rect(), QColor(theme.PANEL))
         if self.show_grid:
             p.fillRect(e.rect(), QBrush(self._tile))
-        p.drawImage(0, 0, self._strokes)
-        p.setOpacity(self._laser_alpha)
-        p.drawImage(0, 0, self._overlay)
-        p.setOpacity(1.0)
+        if getattr(self, "mirror", None) is None:
+            self.paint_ink(p)
         p.end()
 
     # --- tablet path -----------------------------------------------------------
@@ -226,5 +353,6 @@ class DrawingCanvas(QWidget):
         if not self._mouse_down:
             e.ignore(); return
         self._mouse_down = False
-        self.end_stroke()
+        if self._active_tool != Tool.TEXT:
+            self.end_stroke()
         e.accept()

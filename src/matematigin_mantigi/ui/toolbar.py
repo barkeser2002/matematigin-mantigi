@@ -65,8 +65,9 @@ class ToolBar(QWidget):
             b = GlyphButton(glyph, label)
             self._tool_group.addButton(b)
             self.tool_buttons[tool] = b
-            b.clicked.connect(lambda _c=False, t=tool: self.toolSelected.emit(t))
+            b.clicked.connect(lambda _c=False, t=tool: self.toolSelected.emit(t))   # seçiliyken de yayar (şekil döngüsü)
             col.addWidget(b, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.tool_buttons[Tool.SHAPE].setToolTip("Tekrar basınca şekil değişir: dikdörtgen, elips, üçgen, çizgi")
         self.tool_buttons[Tool.PEN].setChecked(True)
         col.addWidget(self._rule())
 
@@ -161,6 +162,11 @@ class ToolBar(QWidget):
 
     def set_undo_enabled(self, on: bool) -> None:
         self.undo_button.setEnabled(on)
+
+    def set_shape_glyph(self, glyph: str) -> None:
+        b = self.tool_buttons[Tool.SHAPE]
+        b.glyph = glyph
+        b.update()
 
     def set_layout_edit(self, on: bool) -> None:
         self.layout_button.blockSignals(True); self.layout_button.setChecked(on); self.layout_button.blockSignals(False)

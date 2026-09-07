@@ -65,6 +65,17 @@ def test_layout_edit_button(qtbot):
     assert sig.args == [True]
 
 
+def test_shape_glyph_and_reclick_emits(qtbot):
+    tb = make(qtbot)
+    fired = []
+    tb.toolSelected.connect(lambda t: fired.append(t))
+    qtbot.mouseClick(tb.tool_buttons[Tool.SHAPE], Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(tb.tool_buttons[Tool.SHAPE], Qt.MouseButton.LeftButton)
+    assert fired == [Tool.SHAPE, Tool.SHAPE]                   # seçiliyken de yayar (şekil döngüsü)
+    tb.set_shape_glyph("○")
+    assert tb.tool_buttons[Tool.SHAPE].glyph == "○"
+
+
 def test_settings_button(qtbot):
     tb = make(qtbot)
     with qtbot.waitSignal(tb.settingsRequested):

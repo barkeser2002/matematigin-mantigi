@@ -150,6 +150,75 @@ def test_mouse_press_ignored_while_stylus_down(qtbot):
     assert len(c._undo) == 1        # only one stroke was started
 
 
+def _drag(c, a, b):
+    c.begin_stroke(QPointF(*a), 0.5); c.extend_stroke(QPointF(*b), 0.5); c.end_stroke()
+
+
+def test_shape_rect_outline_and_undo(qtbot):
+    from matematigin_mantigi.core.models import Shape
+    c = make(qtbot)
+    c.set_tool(Tool.SHAPE); c.set_shape(Shape.RECT)
+    _drag(c, (50, 50), (250, 150))
+    assert alpha_at(c, 150, 50) > 0 and alpha_at(c, 50, 100) > 0     # kenarlar
+    assert alpha_at(c, 150, 100) == 0                               # içi boş
+    assert not c.is_empty() and c.can_undo()
+    c.undo()
+    assert alpha_at(c, 150, 50) == 0 and c.is_empty()
+
+
+def test_shape_ellipse_line_triangle(qtbot):
+    from matematigin_mantigi.core.models import Shape
+    c = make(qtbot)
+    c.set_tool(Tool.SHAPE)
+    c.set_shape(Shape.ELLIPSE); _drag(c, (50, 50), (250, 150))
+    assert alpha_at(c, 150, 50) > 0 and alpha_at(c, 60, 60) == 0    # üst orta kenarda var, köşede yok
+    c.clear()
+    c.set_shape(Shape.LINE); _drag(c, (50, 50), (250, 250))
+    assert alpha_at(c, 150, 150) > 0 and alpha_at(c, 150, 50) == 0
+    c.clear()
+    c.set_shape(Shape.TRIANGLE); _drag(c, (50, 50), (250, 250))
+    assert alpha_at(c, 150, 250) > 0 and alpha_at(c, 150, 50) > 0   # taban ve tepe
+    assert alpha_at(c, 60, 60) == 0
+
+
+def test_shape_preview_does_not_touch_strokes_until_release(qtbot):
+    from matematigin_mantigi.core.models import Shape
+    c = make(qtbot)
+    c.set_tool(Tool.SHAPE); c.set_shape(Shape.RECT)
+    c.begin_stroke(QPointF(50, 50), 0.5); c.extend_stroke(QPointF(250, 150), 0.5)
+    assert alpha_at(c, 150, 50) == 0 and c._overlay.pixelColor(150, 50).alpha() > 0
+    c.end_stroke()
+    assert alpha_at(c, 150, 50) > 0 and c._overlay.pixelColor(150, 50).alpha() == 0
+
+
+def test_text_tool_opens_editor_and_commits(qtbot):
+    c = make(qtbot)
+    c.set_tool(Tool.TEXT); c.set_base_width(8)
+    c.begin_stroke(QPointF(60, 120), 0.5)
+    assert c.text_edit.isVisible() and c.text_edit.hasFocus() or c.text_edit.isVisible()
+    c.text_edit.setText("x = 5")
+    qtbot.keyClick(c.text_edit, Qt.Key.Key_Return)
+    assert c.text_edit.isHidden() and not c.is_empty()
+    assert any(alpha_at(c, x, 120) > 0 for x in range(66, 160))     # yazı pikselleri tıklanan satırda
+    c.undo()
+    assert c.is_empty()
+
+
+def test_text_tool_escape_cancels_and_empty_is_ignored(qtbot):
+    c = make(qtbot)
+    c.set_tool(Tool.TEXT)
+    c.begin_stroke(QPointF(60, 120), 0.5)
+    c.text_edit.setText("iptal")
+    qtbot.keyClick(c.text_edit, Qt.Key.Key_Escape)
+    assert c.text_edit.isHidden() and c.is_empty()
+    c.begin_stroke(QPointF(60, 120), 0.5)
+    qtbot.keyClick(c.text_edit, Qt.Key.Key_Return)             # boş metin
+    assert c.is_empty()
+    c.begin_stroke(QPointF(60, 120), 0.5); c.text_edit.setText("kalem")
+    c.set_tool(Tool.PEN)                                       # araç değişince açık yazı işlenir
+    assert not c.is_empty()
+
+
 def test_snapshot_has_white_background(qtbot):
     c = make(qtbot)
     img = c.snapshot_image()

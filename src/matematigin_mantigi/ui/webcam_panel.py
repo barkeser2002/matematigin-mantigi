@@ -22,8 +22,7 @@ class CameraView(QWidget):
         self._frame: QImage | None = None
         self.placeholder_text = "Kamera bekleniyor…"
         self.raw_mode = False
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip("Yeşil perdeyi aç/kapat")
+        self.setToolTip("Yeşil perde ayarı: ⚙ Ayarlar")
 
     def set_frame(self, img: QImage) -> None:
         self._frame = img
@@ -39,9 +38,7 @@ class CameraView(QWidget):
         self.update()
 
     def mousePressEvent(self, e: QMouseEvent) -> None:
-        if e.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
-        e.accept()                          # kamera tıklaması tahtaya çizim olarak gitmez
+        e.ignore()                          # tıklama perdeyi değiştirmez (Ayarlar'dan); olay tahtaya iletilir
 
     def paintEvent(self, _e):
         p = QPainter(self)
@@ -71,7 +68,6 @@ class WebcamPanel(Zone):
         self.body.setContentsMargins(0, 0, 0, 0)
 
         self.view = CameraView(self)
-        self.view.clicked.connect(self._toggle)
         self.body.addWidget(self.view, 1)
 
         self.overlay_label = QLabel(self.view)
@@ -89,7 +85,7 @@ class WebcamPanel(Zone):
 
     def _refresh_overlay(self) -> None:
         mode = "kaldırıldı" if self.chroma_enabled else "ham görüntü"
-        self.overlay_label.setText(f"yeşil perde: {mode} · tıkla: aç/kapat")
+        self.overlay_label.setText(f"yeşil perde: {mode}")
         self.overlay_label.adjustSize()
         self.overlay_label.move(8, 8)
         self.view.set_raw_mode(not self.chroma_enabled)

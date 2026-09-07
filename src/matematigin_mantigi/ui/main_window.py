@@ -9,7 +9,8 @@ from PyQt6.QtGui import QColor, QKeySequence, QShortcut
 from PyQt6.QtWidgets import QHBoxLayout, QMainWindow, QWidget
 
 from matematigin_mantigi.core import layout_model as lm
-from matematigin_mantigi.core.models import TOOL_META, PenSettings, Question, QuestionStatus, Tool
+from matematigin_mantigi.core.models import (SHAPE_META, TOOL_META, PenSettings, Question, QuestionStatus, Tool,
+                                             next_shape)
 from matematigin_mantigi.core.question_flow import QuestionFlow
 from matematigin_mantigi.core.recorder import Recorder, record_rect_for
 from matematigin_mantigi.core.session_store import SessionStore
@@ -45,9 +46,9 @@ class MainWindow(QMainWindow):
         self.canvas = self.work_area.board
         self.question_zone = QuestionZone(fam)
         self.hint_zone = HintZone(fam)
-        # Yeşil perde her açılışta kaldırılmış başlar; tıklama ile değişim sadece oturum içindir.
+        # Yeşil perde ayarı Ayarlar penceresinden; varsayılan kaldırılmış.
         self.webcam_panel = WebcamPanel(fam, camera_source_factory or (lambda: _NoCamera()),
-                                        settings.chroma, chroma_enabled=True)
+                                        settings.chroma, chroma_enabled=settings.chroma_enabled)
         for key, zone in (("soru", self.question_zone), ("ipucu", self.hint_zone), ("webcam", self.webcam_panel)):
             self.work_area.add_zone(key, zone)
         self.work_area.set_layout(lm.load_layout(self.layout_path))
@@ -105,9 +106,17 @@ class MainWindow(QMainWindow):
         hz.revealToggled.connect(flow.toggle_reveal)
         hz.maskModeChanged.connect(self._on_mask_mode)
 
+    def _typing(self) -> bool:
+        """Yazı aracının kutusu açıkken tek tuşlu kısayollar kutuya bırakılır."""
+        return self.canvas.text_edit.isVisible()
+
     def _shortcuts(self) -> None:
-        def sc(keys: str, fn) -> None:
-            QShortcut(QKeySequence(keys), self, activated=fn)
+        def sc(keys: str, fn, while_typing: bool = False) -> None:
+            def run():
+                if self._typing() and not while_typing:
+                    return
+                fn()
+            QShortcut(QKeySequence(keys), self, activated=run)
         for i, tool in enumerate(Tool, start=1):
             sc(str(i), lambda t=tool: (self._on_tool(t), self.toolbar.set_tool(t)))
         sc("Ctrl+Z", self.canvas.undo)
@@ -119,13 +128,21 @@ class MainWindow(QMainWindow):
         sc("H", lambda: self.flow.show_question() if not self.flow.is_question_shown() else self.flow.hide_question())
         sc("Left", self.flow.hint_prev)
         sc("Right", self.flow.hint_next)
-        sc("Return", self.flow.toggle_reveal)
+        sc("Return", self._return_key, while_typing=True)
         sc("L", lambda: self.work_area.set_edit_mode(not self.work_area.edit_mode))
         sc("F11", lambda: self.showNormal() if self.isFullScreen() else self.showFullScreen())
-        sc("Escape", self._escape)
+        sc("Escape", self._escape, while_typing=True)
+
+    def _return_key(self) -> None:
+        if self._typing():
+            self.canvas.commit_text()         # yazı kutusu açıkken Enter yazıyı işler
+        else:
+            self.flow.toggle_reveal()
 
     def _escape(self) -> None:
-        if self.work_area.edit_mode:
+        if self._typing():
+            self.canvas.cancel_text()
+        elif self.work_area.edit_mode:
             self.work_area.set_edit_mode(False)
         elif self.isFullScreen():
             self.showNormal()
@@ -142,7 +159,10 @@ class MainWindow(QMainWindow):
 
     # --- handlers -----------------------------------------------------------------
     def _on_tool(self, t: Tool) -> None:
+        if t == Tool.SHAPE and self.canvas.tool == Tool.SHAPE:      # Şekil'e tekrar basış: sıradaki şekil
+            self.canvas.set_shape(next_shape(self.canvas.shape))
         self.canvas.set_tool(t); self.settings.tool = t
+        self.toolbar.set_shape_glyph(SHAPE_META[self.canvas.shape][1])
         self.work_area.set_click_mode(t == Tool.CLICK)
         self.refresh_cursor(); self._status("XP-Pen")
 
@@ -161,8 +181,10 @@ class MainWindow(QMainWindow):
                                                   self.canvas.devicePixelRatioF()))
 
     def _status(self, pressure_text: str) -> None:
-        self.work_area.set_status(f"Araç: {TOOL_META[self.canvas.tool][0]} · Kalınlık: {self.canvas.base_width} px"
-                                  f" · Basınç: {pressure_text}")
+        tool = TOOL_META[self.canvas.tool][0]
+        if self.canvas.tool == Tool.SHAPE:
+            tool = f"Şekil ({SHAPE_META[self.canvas.shape][0]})"
+        self.work_area.set_status(f"Araç: {tool} · Kalınlık: {self.canvas.base_width} px · Basınç: {pressure_text}")
 
     def _on_question_leaving(self, i: int) -> None:
         if not self.canvas.is_empty():
@@ -221,6 +243,7 @@ class MainWindow(QMainWindow):
         s.font_file = v.font_file
         s.set_pen(replace(s.pen(), reading_ms=v.reading_ms))
         s.auto_key = v.auto_key
+        s.chroma_enabled = v.chroma_enabled
         s.presenter_name = v.presenter_name
         for key, on in v.visible.items():
             s.set_visible(key, on)
@@ -235,6 +258,7 @@ class MainWindow(QMainWindow):
         self.hint_zone.set_families(self.fam)
         self.question_zone.set_reading_ms(s.pen().reading_ms)
         self.webcam_panel.set_auto_key(s.auto_key)
+        self.webcam_panel.set_chroma_enabled(s.chroma_enabled)
         self.hint_zone.set_controls_visible(s.visible("hint_controls"))
         self.hint_zone.set_heading_visible(s.visible("hint_heading"))
         self.work_area.status_label.setVisible(s.visible("status"))

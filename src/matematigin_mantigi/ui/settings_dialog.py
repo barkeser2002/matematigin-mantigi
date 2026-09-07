@@ -18,6 +18,7 @@ class SettingsValues:
     font_file: str = ""
     reading_ms: int = 40
     auto_key: bool = True
+    chroma_enabled: bool = True
     presenter_name: str = "Koray Varol"
     visible: dict[str, bool] = field(default_factory=dict)
 
@@ -74,9 +75,11 @@ class SettingsDialog(QDialog):
         root.addWidget(name_card)
 
         cam_card, ccol = _card("Yeşil perde", fam)
+        self.chroma_check = QCheckBox("Yeşil perdeyi kaldır (kişi tahtanın üstüne biner)")
+        self.chroma_check.setChecked(settings.chroma_enabled)
         self.auto_key_check = QCheckBox("Perde tonunu kameranın kenarlarından otomatik ölç")
         self.auto_key_check.setChecked(settings.auto_key)
-        ccol.addWidget(self.auto_key_check)
+        ccol.addWidget(self.chroma_check); ccol.addWidget(self.auto_key_check)
         root.addWidget(cam_card)
 
         vis_card, vcol = _card("Görünürlük (tahtadaki yazılar)", fam)
@@ -107,6 +110,7 @@ class SettingsDialog(QDialog):
         return SettingsValues(font_file=self.font_path_edit.text().strip(),
                               reading_ms=self.reading_slider.value(),
                               auto_key=self.auto_key_check.isChecked(),
+                              chroma_enabled=self.chroma_check.isChecked(),
                               presenter_name=self.presenter_edit.text().strip(),
                               visible={k: cb.isChecked() for k, cb in self.visibility_checks.items()})
 

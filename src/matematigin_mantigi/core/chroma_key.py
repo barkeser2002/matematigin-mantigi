@@ -55,6 +55,16 @@ def apply_chroma_key(bgr: np.ndarray, p: ChromaParams) -> np.ndarray:
     return composite(suppress_spill(bgr, alpha, p.spill), alpha, p.bg_bgr)
 
 
+def apply_chroma_key_bgra(bgr: np.ndarray, p: ChromaParams) -> np.ndarray:
+    """Zemin yerine saydamlık: BGRA uint8, alfa = ön plan maskesi. Kişi tahtanın üstüne biner, çizimler görünür."""
+    alpha = green_mask(bgr, p)
+    fg = suppress_spill(bgr, alpha, p.spill)
+    out = np.empty((bgr.shape[0], bgr.shape[1], 4), np.uint8)
+    out[..., :3] = fg
+    out[..., 3] = np.clip(alpha * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    return out
+
+
 GREEN_HUE_RANGE = (45, 80)      # OpenCV ton birimi; tipik yeşil perdeler 55-75. Dışı "perde" sayılmaz.
 MIN_GREEN_BORDER = 0.6          # kenar piksellerinin en az bu oranı perde olmalı
 

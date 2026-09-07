@@ -14,7 +14,7 @@ from PyQt6.QtGui import QImage
 
 from dataclasses import replace
 
-from matematigin_mantigi.core.chroma_key import ChromaParams, apply_chroma_key, estimate_key_hue
+from matematigin_mantigi.core.chroma_key import ChromaParams, apply_chroma_key_bgra, estimate_key_hue
 
 
 class FrameSource(Protocol):
@@ -75,6 +75,14 @@ def to_qimage_bgr(frame: np.ndarray) -> QImage:
     h, w = frame.shape[:2]
     img = QImage(frame.tobytes(), w, h, int(frame.strides[0]), QImage.Format.Format_BGR888)
     return img.copy()      # numpy belleğinden bağımsız, iş parçacıkları arası güvenli
+
+
+def to_qimage_bgra(frame: np.ndarray) -> QImage:
+    """BGRA (saydam zemin) -> QImage ARGB32; derin kopya."""
+    frame = np.ascontiguousarray(frame)
+    h, w = frame.shape[:2]
+    img = QImage(frame.tobytes(), w, h, int(frame.strides[0]), QImage.Format.Format_ARGB32)
+    return img.copy()
 
 
 def resize_to_width(frame: np.ndarray, width: int) -> np.ndarray:
@@ -154,8 +162,9 @@ class CameraWorker(QThread):
                 self._maybe_calibrate(frame)
                 self._frames += 1
                 if self._chroma:
-                    frame = apply_chroma_key(frame, self._params)
-                self.frameReady.emit(to_qimage_bgr(frame))
+                    self.frameReady.emit(to_qimage_bgra(apply_chroma_key_bgra(frame, self._params)))
+                else:
+                    self.frameReady.emit(to_qimage_bgr(frame))
                 rest = self._period - (time.monotonic() - t0)
                 if rest > 0:
                     self.msleep(int(rest * 1000))

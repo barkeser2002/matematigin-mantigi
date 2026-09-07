@@ -31,7 +31,8 @@ kamerayı değiştirmek veya düğmelere basmak için Tıkla aracına geçilir (
 İmleç araca göre ikon: renkli kurşun kalem (ucunda çizgi kalınlığı), silme alanı kadar silgi bloğu, kırmızı lazer
 noktası; tahtanın ve bölgelerin her yerinde geçerli.
 
-Webcam: yeşil perde kamera karesinin kenarlarından otomatik ölçülür (yeşilimsi ve doygunsa), böylece #00ff3c olmayan
+Webcam: perde pikselleri saydam olur, kişi tahtanın ve çizimlerin üstüne biner. Yeşil perde kamera karesinin
+kenarlarından otomatik ölçülür (yeşilimsi ve doygunsa), böylece #00ff3c olmayan
 gerçek perdeler de temizlenir; kamera yokken sadece kısa bir durum yazısı görünür.
 "⧉ Düzen" (L) modunda bölgeler OBS gibi taşınır/boyutlandırılır, 12x10 ızgaraya yapışır, `duzen.json`'a kaydedilir.
 Normal kullanımda çerçeve ve bölge çizgisi yoktur; sadece düzen modunda görünür.

@@ -29,6 +29,14 @@ def test_green_becomes_panel_background_and_subject_survives():
     assert np.allclose(out[120, 160], (20, 20, 220), atol=2)
 
 
+def test_bgra_output_has_transparent_screen_and_opaque_subject():
+    from matematigin_mantigi.core.chroma_key import apply_chroma_key_bgra
+    out = apply_chroma_key_bgra(scene(), ChromaParams())
+    assert out.shape == (240, 320, 4) and out.dtype == np.uint8
+    assert out[10, 10, 3] == 0 and out[120, 160, 3] == 255
+    assert tuple(out[120, 160, :3]) == (20, 20, 220)
+
+
 def test_feather_softens_edge():
     hard = green_mask(scene(), ChromaParams(feather_px=0))
     soft = green_mask(scene(), ChromaParams(feather_px=3))

@@ -113,8 +113,13 @@ class AppSettings:
         self._q.setValue("chroma/feather", p.feather_px)
         self._q.setValue("chroma/spill", p.spill)
 
+    MAX_READING_MS = 150      # ms/harf üst sınırı; daha büyük kayıtlar eski ms/kelime ölçeğinden kalmadır
+
     def pen(self) -> PenSettings:
         d = PenSettings()
+        reading = self._int("pen/reading_ms", d.reading_ms)
+        if reading > self.MAX_READING_MS:
+            reading = d.reading_ms                      # eski ölçek: varsayılana dön
         return PenSettings(
             pressure_curve=self._int("pen/pressure_curve", d.pressure_curve),
             smoothing=self._int("pen/smoothing", d.smoothing),
@@ -125,7 +130,7 @@ class AppSettings:
             shape_correction=self._bool("pen/shape_correction", d.shape_correction),
             autosave=self._bool("pen/autosave", d.autosave),
             template_matching=self._bool("pen/template_matching", d.template_matching),
-            reading_ms=self._int("pen/reading_ms", d.reading_ms),
+            reading_ms=reading,
         )
 
     def set_pen(self, p: PenSettings) -> None:

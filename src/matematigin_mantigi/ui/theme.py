@@ -117,6 +117,8 @@ def build_stylesheet(fam: FontFamilies) -> str:
                           padding: 8px 14px; font-weight: 600; }}
     QPushButton#accent:hover {{ background: {ACCENT_HOVER}; }}
     QPushButton#link {{ background: transparent; border: none; color: {MUTED}; text-decoration: underline; }}
+    QLineEdit {{ background: {PANEL_SOFT}; border: 1px solid {LINE}; border-radius: 6px; padding: 5px 8px; }}
+    QLineEdit:read-only {{ color: {MUTED}; }}
     QSlider::groove:horizontal {{ height: 4px; background: {LINE}; border-radius: 2px; }}
     QSlider::handle:horizontal {{ width: 14px; margin: -6px 0; background: {INK}; border-radius: 7px; }}
     """

@@ -40,6 +40,14 @@ def test_ui_settings_round_trip(tmp_path):
     assert t.visible("status") is False and t.visible("brand") is True
 
 
+def test_stale_per_word_reading_speed_resets_to_default(tmp_path):
+    q = QSettings(str(tmp_path / "old.ini"), QSettings.Format.IniFormat)
+    q.setValue("pen/reading_ms", 350); q.sync()                   # eski sürüm: ms/kelime
+    assert AppSettings(q).pen().reading_ms == PenSettings().reading_ms
+    q.setValue("pen/reading_ms", 90); q.sync()
+    assert AppSettings(q).pen().reading_ms == 90
+
+
 def test_garbage_values_fall_back(tmp_path):
     q = QSettings(str(tmp_path / "g.ini"), QSettings.Format.IniFormat)
     q.setValue("tool", "hammer"); q.setValue("width", "abc"); q.setValue("hint_mask", 7); q.sync()

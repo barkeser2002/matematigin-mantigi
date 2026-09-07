@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PyQt6.QtCore import QPointF, QRect, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QRect, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QMouseEvent, QPainter
 from PyQt6.QtWidgets import QLabel, QWidget
 
@@ -46,19 +46,11 @@ class CameraView(QWidget):
     def paintEvent(self, _e):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        if self.raw_mode:
-            p.fillRect(self.rect(), QColor(theme.CAM_RAW))
         if self._frame is None:
-            # siluet: baş + gövde büstü, tahta zemininde açık gri; alt kenara yaslı, taşmaz
-            p.setRenderHint(QPainter.RenderHint.Antialiasing)
-            p.setPen(Qt.PenStyle.NoPen); p.setBrush(QColor(theme.DOT))
-            cx, base = self.width() / 2, self.height()
-            r = min(self.width(), self.height()) * 0.30
-            p.drawEllipse(QPointF(cx, base - r * 1.55), r * 0.45, r * 0.45)
-            p.drawRoundedRect(QRectF(cx - r, base - r, 2 * r, 2 * r), r, r)
+            # kamera yokken çizim yok; sadece küçük gri durum yazısı (tahta temiz kalır)
             p.setPen(QColor(theme.MUTED))
-            p.drawText(self.rect().adjusted(8, 34, -8, 0), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
-                       self.placeholder_text)          # üstteki durum etiketinin altında
+            p.drawText(self.rect().adjusted(8, 34, -8, -8), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
+                       | Qt.TextFlag.TextWordWrap, self.placeholder_text)
         else:
             target = self._frame.size().scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio)
             x = (self.width() - target.width()) // 2

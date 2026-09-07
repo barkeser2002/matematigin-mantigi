@@ -149,8 +149,8 @@ class MainWindow(QMainWindow):
         self.refresh_cursor(); self._status("XP-Pen")
 
     def refresh_cursor(self) -> None:
-        self.canvas.setCursor(cursor_for(self.canvas.tool, self.canvas.color, self.canvas.base_width,
-                                         self.canvas.devicePixelRatioF()))
+        self.work_area.set_tool_cursor(cursor_for(self.canvas.tool, self.canvas.color, self.canvas.base_width,
+                                                  self.canvas.devicePixelRatioF()))
 
     def _status(self, pressure_text: str) -> None:
         self.work_area.set_status(f"Araç: {TOOL_META[self.canvas.tool][0]} · Kalınlık: {self.canvas.base_width} px"

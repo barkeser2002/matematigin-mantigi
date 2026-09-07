@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import deque
 
-from PyQt6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (QBrush, QColor, QImage, QMouseEvent, QPainter, QPaintEvent, QPen, QPixmap,
                          QPointingDevice, QResizeEvent, QTabletEvent)
 from PyQt6.QtWidgets import QWidget
@@ -39,6 +39,7 @@ class DrawingCanvas(QWidget):
     pressureChanged = pyqtSignal(float)
     inputSourceChanged = pyqtSignal(str)        # "tablet" | "mouse"
     MAX_UNDO = 30
+    LASER_FADE_MS = 1500                        # lazer izi bu sürede sönerek kaybolur
     show_grid = False                           # düz beyaz tahta; True ise 28px nokta ızgarası
 
     def __init__(self, parent=None):
@@ -58,6 +59,10 @@ class DrawingCanvas(QWidget):
         self._last_p = MOUSE_PRESSURE
         self._active_tool = Tool.PEN
         self._tile = _dot_tile(1.0)
+        self._laser_alpha = 1.0
+        self._laser_timer = QTimer(self)
+        self._laser_timer.setInterval(30)
+        self._laser_timer.timeout.connect(self._laser_step)
         self._ensure_layers(QSize(1, 1))
 
     # --- public state --------------------------------------------------------
@@ -81,6 +86,9 @@ class DrawingCanvas(QWidget):
         if self._active_tool in (Tool.PEN, Tool.ERASER):
             self._undo.append((self._strokes.copy(), self._stroke_count))
             self._stroke_count += 1
+        elif self._active_tool == Tool.LASER:
+            self._laser_timer.stop()
+            self._laser_alpha = 1.0
         self._last, self._last_p = pos, pressure
         self._draw_segment(pos, pos, pressure)
         self.strokeStarted.emit()
@@ -94,10 +102,21 @@ class DrawingCanvas(QWidget):
     def end_stroke(self) -> None:
         self._last = None
         if self._active_tool == Tool.LASER:
-            self._overlay.fill(Qt.GlobalColor.transparent)
-            self.update()
+            self._laser_alpha = 1.0
+            self._laser_timer.start()                 # iz hemen silinmez, sönerek kaybolur
         self.strokeFinished.emit()
         self.historyChanged.emit(self.can_undo(), self.is_empty())
+
+    def _laser_step(self) -> None:
+        self._laser_alpha -= self._laser_timer.interval() / self.LASER_FADE_MS
+        if self._laser_alpha <= 0:
+            self._laser_timer.stop()
+            self._laser_alpha = 1.0
+            self._overlay.fill(Qt.GlobalColor.transparent)
+        self.update()
+
+    def laser_trail_visible(self) -> bool:
+        return self._laser_timer.isActive() or self._last is not None and self._active_tool == Tool.LASER
 
     def undo(self) -> None:
         if not self._undo:
@@ -161,7 +180,9 @@ class DrawingCanvas(QWidget):
         if self.show_grid:
             p.fillRect(e.rect(), QBrush(self._tile))
         p.drawImage(0, 0, self._strokes)
+        p.setOpacity(self._laser_alpha)
         p.drawImage(0, 0, self._overlay)
+        p.setOpacity(1.0)
         p.end()
 
     # --- tablet path -----------------------------------------------------------

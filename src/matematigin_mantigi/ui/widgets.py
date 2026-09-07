@@ -76,24 +76,26 @@ class SwatchButton(QAbstractButton):
 
 
 class DotButton(QAbstractButton):
-    """Kalınlık ön ayarı: 2/4/8 px -> 8/12/16 px nokta."""
+    """Kalınlık ön ayarı: 1/2/4/8/12 px -> 5..18 px nokta."""
 
-    DOT = {2: 8, 4: 12, 8: 16}
+    DOT = {1: 5, 2: 7, 4: 10, 8: 14, 12: 18}
+    SIZE = 22
 
     def __init__(self, value: int, parent=None):
         super().__init__(parent)
         self.value = value
         self.setCheckable(True)
-        self.setFixedSize(28, 24)
+        self.setFixedSize(self.SIZE, self.SIZE)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def paintEvent(self, _e):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        d = self.DOT.get(self.value, 12)
+        d = self.DOT.get(self.value, 10)
+        c = self.SIZE / 2
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(theme.PANEL_SOFT if self.isChecked() else theme.TOOLBAR_DIM))
-        p.drawEllipse(QPointF(14, 12), d / 2, d / 2)
+        p.drawEllipse(QPointF(c, c), d / 2, d / 2)
         p.end()
 
 

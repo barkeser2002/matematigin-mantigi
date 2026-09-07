@@ -12,7 +12,9 @@ import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QImage
 
-from matematigin_mantigi.core.chroma_key import ChromaParams, apply_chroma_key
+from dataclasses import replace
+
+from matematigin_mantigi.core.chroma_key import ChromaParams, apply_chroma_key, estimate_key_hue
 
 
 class FrameSource(Protocol):
@@ -86,22 +88,40 @@ class CameraWorker(QThread):
     frameReady = pyqtSignal(QImage)
     cameraError = pyqtSignal(str)
     opened = pyqtSignal(int, int)
+    keyHueDetected = pyqtSignal(int)          # kenarlardan ölçülen perde tonu (OpenCV birimi)
+    AUTO_KEY_EVERY = 90                       # kare; ~3 sn'de bir yeniden ölç
 
     def __init__(self, source: FrameSource, params: ChromaParams, chroma_enabled: bool = True,
-                 out_width: int = 640, target_fps: int = 30, parent=None):
+                 out_width: int = 640, target_fps: int = 30, auto_key: bool = True, parent=None):
         super().__init__(parent)
         self._source = source
         self._params = params
         self._chroma = chroma_enabled
+        self._auto_key = auto_key
         self._out_width = out_width
         self._period = 1.0 / max(1, target_fps)
         self._running = False
+        self._frames = 0
 
     def set_chroma_enabled(self, on: bool) -> None:
         self._chroma = on
 
     def set_params(self, p: ChromaParams) -> None:
         self._params = p
+
+    def set_auto_key(self, on: bool) -> None:
+        self._auto_key = on
+
+    def current_params(self) -> ChromaParams:
+        return self._params
+
+    def _maybe_calibrate(self, frame: np.ndarray) -> None:
+        if not (self._chroma and self._auto_key) or self._frames % self.AUTO_KEY_EVERY:
+            return
+        hue = estimate_key_hue(frame)
+        if hue is not None and hue != self._params.key_hue:
+            self._params = replace(self._params, key_hue=hue)
+            self.keyHueDetected.emit(hue)
 
     def set_out_width(self, w: int) -> None:
         self._out_width = max(64, int(w))
@@ -131,6 +151,8 @@ class CameraWorker(QThread):
                     self.opened.emit(int(frame.shape[1]), int(frame.shape[0]))
                     announced = True
                 frame = resize_to_width(frame, self._out_width)
+                self._maybe_calibrate(frame)
+                self._frames += 1
                 if self._chroma:
                     frame = apply_chroma_key(frame, self._params)
                 self.frameReady.emit(to_qimage_bgr(frame))

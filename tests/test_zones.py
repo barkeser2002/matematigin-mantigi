@@ -37,6 +37,26 @@ def test_reading_animation_reveals_words_then_options(qtbot):
     assert z.number_label.text() == "3."
 
 
+def test_current_word_is_highlighted_during_reading(qtbot):
+    z = qzone(qtbot, ms=60)
+    z.set_question(Q0, 1)
+    qtbot.waitUntil(lambda: z.text_label.text() != "", timeout=2000)
+    assert "<span" in z.text_label.text() and z.text_label.textFormat() == Qt.TextFormat.RichText
+    z.skip_animation()
+    assert z.text_label.text() == Q0.soru and z.text_label.textFormat() == Qt.TextFormat.PlainText
+
+
+def test_animation_waits_until_zone_is_shown(qtbot):
+    z = QuestionZone(FAM); qtbot.addWidget(z); z.resize(900, 420)
+    z.set_reading_ms(20)
+    z.set_question(Q0, 1)
+    assert not z.is_animating and z.text_label.text() == ""          # gizliyken bekler
+    with qtbot.waitSignal(z.readingFinished, timeout=3000):
+        z.show()
+        assert z.is_animating
+    assert z.text_label.text() == Q0.soru
+
+
 def test_click_skips_animation(qtbot):
     z = qzone(qtbot, ms=500)
     z.set_question(Q0, 1)
@@ -69,10 +89,20 @@ def test_image_shown_when_file_exists(qtbot, tmp_path):
     assert z.image_label.isHidden()
 
 
-def hzone(qtbot):
+def hzone(qtbot, anim_ms=0):
     h = HintZone(FAM); qtbot.addWidget(h); h.resize(800, 500); h.show()
+    h.reveal_anim_ms = anim_ms
     h.set_hints("S1", Q0.hints)
     return h
+
+
+def test_reveal_animation_ends_without_blur(qtbot):
+    h = hzone(qtbot, anim_ms=120)
+    h.set_revealed(0, True)
+    assert h.cards[0].text_label.graphicsEffect() is not None        # animasyon sürüyor
+    qtbot.waitUntil(lambda: h.cards[0].text_label.graphicsEffect() is None, timeout=2000)
+    h.set_focus(1)                                                     # yeniden uygulama açık kartı bozmaz
+    assert h.cards[0].text_label.graphicsEffect() is None and h.cards[0].revealed
 
 
 def test_hints_start_hidden(qtbot):

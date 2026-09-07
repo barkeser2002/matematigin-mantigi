@@ -34,6 +34,14 @@ def test_worker_emits_keyed_frames(qtbot, fake_camera):
     assert fake_camera.released
 
 
+def test_worker_auto_calibrates_key_hue(qtbot, fake_camera):
+    w = CameraWorker(fake_camera, ChromaParams(key_hue=60), chroma_enabled=True, out_width=160, target_fps=60)
+    with qtbot.waitSignal(w.keyHueDetected, timeout=2000) as sig:
+        w.start()
+    assert 55 <= sig.args[0] <= 62 and w.current_params().key_hue == sig.args[0]
+    w.stop(); assert w.wait(2000)
+
+
 def test_worker_raw_mode_keeps_green(qtbot, fake_camera):
     w = CameraWorker(fake_camera, ChromaParams(), chroma_enabled=False, out_width=160, target_fps=60)
     with qtbot.waitSignal(w.frameReady, timeout=2000) as sig:

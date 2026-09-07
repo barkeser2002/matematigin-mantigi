@@ -5,7 +5,7 @@ from matematigin_mantigi import app
 
 def test_palette_and_widths_match_mockup():
     assert PALETTE == ("#1c1b19", "#c8322b", "#2456b8", "#1f8a4c")
-    assert WIDTHS == (2, 4, 8)
+    assert WIDTHS == (1, 2, 4, 8, 12)
 
 
 def test_every_tool_has_label_and_glyph():
@@ -21,7 +21,7 @@ def test_sample_questions_have_three_hints():
 def test_pen_settings_defaults():
     p = PenSettings()
     assert (p.pressure_curve, p.smoothing, p.min_width, p.max_width) == (50, 35, 1, 12)
-    assert p.template_matching is False and p.reading_ms == 150
+    assert p.template_matching is False and p.reading_ms == 350
 
 
 def test_question_optional_fields_default():

@@ -82,12 +82,14 @@ class ToolBar(QWidget):
         col.addWidget(self._caption("KALINLIK"))
         self._width_group = QButtonGroup(self); self._width_group.setExclusive(True)
         self.width_buttons: dict[int, DotButton] = {}
-        wrow = QHBoxLayout(); wrow.setSpacing(0)
-        for w in WIDTHS:
-            d = DotButton(w); self._width_group.addButton(d); self.width_buttons[w] = d
-            d.clicked.connect(lambda _c=False, v=w: self.widthSelected.emit(v))
-            wrow.addWidget(d)
-        col.addLayout(wrow)
+        for group in (WIDTHS[:3], WIDTHS[3:]):        # 5 kademe: 3 + 2, ortalı
+            wrow = QHBoxLayout(); wrow.setSpacing(0); wrow.addStretch(1)
+            for w in group:
+                d = DotButton(w); self._width_group.addButton(d); self.width_buttons[w] = d
+                d.clicked.connect(lambda _c=False, v=w: self.widthSelected.emit(v))
+                wrow.addWidget(d)
+            wrow.addStretch(1)
+            col.addLayout(wrow)
         self.width_buttons[4].setChecked(True)
         col.addWidget(self._rule())
 

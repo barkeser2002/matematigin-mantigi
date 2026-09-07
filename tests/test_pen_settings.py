@@ -14,7 +14,7 @@ def test_dialog_reflects_current_and_returns_edits(qtbot):
     assert d.curve_slider.value() == 50 and d.smoothing_slider.value() == 35
     assert d.min_slider.value() == 1 and d.max_slider.value() == 12
     assert d.nib_buttons[Nib.ROUND].isChecked()
-    assert d.reading_slider.value() == 150 and d.reading_value.text() == "150 ms/kelime"
+    assert d.reading_slider.value() == 350 and d.reading_value.text() == "350 ms/kelime"
     assert d.toggles["math_recognition"].isChecked() and not d.toggles["template_matching"].isChecked()
     d.smoothing_slider.setValue(60); d.max_slider.setValue(20)
     d.nib_buttons[Nib.CHALK].click()

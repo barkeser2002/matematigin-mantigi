@@ -179,6 +179,12 @@ class WorkArea(QWidget):
         self.status_label.setText(text)
         self.status_label.adjustSize()
 
+    def set_tool_cursor(self, cursor) -> None:
+        """Araç imleci tahtada ve bölgelerde aynı; tıklanabilir çocuklar (kart, kamera, düğme) kendi imlecini korur."""
+        self.board.setCursor(cursor)
+        for zone in self._zones.values():
+            zone.setCursor(cursor)
+
     # --- edit mode mouse handling ---------------------------------------------
     def _hit(self, pos: QPoint) -> tuple[str, str] | None:
         for key in reversed(list(self._zones)):           # üstteki bölge önce

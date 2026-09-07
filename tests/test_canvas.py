@@ -89,6 +89,16 @@ def test_laser_does_not_touch_strokes_layer(qtbot):
     assert alpha_at(c, 100, 100) == 0 and c.is_empty()
 
 
+def test_laser_trail_fades_out(qtbot):
+    c = make(qtbot)
+    c.LASER_FADE_MS = 300
+    c.set_tool(Tool.LASER)
+    draw_diagonal(c)
+    assert c._overlay.pixelColor(100, 100).alpha() > 0 and c.laser_trail_visible()   # iz hemen silinmez
+    qtbot.waitUntil(lambda: c._overlay.pixelColor(100, 100).alpha() == 0, timeout=3000)
+    assert not c.laser_trail_visible()
+
+
 def test_clear_is_undoable(qtbot):
     c = make(qtbot)
     draw_diagonal(c)

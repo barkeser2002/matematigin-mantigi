@@ -39,7 +39,7 @@ class Nib(str, Enum):
 
 
 PALETTE: tuple[str, ...] = ("#1c1b19", "#c8322b", "#2456b8", "#1f8a4c")
-WIDTHS: tuple[int, ...] = (2, 4, 8)
+WIDTHS: tuple[int, ...] = (1, 2, 4, 8, 12)     # 5 kalınlık kademesi (px, basınç 0.5'te)
 OPTION_LETTERS = ("A", "B", "C", "D")
 
 
@@ -66,7 +66,7 @@ class PenSettings:
     shape_correction: bool = True
     autosave: bool = True
     template_matching: bool = False
-    reading_ms: int = 150      # soru okuma animasyonu, ms/kelime; 0 = kapalı
+    reading_ms: int = 350      # soru okuma animasyonu, ms/kelime; 0 = kapalı
 
 
 SAMPLE_QUESTIONS: tuple[Question, ...] = (

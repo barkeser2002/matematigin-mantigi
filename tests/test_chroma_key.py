@@ -57,6 +57,16 @@ def test_tolerance_is_monotonic():
     assert keyed == sorted(keyed)
 
 
+def test_estimate_key_hue_from_green_border():
+    from matematigin_mantigi.core.chroma_key import estimate_key_hue
+    hue = estimate_key_hue(scene())
+    assert hue is not None and 55 <= hue <= 62            # BGR (30,200,40) ≈ ton 58
+    grey = np.full((120, 160, 3), 90, np.uint8)
+    assert estimate_key_hue(grey) is None                 # doygun yeşil kenar yok
+    inner = grey.copy(); inner[30:90, 40:120] = (30, 200, 40)
+    assert estimate_key_hue(inner) is None                # yeşil sadece ortada, kenarlar gri
+
+
 def test_input_not_mutated():
     src = scene(); before = src.copy()
     apply_chroma_key(src, ChromaParams())

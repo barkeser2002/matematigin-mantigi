@@ -18,8 +18,16 @@ Windows PowerShell'de önce `$env:PYTHONUTF8 = "1"`.
 Çalışma alanının tamamı düz beyaz tuval; her yerine çizilir. Üstünde üç şeffaf bölge: sol üstte soru (kırmızı
 numara, kalın metin, görsel, A) B) C) D)), sağ üstte "AKILLI İPUÇLARI" kartları, sağ alt köşede çerçevesiz webcam.
 Sayfa başına tek soru; "Sıradaki soru →" (N) ve "← Önceki soru" (P) ile gezilir. Soru değişince metin kelime
-kelime belirir (okuma animasyonu); tıklayınca tamamlanır; hız Kalem ayarlarında ("Okuma hızı", 0 = kapalı).
-İpucu kartları blur veya redakte ile gizlidir, tıklanmadan açılmaz.
+kelime belirir, o an okunan kelime kırmızı vurgulanır (varsayılan 350 ms/kelime; Kalem ayarlarında "Okuma hızı",
+0 = kapalı); tıklayınca tamamlanır. İpucu kartları blur veya redakte ile gizlidir, tıklanmadan açılmaz; açılırken
+bulanıklık 300 ms'de çözülür.
+
+Araçlar: kalem (5 kalınlık: 1/2/4/8/12 px), silgi, lazer (izi 1,5 sn'de sönerek kaybolur), yazı ve şekil (taslak).
+İmleç araca göre ikon: renkli kurşun kalem (ucunda çizgi kalınlığı), silme alanı kadar silgi bloğu, kırmızı lazer
+noktası; tahtanın ve bölgelerin her yerinde geçerli.
+
+Webcam: yeşil perde kamera karesinin kenarlarından otomatik ölçülür (yeşilimsi ve doygunsa), böylece #00ff3c olmayan
+gerçek perdeler de temizlenir; kamera yokken sadece kısa bir durum yazısı görünür.
 "⧉ Düzen" (L) modunda bölgeler OBS gibi taşınır/boyutlandırılır, 12x10 ızgaraya yapışır, `duzen.json`'a kaydedilir.
 Normal kullanımda çerçeve ve bölge çizgisi yoktur; sadece düzen modunda görünür.
 

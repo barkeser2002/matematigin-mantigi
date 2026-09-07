@@ -57,7 +57,7 @@ class PenSettingsDialog(QDialog):
         self.smoothing_slider = self._slider(0, 100, current.smoothing)
         self.min_slider = self._slider(1, 30, current.min_width)
         self.max_slider = self._slider(1, 40, current.max_width)
-        self.reading_slider = self._slider(0, 400, current.reading_ms)
+        self.reading_slider = self._slider(0, 800, current.reading_ms)
         self.curve_value = QLabel(); self.smoothing_value = QLabel(); self.min_value = QLabel(); self.max_value = QLabel()
         self.reading_value = QLabel()
         for name, slider, value in (("Basınç eğrisi", self.curve_slider, self.curve_value),

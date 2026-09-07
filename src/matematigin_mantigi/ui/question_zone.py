@@ -1,9 +1,10 @@
 """Soru bölgesi: kırmızı numara, kalın soru metni, görsel, A) B) C) D). Soru değişince okuma animasyonu."""
 from __future__ import annotations
 
+import html
 from pathlib import Path
 
-from PyQt6.QtCore import QEvent, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QMouseEvent, QPixmap
 from PyQt6.QtWidgets import QGraphicsBlurEffect, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
@@ -24,10 +25,11 @@ class QuestionZone(Zone):
         super().__init__(parent)
         self.fam = fam
         self.shown = True
-        self.reading_ms = 150
+        self.reading_ms = 350
         self.question: Question | None = None
         self._words: list[str] = []
         self._n = 0
+        self._pending = False                  # bölge görünene kadar animasyon bekler
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self.body.setContentsMargins(28, 22, 28, 18)
@@ -91,16 +93,26 @@ class QuestionZone(Zone):
         self._build_options(q.options)
         self._words = q.soru.split()
         self._n = 0
+        self._pending = False
         if animate and self.reading_ms > 0 and self._words:
             self.text_label.setText("")
             self.options_widget.hide()
-            self._timer.start(self.reading_ms)
+            if self.isVisible():
+                self._timer.start(self.reading_ms)
+            else:
+                self._pending = True           # pencere açılınca başlar, ilk soru da kelime kelime gelir
         else:
             self._finish()
 
     def skip_animation(self) -> None:
-        if self.is_animating:
+        if self.is_animating or self._pending:
             self._finish()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        if self._pending:
+            self._pending = False
+            self._timer.start(self.reading_ms)
 
     def set_shown(self, shown: bool) -> None:
         self.shown = shown
@@ -114,13 +126,19 @@ class QuestionZone(Zone):
     # --- internals -------------------------------------------------------------
     def _tick(self) -> None:
         self._n += 1
-        self.text_label.setText(" ".join(self._words[:self._n]))
+        done = " ".join(html.escape(w) for w in self._words[:self._n - 1])
+        current = html.escape(self._words[self._n - 1])
+        self.text_label.setTextFormat(Qt.TextFormat.RichText)
+        self.text_label.setText((done + " " if done else "")
+                                + f'<span style="color:{theme.QUESTION_NUMBER}">{current}</span>')   # okunan kelime vurgulu
         if self._n >= len(self._words):
             self._finish()
 
     def _finish(self) -> None:
         self._timer.stop()
+        self._pending = False
         self._n = len(self._words)
+        self.text_label.setTextFormat(Qt.TextFormat.PlainText)
         self.text_label.setText(" ".join(self._words))
         self.options_widget.setVisible(bool(self.option_labels))
         self.readingFinished.emit()
@@ -167,8 +185,3 @@ class QuestionZone(Zone):
             e.accept()
             return
         super().mousePressEvent(e)
-
-    def event(self, e):
-        if e.type() == QEvent.Type.Show and self.question is not None and self.image_label.isVisible():
-            pass
-        return super().event(e)

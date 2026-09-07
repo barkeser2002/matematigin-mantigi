@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPen
 from PyQt6.QtWidgets import (QButtonGroup, QFrame, QGraphicsBlurEffect, QHBoxLayout, QLabel, QPushButton,
                              QVBoxLayout, QWidget)
@@ -38,6 +38,12 @@ class HintCard(QWidget):
     def __init__(self, text: str, fam: FontFamilies, parent=None):
         super().__init__(parent)
         self.revealed = False
+        # Açılış animasyonu QTimer ile: QPropertyAnimation yıkım sırasında finished yayıp yarı yıkılmış
+        # karta dokunabiliyor (erişim ihlali); QTimer yıkımda sinyal yaymaz.
+        self._fade_timer = QTimer(self)
+        self._fade_timer.setInterval(16)
+        self._fade_timer.timeout.connect(self._fade_step)
+        self._fade_from, self._fade_ms, self._fade_elapsed = 0.0, 0, 0
         self.setObjectName("hintCard")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -47,14 +53,21 @@ class HintCard(QWidget):
         self.text_label.setFont(theme.font(fam, 16, 500))
         row.addWidget(self.icon, 0, Qt.AlignmentFlag.AlignTop); row.addWidget(self.text_label, 1)
 
-    def apply(self, mode: HintMaskMode, revealed: bool, focused: bool) -> None:
+    def apply(self, mode: HintMaskMode, revealed: bool, focused: bool, anim_ms: int = 0) -> None:
         self.revealed = revealed
         border = theme.HINT_CARD_BORDER_FOCUS if focused else theme.HINT_CARD_BORDER
         self.setStyleSheet(f"#hintCard {{ background: {theme.HINT_CARD_BG}; border: {3 if focused else 2}px solid {border};"
                            f" border-radius: 10px; }}")
         if revealed:
-            self.text_label.setGraphicsEffect(None)
             self.text_label.setStyleSheet("background: transparent;")
+            eff = self.text_label.graphicsEffect()
+            if self._fade_timer.isActive():
+                return                                    # açılma animasyonu sürüyor
+            if anim_ms > 0 and isinstance(eff, QGraphicsBlurEffect):
+                self._fade_from, self._fade_ms, self._fade_elapsed = eff.blurRadius(), anim_ms, 0
+                self._fade_timer.start()
+            else:
+                self.text_label.setGraphicsEffect(None)
         elif mode == HintMaskMode.BLUR:
             self.text_label.setStyleSheet("background: transparent;")
             eff = QGraphicsBlurEffect(); eff.setBlurRadius(9)
@@ -62,6 +75,22 @@ class HintCard(QWidget):
         else:
             self.text_label.setGraphicsEffect(None)
             self.text_label.setStyleSheet(f"background: {theme.INK}; color: {theme.INK}; border-radius: 3px;")
+
+    def _fade_step(self) -> None:
+        self._fade_elapsed += self._fade_timer.interval()
+        eff = self.text_label.graphicsEffect()
+        if not isinstance(eff, QGraphicsBlurEffect):
+            self._fade_timer.stop()
+            return
+        t = min(1.0, self._fade_elapsed / max(1, self._fade_ms))
+        ease = 1 - (1 - t) ** 3                          # out-cubic
+        eff.setBlurRadius(self._fade_from * (1 - ease))
+        if t >= 1.0:
+            self._fade_timer.stop()
+            self.text_label.setGraphicsEffect(None)
+
+    def stop_animation(self) -> None:
+        self._fade_timer.stop()
 
     def mousePressEvent(self, e: QMouseEvent) -> None:
         if e.button() == Qt.MouseButton.LeftButton:
@@ -79,6 +108,7 @@ class HintZone(Zone):
         super().__init__(parent)
         self.fam = fam
         self.mask_mode = HintMaskMode.BLUR
+        self.reveal_anim_ms = 300                    # kart açılırken bulanıklık bu sürede çözülür (0 = anında)
         self._focus = 0
         self.cards: list[HintCard] = []
         self.body.setContentsMargins(24, 18, 24, 14)
@@ -117,6 +147,7 @@ class HintZone(Zone):
     # --- API -------------------------------------------------------------------
     def set_hints(self, question_id: str, hints: Sequence[str]) -> None:
         for c in self.cards:
+            c.stop_animation()
             self.cards_layout.removeWidget(c); c.hide(); c.deleteLater()     # hide: silinene kadar görünmesin
         self.cards = []
         for i, text in enumerate(hints):
@@ -150,4 +181,4 @@ class HintZone(Zone):
         n = len(self.cards)
         self.counter_label.setText(f"{self._focus + 1 if n else 0} / {n}")
         for i, c in enumerate(self.cards):
-            c.apply(self.mask_mode, c.revealed, i == self._focus)
+            c.apply(self.mask_mode, c.revealed, i == self._focus, self.reveal_anim_ms)

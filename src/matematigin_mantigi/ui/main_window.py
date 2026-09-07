@@ -224,6 +224,7 @@ class MainWindow(QMainWindow):
         s.font_file = v.font_file
         s.set_pen(replace(s.pen(), reading_ms=v.reading_ms))
         s.auto_key = v.auto_key
+        s.presenter_name = v.presenter_name
         for key, on in v.visible.items():
             s.set_visible(key, on)
         self.apply_ui_settings()
@@ -244,6 +245,8 @@ class MainWindow(QMainWindow):
         self.work_area.brand.setVisible(s.visible("brand"))
         self.question_zone.set_hide_link_enabled(s.visible("hide_link"))
         self.question_zone.set_number_visible(s.visible("question_number"))
+        self.work_area.set_frame_visible(s.visible("frame"))
+        self.work_area.set_presenter_name(s.presenter_name if s.visible("presenter") else "")
 
     def closeEvent(self, e):
         self.webcam_panel.shutdown()

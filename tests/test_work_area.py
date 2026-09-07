@@ -1,11 +1,13 @@
 from PyQt6.QtCore import QPoint, Qt
 
 from matematigin_mantigi.core import layout_model as lm
+from matematigin_mantigi.ui import theme
 from matematigin_mantigi.ui.theme import FontFamilies
 from matematigin_mantigi.ui.work_area import WorkArea
 from matematigin_mantigi.ui.zone import Zone
 
 FAM = FontFamilies("Arial", "Arial", False)
+B = theme.FRAME_BAND
 
 
 def make(qtbot):
@@ -22,14 +24,43 @@ def make(qtbot):
     return wa, zones
 
 
-def test_board_fills_area_and_zones_use_defaults(qtbot):
+def cells(wa):
+    inner = wa.inner_rect()
+    return lm.cell_size(inner.width(), inner.height(), 14)
+
+
+def test_board_inside_frame_and_zones_use_defaults(qtbot):
     wa, zones = make(qtbot)
-    assert wa.board.geometry() == wa.rect()
+    inner = wa.inner_rect()
+    assert inner == wa.rect().adjusted(B, B, -B, -B)
+    assert wa.board.geometry() == inner                                # çerçeve bandına çizilemez
     soru, ipucu, webcam = (zones[k].geometry() for k in ("soru", "ipucu", "webcam"))
-    assert soru.left() == 0 and soru.top() == 0                       # kenar boşluğu yok
-    assert ipucu.right() == wa.width() - 1
-    assert webcam.right() == wa.width() - 1 and webcam.bottom() == wa.height() - 1
+    assert soru.left() == B and soru.top() == B
+    assert ipucu.right() == wa.width() - 1 - B
+    assert webcam.right() == wa.width() - 1 - B and webcam.bottom() == wa.height() - 1 - B
     assert abs(soru.width() / ipucu.width() - 1) < 0.02
+
+
+def test_frame_paints_ink_band_and_can_be_hidden(qtbot):
+    wa, _ = make(qtbot)
+    img = wa.grab().toImage()
+    assert img.pixelColor(3, 300).name() == "#1c1b19"                 # çerçeve bandı
+    assert img.pixelColor(B + 40, 300).name() == "#ffffff"           # tahta beyaz, çizgi yok
+    wa.set_frame_visible(False)
+    assert wa.inner_rect() == wa.rect() and wa.board.geometry() == wa.rect()
+    assert wa.grab().toImage().pixelColor(3, 300).name() == "#ffffff"
+
+
+def test_title_plate_and_presenter_name_positions(qtbot):
+    wa, zones = make(qtbot)
+    assert wa.brand.text() == "Matematiğin Mantığı" and wa.brand.y() == 0
+    assert abs(wa.brand.x() + wa.brand.width() // 2 - wa.width() // 2) <= 1
+    cam = zones["webcam"].geometry()
+    assert wa.name_label.text() == "Koray Varol"
+    assert wa.name_label.geometry().bottom() < cam.top()               # webcam'in üstünde
+    assert wa.name_label.geometry().right() <= cam.right()
+    wa.set_presenter_name("")
+    assert wa.name_label.isHidden()
 
 
 def test_zone_forwards_drawing_to_board(qtbot):
@@ -40,14 +71,14 @@ def test_zone_forwards_drawing_to_board(qtbot):
     qtbot.mouseMove(z, end)
     qtbot.mouseRelease(z, Qt.MouseButton.LeftButton, pos=end)
     assert not wa.board.is_empty()
-    assert wa.board.strokes_image().pixelColor(140, 130).alpha() > 0    # soru bölgesi (0,0)'da: tahta koordinatı aynı
+    assert wa.board.strokes_image().pixelColor(140, 130).alpha() > 0    # soru bölgesi tahtanın (0,0)'ında
 
 
 def test_edit_mode_drag_moves_and_snaps(qtbot):
     wa, zones = make(qtbot)
     wa.set_edit_mode(True)
     start = zones["webcam"].geometry().center()
-    cw, ch = lm.cell_size(wa.width(), wa.height(), 14)
+    cw, ch = cells(wa)
     qtbot.mousePress(wa, Qt.MouseButton.LeftButton, pos=start)
     qtbot.mouseMove(wa, start + QPoint(-int(cw * 2), 0))
     qtbot.mouseMove(wa, start + QPoint(-int(cw * 2), 0))
@@ -64,7 +95,7 @@ def test_edit_mode_drag_through_real_event_path(qtbot):
     wa.set_edit_mode(True)
     win = wa.windowHandle()
     start = zones["webcam"].geometry().center()
-    cw, ch = lm.cell_size(wa.width(), wa.height(), 14)
+    cw, ch = cells(wa)
     end = start + QPoint(-int(cw * 2), 0)
     QTest.mousePress(win, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start)
     QTest.mouseMove(win, end)
@@ -79,7 +110,7 @@ def test_edit_mode_resize_from_corner(qtbot):
     wa, zones = make(qtbot)
     wa.set_edit_mode(True)
     corner = zones["soru"].geometry().bottomRight() - QPoint(6, 6)
-    cw, ch = lm.cell_size(wa.width(), wa.height(), 14)
+    cw, ch = cells(wa)
     qtbot.mousePress(wa, Qt.MouseButton.LeftButton, pos=corner)
     qtbot.mouseMove(wa, corner + QPoint(0, int(ch)))
     with qtbot.waitSignal(wa.layoutChanged) as sig:
@@ -108,23 +139,21 @@ def test_reset_layout_emits_default(qtbot):
 def test_recording_rect_covers_whole_work_area(qtbot):
     wa, _ = make(qtbot)
     x, y, w, h, dpr = wa.recording_rect()
-    assert (w, h) == (wa.width(), wa.height()) and dpr >= 1.0
+    assert (w, h) == (wa.width(), wa.height()) and dpr >= 1.0         # çerçeve de kayda girer
 
 
-def test_no_lines_outside_edit_mode(qtbot):
+def test_edit_overlay_only_in_edit_mode(qtbot):
     wa, _ = make(qtbot)
-    img = wa.grab().toImage()
-    assert img.pixelColor(3, 300).name() == "#ffffff"          # düz beyaz tahta, çerçeve yok
+    assert wa.overlay.isHidden()
     wa.set_edit_mode(True)
-    img = wa.grab().toImage()
-    assert img.pixelColor(3, 300).name() == "#1c1b19"          # düzen modunda 10px çerçeve
+    assert wa.overlay.isVisible() and wa.edit_bar.isVisible()
     wa.set_edit_mode(False)
-    img = wa.grab().toImage()
-    assert img.pixelColor(3, 300).name() == "#ffffff"
+    assert wa.overlay.isHidden()
 
 
 def test_status_line(qtbot):
     wa, _ = make(qtbot)
     wa.set_status("Araç: Kalem · Kalınlık: 4 px · Basınç: XP-Pen")
     assert wa.status_label.text().startswith("Araç: Kalem")
-    assert wa.status_label.y() > wa.height() - 60 and wa.status_label.x() == 16
+    inner = wa.inner_rect()
+    assert wa.status_label.x() == inner.x() + 12 and wa.status_label.geometry().bottom() <= inner.bottom()

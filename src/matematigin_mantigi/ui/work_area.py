@@ -1,5 +1,6 @@
-"""Beyaz tahta: çalışma alanının tamamı çizim tuvali; soru, ipucu ve webcam bölgeleri tahtanın üstünde
-şeffaf katmanlar. Normal kullanımda hiçbir çizgi yok; çerçeve, ızgara ve bölge sınırları sadece düzen modunda.
+"""Beyaz tahta: kalıcı ekran çerçevesi içinde tam boy çizim tuvali; soru, ipucu ve webcam bölgeleri tahtanın
+üstünde şeffaf katmanlar. Çerçeve bandına çizilemez. Başlık plakası üstte, sunucu adı webcam'in üstünde.
+Düzen sınırları ve ızgara sadece düzen modunda görünür.
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ GRIP = 18   # sağ-alt köşede boyutlandırma tutamağı (px)
 
 
 class _EditOverlay(QWidget):
-    """Düzen modunda çerçeve, ızgara ve bölge sınırlarını en üstte çizer; fareye şeffaftır."""
+    """Düzen modunda ızgara ve bölge sınırlarını en üstte çizer; fareye şeffaftır."""
 
     def __init__(self, area: "WorkArea"):
         super().__init__(area)
@@ -29,10 +30,10 @@ class _EditOverlay(QWidget):
     def paintEvent(self, _e):
         area = self.area
         p = QPainter(self)
-        p.setPen(QPen(QColor(theme.INK), theme.FRAME_INSET))
-        half = theme.FRAME_INSET / 2
-        p.drawRect(QRectF(half, half, self.width() - theme.FRAME_INSET, self.height() - theme.FRAME_INSET))
         inner = area.inner_rect()
+        p.setPen(QPen(QColor(theme.ACCENT), 3))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRect(QRectF(inner).adjusted(1.5, 1.5, -1.5, -1.5))
         cw, ch = lm.cell_size(inner.width(), inner.height(), theme.GRID_GAP)
         pen = QPen(QColor(theme.ACCENT)); pen.setStyle(Qt.PenStyle.DotLine); p.setPen(pen)
         for c in range(1, lm.GRID_COLS):
@@ -41,15 +42,14 @@ class _EditOverlay(QWidget):
         for r in range(1, lm.GRID_ROWS):
             y = inner.y() + round(r * (ch + theme.GRID_GAP) - theme.GRID_GAP / 2)
             p.drawLine(inner.left(), y, inner.right(), y)
-        p.setBrush(Qt.BrushStyle.NoBrush)
         for zone in area.zones():
             geo = zone.geometry()
             pen = QPen(QColor(theme.ACCENT), 2); pen.setStyle(Qt.PenStyle.DashLine); p.setPen(pen)
             p.drawRoundedRect(QRectF(geo).adjusted(1, 1, -1, -1), theme.PANEL_RADIUS, theme.PANEL_RADIUS)
             p.fillRect(QRect(geo.right() - GRIP, geo.bottom() - GRIP, GRIP, GRIP), QColor(theme.ACCENT))
             p.setPen(QColor(theme.ACCENT))
-            p.drawText(geo.adjusted(theme.FRAME_INSET + 6, theme.FRAME_INSET + 4, -10, -6),
-                       Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, zone.key.upper())
+            p.drawText(geo.adjusted(10, 6, -10, -6), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft,
+                       zone.key.upper())
         p.end()
 
 
@@ -63,6 +63,7 @@ class WorkArea(QWidget):
         self._zones: dict[str, Zone] = {}
         self._layout: lm.Layout = dict(lm.DEFAULT_LAYOUT)
         self.edit_mode = False
+        self.frame_visible = True
         self._drag: tuple[str, str, QPoint, QRect] | None = None   # key, "move"|"resize", press pos, start geom
         self.setMouseTracking(True)
 
@@ -73,12 +74,21 @@ class WorkArea(QWidget):
         self.status_label.setStyleSheet(f"color: {theme.MUTED}; background: transparent;")
         self.status_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
+        # başlık plakası: çerçevenin üst bandında, ortada
         self.brand = QLabel("Matematiğin Mantığı", self)
-        self.brand.setFont(theme.hand_font(fam, 34, 700))
+        self.brand.setFont(theme.hand_font(fam, 30, 700))
         self.brand.setStyleSheet(f"color: {theme.PANEL_SOFT}; background: {theme.INK};"
-                                 f" border-top-left-radius: 14px; border-top-right-radius: 14px; padding: 4px 30px 8px;")
+                                 f" border: 2px solid {theme.FRAME_LINE}; border-top: none;"
+                                 f" border-bottom-left-radius: 14px; border-bottom-right-radius: 14px; padding: 2px 28px 6px;")
         self.brand.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.brand.adjustSize()
+
+        # sunucu adı: el yazısı, webcam'in üstünde
+        self.name_label = QLabel("Koray Varol", self)
+        self.name_label.setFont(theme.hand_font(fam, 28, 700))
+        self.name_label.setStyleSheet(f"color: {theme.INK}; background: transparent;")
+        self.name_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.name_label.adjustSize()
 
         self.badge_slot = QWidget(self)          # MainWindow yerleştirir: RecordBadge
         self.badge_slot.hide()
@@ -142,31 +152,52 @@ class WorkArea(QWidget):
         self.relayout()
         self.editModeChanged.emit(on)
 
+    def set_frame_visible(self, on: bool) -> None:
+        self.frame_visible = on
+        self.relayout()
+        self.update()
+
+    def set_presenter_name(self, text: str) -> None:
+        self.name_label.setText(text)
+        self.name_label.setVisible(bool(text.strip()))
+        self.name_label.adjustSize()
+        self.relayout()
+
+    def frame_band(self) -> int:
+        return theme.FRAME_BAND if self.frame_visible else 0
+
     def inner_rect(self) -> QRect:
-        t, r, b, l = theme.WORK_PADDING
-        return QRect(l, t, self.width() - l - r, self.height() - t - b)
+        """Çizilebilir alan: çerçeve bandının içi."""
+        b = self.frame_band()
+        t, r, btm, l = theme.WORK_PADDING
+        return QRect(l + b, t + b, self.width() - l - r - 2 * b, self.height() - t - btm - 2 * b)
 
     def relayout(self) -> None:
-        self.board.setGeometry(self.rect())
-        self.board.lower()
         inner = self.inner_rect()
+        self.board.setGeometry(inner)
+        self.board.lower()
         for key, zone in self._zones.items():
             x, y, w, h = lm.pixel_rect(self._layout[key], inner.width(), inner.height(), theme.GRID_GAP)
             zone.setGeometry(inner.x() + x, inner.y() + y, w, h)
             zone.raise_()
         self.status_label.adjustSize()
-        self.status_label.move(16, self.height() - self.status_label.height() - 10)
+        self.status_label.move(inner.x() + 12, inner.bottom() - self.status_label.height() - 6)
         self.status_label.raise_()
-        self.brand.move((self.width() - self.brand.width()) // 2, self.height() - self.brand.height())
+        self.brand.adjustSize()
+        self.brand.move((self.width() - self.brand.width()) // 2, 0)
         self.brand.raise_()
-        top = 4
-        self.badge_slot.move((self.width() - self.badge_slot.width()) // 2, top)
+        webcam = self._zones.get("webcam")
+        anchor = webcam.geometry() if webcam is not None else inner
+        self.name_label.adjustSize()
+        self.name_label.move(anchor.right() - self.name_label.width() - 8, anchor.top() - self.name_label.height() - 2)
+        self.name_label.raise_()
+        top = inner.y() + 4
+        self.badge_slot.move(inner.right() - self.badge_slot.width() - 12, top)
         self.badge_slot.raise_()
         self.overlay.setGeometry(self.rect())
         self.overlay.raise_()
         self.edit_bar.adjustSize()
-        bar_y = top + (self.badge_slot.height() + 6 if self.badge_slot.isVisible() else 0)   # rozetin altına
-        self.edit_bar.move((self.width() - self.edit_bar.width()) // 2, bar_y)
+        self.edit_bar.move((self.width() - self.edit_bar.width()) // 2, self.brand.height() + 8)
         self.edit_bar.raise_()
         self.overlay.update()
 
@@ -245,5 +276,17 @@ class WorkArea(QWidget):
 
     def paintEvent(self, _e):
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor(theme.PANEL))     # tahta beyaz; tuval üstünü kaplar
+        p.fillRect(self.rect(), QColor(theme.PANEL))
+        if self.frame_visible:
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            band = theme.FRAME_BAND
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(theme.INK))
+            p.drawRect(self.rect())                                       # çerçeve bandı
+            inner = self.inner_rect()
+            p.setBrush(QColor(theme.PANEL))
+            p.drawRoundedRect(QRectF(inner), 10, 10)                      # yuvarlak iç köşeli tahta
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(QColor(theme.FRAME_LINE), 2))
+            p.drawRoundedRect(QRectF(inner).adjusted(-band / 2, -band / 2, band / 2, band / 2), 16, 16)  # iç ince çizgi
         p.end()

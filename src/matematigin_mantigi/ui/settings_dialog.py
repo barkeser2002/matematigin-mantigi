@@ -18,6 +18,7 @@ class SettingsValues:
     font_file: str = ""
     reading_ms: int = 40
     auto_key: bool = True
+    presenter_name: str = "Koray Varol"
     visible: dict[str, bool] = field(default_factory=dict)
 
 
@@ -66,6 +67,12 @@ class SettingsDialog(QDialog):
         self._refresh_reading()
         root.addWidget(speed_card)
 
+        name_card, ncol = _card("Sunucu adı (el yazısı, webcam üstünde)", fam)
+        self.presenter_edit = QLineEdit(settings.presenter_name)
+        self.presenter_edit.setPlaceholderText("Boş bırakılırsa gösterilmez")
+        ncol.addWidget(self.presenter_edit)
+        root.addWidget(name_card)
+
         cam_card, ccol = _card("Yeşil perde", fam)
         self.auto_key_check = QCheckBox("Perde tonunu kameranın kenarlarından otomatik ölç")
         self.auto_key_check.setChecked(settings.auto_key)
@@ -100,6 +107,7 @@ class SettingsDialog(QDialog):
         return SettingsValues(font_file=self.font_path_edit.text().strip(),
                               reading_ms=self.reading_slider.value(),
                               auto_key=self.auto_key_check.isChecked(),
+                              presenter_name=self.presenter_edit.text().strip(),
                               visible={k: cb.isChecked() for k, cb in self.visibility_checks.items()})
 
     def _apply(self) -> None:

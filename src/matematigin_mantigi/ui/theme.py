@@ -44,6 +44,8 @@ FRAME_INSET = 10
 TOOLBAR_WIDTH = 88
 DOT_SPACING = 28
 WORK_PADDING = (0, 0, 0, 0)        # tahta kenardan kenara; top, right, bottom, left
+FRAME_BAND = 26                    # ekran çerçevesi kalınlığı (px); üstüne çizilemez
+FRAME_LINE = "#4a4741"             # çerçevenin iç ince çizgisi
 
 
 def tr_upper(text: str) -> str:

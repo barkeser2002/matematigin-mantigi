@@ -9,7 +9,8 @@ def test_window_shell(window):
     assert window.toolbar.width() == 88
     x, y, w, h, _ = window.work_area.recording_rect()
     assert w == window.width() - 88 and h == window.height()
-    assert window.canvas is window.work_area.board and window.canvas.geometry() == window.work_area.rect()
+    assert window.canvas is window.work_area.board and window.canvas.geometry() == window.work_area.inner_rect()
+    assert window.work_area.name_label.text() == "Koray Varol" and window.work_area.frame_visible
     assert window.question_zone.number_label.text() == "1."
     assert window.question_zone.text_label.text().startswith("3x + 5")
     assert len(window.hint_zone.cards) == 3
@@ -201,11 +202,15 @@ def test_settings_dialog_applies_speed_visibility_and_auto_key(window, qtbot, mo
         self.visibility_checks["hint_controls"].setChecked(False)
         self.visibility_checks["brand"].setChecked(False)
         self.visibility_checks["question_number"].setChecked(False)
+        self.visibility_checks["frame"].setChecked(False)
+        self.presenter_edit.setText("Barış Keser")
         self._apply()
         return 1
     monkeypatch.setattr(sd.SettingsDialog, "exec", fake_exec)
     qtbot.mouseClick(window.toolbar.settings_button, Qt.MouseButton.LeftButton)
     s = window.settings
+    assert s.presenter_name == "Barış Keser" and window.work_area.name_label.text() == "Barış Keser"
+    assert not window.work_area.frame_visible and window.canvas.geometry() == window.work_area.rect()
     assert s.pen().reading_ms == 90 and window.question_zone.reading_ms == 90
     assert s.auto_key is False and s.visible("status") is False
     assert window.work_area.status_label.isHidden() and window.webcam_panel.overlay_label.isHidden()

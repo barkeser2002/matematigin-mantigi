@@ -17,6 +17,8 @@ VISIBILITY_KEYS: tuple[tuple[str, str], ...] = (
     ("brand", "Marka plakası (Matematiğin Mantığı)"),
     ("hide_link", "Sorudaki \"gizle\" bağlantısı"),
     ("question_number", "Soru numarası"),
+    ("frame", "Ekran çerçevesi"),
+    ("presenter", "Sunucu adı (webcam üstünde)"),
 )
 
 
@@ -93,6 +95,11 @@ class AppSettings:
     def font_file(self) -> str: return self._str("ui/font_file", "")
     @font_file.setter
     def font_file(self, path: str) -> None: self._q.setValue("ui/font_file", path or "")
+
+    @property
+    def presenter_name(self) -> str: return self._str("ui/presenter_name", "Koray Varol")
+    @presenter_name.setter
+    def presenter_name(self, text: str) -> None: self._q.setValue("ui/presenter_name", text)
 
     def visible(self, key: str) -> bool:
         """Tahtadaki yazısal öğe görünürlüğü; anahtarlar VISIBILITY_KEYS içinde."""

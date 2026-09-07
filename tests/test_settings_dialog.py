@@ -23,7 +23,9 @@ def test_dialog_reflects_settings_and_returns_values(qtbot, ini_settings):
     v = d.value()
     assert v.reading_ms == 0 and d.reading_value.text() == "kapalı" and v.auto_key is False
     assert v.visible["cam_label"] is False and v.visible["status"] is False and v.visible["brand"] is True
-    assert v.font_file == ""
+    assert v.font_file == "" and v.presenter_name == "Koray Varol"
+    d.presenter_edit.setText("  Ad Soyad ")
+    assert d.value().presenter_name == "Ad Soyad"
 
 
 def test_choose_font_file_and_default(qtbot, ini_settings, tmp_path, monkeypatch):

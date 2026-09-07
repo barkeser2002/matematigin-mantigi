@@ -36,6 +36,10 @@ gerçek perdeler de temizlenir; kamera yokken sadece kısa bir durum yazısı g�
 "⧉ Düzen" (L) modunda bölgeler OBS gibi taşınır/boyutlandırılır, 12x10 ızgaraya yapışır, `duzen.json`'a kaydedilir.
 Normal kullanımda çerçeve ve bölge çizgisi yoktur; sadece düzen modunda görünür.
 
+Ekran çerçevesi: tüm çalışma alanını saran 26 px koyu bant, üstüne çizilemez; "Matematiğin Mantığı" plakası üst
+ortada, sunucu adı (varsayılan "Koray Varol", el yazısı fontu) webcam'in üstünde. İkisi de ⚙ Ayarlar'dan değişir
+veya kapatılır. Logo alanı sonraki sürümde.
+
 ## Kısayollar
 
 1-6 araçlar (6 = Tıkla) · Ctrl+Z geri al · Ctrl+Shift+X temizle · N sıradaki · P önceki · Space işle/tamamla · R kayıt ·

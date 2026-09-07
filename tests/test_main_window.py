@@ -149,7 +149,8 @@ def test_restores_settings_on_start(qtbot, tmp_path, ini_settings, dead_camera):
     qtbot.addWidget(win)
     assert win.canvas.tool == Tool.LASER and win.canvas.color.name() == "#1f8a4c" and win.canvas.base_width == 2
     assert win.toolbar.tool_buttons[Tool.LASER].isChecked() and win.toolbar.width_buttons[2].isChecked()
-    assert win.hint_zone.mask_mode == HintMaskMode.REDACT and win.webcam_panel.chroma_enabled is False
+    assert win.hint_zone.mask_mode == HintMaskMode.REDACT
+    assert win.webcam_panel.chroma_enabled is True            # kayıtlı ayar ne olursa olsun perde kaldırılmış başlar
     assert win.question_zone.reading_ms == 0 and not win.question_zone.is_animating
 
 

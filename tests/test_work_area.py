@@ -44,7 +44,7 @@ def test_board_inside_frame_and_zones_use_defaults(qtbot):
 def test_frame_paints_ink_band_and_can_be_hidden(qtbot):
     wa, _ = make(qtbot)
     img = wa.grab().toImage()
-    assert img.pixelColor(3, 300).name() == "#1c1b19"                 # çerçeve bandı
+    assert img.pixelColor(12, 300).value() < 70                       # çerçeve bandı koyu (degrade)
     assert img.pixelColor(B + 40, 300).name() == "#ffffff"           # tahta beyaz, çizgi yok
     wa.set_frame_visible(False)
     assert wa.inner_rect() == wa.rect() and wa.board.geometry() == wa.rect()

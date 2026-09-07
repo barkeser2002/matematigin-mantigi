@@ -4,8 +4,8 @@ Düzen sınırları ve ızgara sadece düzen modunda görünür.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import QPoint, QRect, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPen
+from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor, QLinearGradient, QMouseEvent, QPainter, QPen
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 from matematigin_mantigi.core import layout_model as lm
@@ -78,7 +78,7 @@ class WorkArea(QWidget):
         self.brand = QLabel("Matematiğin Mantığı", self)
         self.brand.setFont(theme.hand_font(fam, 30, 700))
         self.brand.setStyleSheet(f"color: {theme.PANEL_SOFT}; background: {theme.INK};"
-                                 f" border: 2px solid {theme.FRAME_LINE}; border-top: none;"
+                                 f" border: 2px solid {theme.HINT_CARD_BORDER}; border-top: none;"
                                  f" border-bottom-left-radius: 14px; border-bottom-right-radius: 14px; padding: 2px 28px 6px;")
         self.brand.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.brand.adjustSize()
@@ -278,15 +278,34 @@ class WorkArea(QWidget):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(theme.PANEL))
         if self.frame_visible:
-            p.setRenderHint(QPainter.RenderHint.Antialiasing)
-            band = theme.FRAME_BAND
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(theme.INK))
-            p.drawRect(self.rect())                                       # çerçeve bandı
-            inner = self.inner_rect()
-            p.setBrush(QColor(theme.PANEL))
-            p.drawRoundedRect(QRectF(inner), 10, 10)                      # yuvarlak iç köşeli tahta
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.setPen(QPen(QColor(theme.FRAME_LINE), 2))
-            p.drawRoundedRect(QRectF(inner).adjusted(-band / 2, -band / 2, band / 2, band / 2), 16, 16)  # iç ince çizgi
+            self._paint_frame(p)
         p.end()
+
+    def _paint_frame(self, p: QPainter) -> None:
+        """Gösterişli çerçeve: degrade bant, nokta dokusu, turuncu iç çizgi, köşe süsleri."""
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        band = theme.FRAME_BAND
+        inner = self.inner_rect()
+        grad = QLinearGradient(0, 0, 0, self.height())
+        grad.setColorAt(0.0, QColor("#2a2925")); grad.setColorAt(0.5, QColor(theme.INK)); grad.setColorAt(1.0, QColor("#0f0e0d"))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(grad))
+        p.drawRect(self.rect())                                           # bant
+        p.setBrush(QColor("#3a3834"))                                     # dış kenarda ince nokta dokusu
+        for x in range(6, self.width() - 4, 8):
+            p.drawEllipse(QPointF(x, 5), 1.0, 1.0); p.drawEllipse(QPointF(x, self.height() - 5), 1.0, 1.0)
+        for y in range(6, self.height() - 4, 8):
+            p.drawEllipse(QPointF(5, y), 1.0, 1.0); p.drawEllipse(QPointF(self.width() - 5, y), 1.0, 1.0)
+        p.setBrush(QColor(theme.PANEL))
+        p.drawRoundedRect(QRectF(inner), 12, 12)                          # yuvarlak iç köşeli tahta
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(QColor(theme.HINT_CARD_BORDER), 2))                 # turuncu iç çizgi
+        p.drawRoundedRect(QRectF(inner).adjusted(-4, -4, 4, 4), 14, 14)
+        p.setPen(QPen(QColor(theme.FRAME_LINE), 1))                       # gri dış çizgi
+        p.drawRoundedRect(QRectF(inner).adjusted(-band / 2 - 2, -band / 2 - 2, band / 2 + 2, band / 2 + 2), 18, 18)
+        pen = QPen(QColor(theme.BULB), 3); pen.setCapStyle(Qt.PenCapStyle.RoundCap); p.setPen(pen)
+        L = 22                                                            # köşe süsleri (L şeklinde)
+        for cx, cy, sx, sy in ((inner.left() - 8, inner.top() - 8, 1, 1), (inner.right() + 9, inner.top() - 8, -1, 1),
+                               (inner.left() - 8, inner.bottom() + 9, 1, -1), (inner.right() + 9, inner.bottom() + 9, -1, -1)):
+            p.drawLine(QPointF(cx, cy), QPointF(cx + sx * L, cy))
+            p.drawLine(QPointF(cx, cy), QPointF(cx, cy + sy * L))

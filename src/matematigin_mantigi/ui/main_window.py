@@ -45,8 +45,9 @@ class MainWindow(QMainWindow):
         self.canvas = self.work_area.board
         self.question_zone = QuestionZone(fam)
         self.hint_zone = HintZone(fam)
+        # Yeşil perde her açılışta kaldırılmış başlar; tıklama ile değişim sadece oturum içindir.
         self.webcam_panel = WebcamPanel(fam, camera_source_factory or (lambda: _NoCamera()),
-                                        settings.chroma, settings.chroma_enabled)
+                                        settings.chroma, chroma_enabled=True)
         for key, zone in (("soru", self.question_zone), ("ipucu", self.hint_zone), ("webcam", self.webcam_panel)):
             self.work_area.add_zone(key, zone)
         self.work_area.set_layout(lm.load_layout(self.layout_path))
@@ -103,7 +104,6 @@ class MainWindow(QMainWindow):
         hz.nextRequested.connect(flow.hint_next)
         hz.revealToggled.connect(flow.toggle_reveal)
         hz.maskModeChanged.connect(self._on_mask_mode)
-        self.webcam_panel.chromaToggled.connect(self._on_chroma_toggled)
 
     def _shortcuts(self) -> None:
         def sc(keys: str, fn) -> None:
@@ -188,9 +188,6 @@ class MainWindow(QMainWindow):
 
     def _on_mask_mode(self, m) -> None:
         self.settings.hint_mask = m
-
-    def _on_chroma_toggled(self, on: bool) -> None:
-        self.settings.chroma_enabled = on
 
     def toggle_recording(self, on: bool) -> None:
         if on and not self.recorder.is_recording:

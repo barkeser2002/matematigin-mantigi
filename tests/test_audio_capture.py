@@ -51,9 +51,11 @@ def test_capture_writes_wav_and_measures_first_sample(tmp_path, monkeypatch):
                 inputBufferAdcTime = 0.0
                 currentTime = 0.0
             block = np.full((int(self.rate * 0.02), self.channels), 1000, np.int16)
-            while self._run.is_set():
+            for _ in range(25):                        # sabit 25 blok = 0,5 sn ses; duvar saatine bağlı değil
+                if not self._run.is_set():
+                    break
                 self.cb(block, len(block), TI(), None)
-                time.sleep(0.02)
+                time.sleep(0.005)
 
         def stop(self):
             self._run.clear(); self._t.join(1)
@@ -76,15 +78,15 @@ def test_capture_writes_wav_and_measures_first_sample(tmp_path, monkeypatch):
     cap = ac.AudioCapture("MacBook Pro Microphone")
     before = time.monotonic()
     cap.start(tmp_path / "a.wav")
-    time.sleep(0.5)
+    time.sleep(0.4)
     res = cap.stop()
     assert res.samplerate == 48000 and res.channels == 1
     # ilk örnek zamanı = geri çağrı anı - (sürücü gecikmesi + blok süresi 20 ms)
     assert res.first_sample_monotonic is not None and before - 0.05 <= res.first_sample_monotonic <= res.stopped_monotonic
-    assert 0.3 < res.duration < 0.8 and res.overflows == 0 and res.dropped_blocks == 0
+    assert res.samples == 25 * 960 and abs(res.duration - 0.5) < 1e-6 and res.overflows == 0 and res.dropped_blocks == 0
     with wave.open(str(tmp_path / "a.wav")) as w:
         assert w.getframerate() == 48000 and w.getnframes() == res.samples and w.getsampwidth() == 2
-    assert abs(res.wall_duration - res.duration) < 0.1
+    assert 0 < res.wall_duration < 5
 
 
 @pytest.mark.skipif(not ac.list_input_devices(), reason="mikrofon yok")

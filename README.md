@@ -72,6 +72,14 @@ Betik `.venv` kurar, tüm kütüphaneleri (`PyQt6, opencv-python, numpy, openpyx
 yükler, testleri koşar ve `dist/Matematiğin Mantığı.app` üretir. Kamera, mikrofon ve ekran kaydı izin metinleri
 (`NSCameraUsageDescription` vb.) `mac/matematigin_mantigi.spec` içinde gömülüdür; ilk açılışta macOS izin sorar.
 İmzasız uygulama için ilk açılış: sağ tık > Aç (veya `xattr -dr com.apple.quarantine "dist/Matematiğin Mantığı.app"`).
+
+Paketlenmiş uygulama verilerini `~/Documents/Matematiğin Mantığı/` altında tutar: ilk açılışta `sorular_sablon.xlsx`
+ve `sorular_gorsel/` oraya kopyalanır; `oturum/` (kayıtlar, PNG'ler) ve `duzen.json` da orada oluşur. Soruları
+o klasördeki Excel'de düzenleyin.
+
+Mac elinizde değilse: depoyu GitHub'a gönderin, Actions > "macOS paketi" > Run workflow; Apple Silicon runner
+`bash mac/build_mac.sh` çalıştırır ve `Matematigin-Mantigi-macOS.zip` artifact'ini üretir (`.github/workflows/mac.yml`).
+Homebrew Python için: `brew install python@3.12` sonra `PYTHON=python3.12 bash mac/build_mac.sh`.
 Logo hazır olunca `mac/icon.icns` ekleyip spec'teki `icon` alanına yazın.
 
 ## macOS (hedef makine, XP-Pen)

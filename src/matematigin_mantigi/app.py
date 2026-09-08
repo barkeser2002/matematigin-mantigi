@@ -24,7 +24,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--sorular", help="Soru şablonu (.xlsx) yolu")
     p.add_argument("--kamera", type=int, default=None, help="Kamera indeksi (varsayılan: ayarlardan)")
     p.add_argument("--kamera-yok", action="store_true", help="Kamerayı açma")
-    p.add_argument("--duzen", default=None, help="Düzen dosyası (varsayılan: ./duzen.json)")
+    p.add_argument("--duzen", default=None, help="Düzen dosyası (varsayılan: veri klasöründe duzen.json)")
     return p.parse_args(argv[1:])
 
 
@@ -38,12 +38,14 @@ def load_questions_or_samples(template: Path):
 
 def build_window(args: argparse.Namespace, fam: theme.FontFamilies, settings: AppSettings | None = None) -> MainWindow:
     settings = settings or AppSettings()
+    if paths.is_frozen():
+        paths.ensure_user_data()            # .app: ~/Documents/Matematiğin Mantığı (şablon + görseller kopyalanır)
     template = Path(args.sorular) if args.sorular else paths.default_template_path()
     questions = load_questions_or_samples(template)
     if args.kamera is not None:
         settings.camera_index = args.kamera
     factory = None if args.kamera_yok else (lambda index: OpenCvSource(index))
-    layout_path = Path(args.duzen) if args.duzen else Path.cwd() / "duzen.json"
+    layout_path = Path(args.duzen) if args.duzen else paths.default_layout_path()
     store = SessionStore()
     recorder = MssFfmpegRecorder(lambda: store.session_dir, fps=settings.record_fps,
                                  audio_device=settings.audio_device or None, out_height=settings.record_height)

@@ -1,0 +1,357 @@
+{
+  "image-slot.js": {
+    "mtime": 1788517480.0,
+    "ast_hash": "ffd58db33ccba77f4418532eb598043f",
+    "semantic_hash": ""
+  },
+  "mac/build_mac.sh": {
+    "mtime": 1788856720.5141623,
+    "ast_hash": "436006c33c54cad634ee787cd6fbfe1f",
+    "semantic_hash": ""
+  },
+  "pyproject.toml": {
+    "mtime": 1788856720.5181699,
+    "ast_hash": "44aa3f43f2e2c8f8e4885e2b8de802f0",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/__init__.py": {
+    "mtime": 1788522056.8681266,
+    "ast_hash": "7e1850378177a96ccfea20addaab6418",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/__main__.py": {
+    "mtime": 1788522056.9048238,
+    "ast_hash": "ab505ee3421d0461d2987f83a98a6224",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/app.py": {
+    "mtime": 1788856720.5201676,
+    "ast_hash": "548b65d98b6be574141cbb7ce04034aa",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/core/__init__.py": {
+    "mtime": 1788522056.9435542,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/core/cameras.py": {
+    "mtime": 1788855476.5469286,
+    "ast_hash": "6f02b0eb1962911ffa893d6a3e3b2b15",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/core/chroma_key.py": {
+    "mtime": 1788776574.946427,
+    "ast_hash": "47e5eef5d833f45efb7a1aa8934a5639",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/core/layout_model.py": {
+    "mtime": 1788533073.7238767,
+    "ast_hash": "c605a0ae46e213677b0f0fce92661fef",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/core/models.py": {
+    "mtime": 1788777488.5774872,
+    "ast_hash": "0cd193d2541463ff56eecc236520e6f0",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/core/pdf_import.py": {
+    "mtime": 1788533073.7258763,
+    "ast_hash": "a2c1e3298b2ef57fae4567ffa7cf8249",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/core/question_flow.py": {
+    "mtime": 1788533073.72713,
+    "ast_hash": "44788e4b895513c3da89fcb6e7fe32be",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/core/question_loader.py": {
+    "mtime": 1788533073.7281327,
+    "ast_hash": "6b8f94c56f27d4393d5b09df6291f49e",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/core/recorder.py": {
+    "mtime": 1788856720.5221684,
+    "ast_hash": "09b05e743ed13c08d83a8a6e3cdbc4b5",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/core/session_store.py": {
+    "mtime": 1788525402.238118,
+    "ast_hash": "5542dd4e9db879014df1f2ab554d294b",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/core/settings.py": {
+    "mtime": 1788856720.5239377,
+    "ast_hash": "95d4d0b4bfc37b8d8b1ad6e30e5a346a",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/core/stroke.py": {
+    "mtime": 1788525402.240118,
+    "ast_hash": "b1d40c1a93d4739f4bb5c7b369fd50fb",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/paths.py": {
+    "mtime": 1788522056.9420483,
+    "ast_hash": "9cd50f1be31f6e5ab03b0641e13e4c8a",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/pdf_import.py": {
+    "mtime": 1788533073.7316465,
+    "ast_hash": "c68f7f63522533ee6ada33eff475a8e5",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/ui/__init__.py": {
+    "mtime": 1788522056.9445596,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/ui/camera_worker.py": {
+    "mtime": 1788776574.9484277,
+    "ast_hash": "fab70afa52439660ecab3c0a8192263b",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/ui/canvas.py": {
+    "mtime": 1788777488.5794861,
+    "ast_hash": "16377d48585527be48bc0151a7ace387",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/ui/cursors.py": {
+    "mtime": 1788769880.5287247,
+    "ast_hash": "d1f556cfa69a0d367a11446fb90d5705",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/ui/hint_zone.py": {
+    "mtime": 1788769880.5315268,
+    "ast_hash": "2b8df6a0f1157c1ec9278d1dc00f1694",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/ui/main_window.py": {
+    "mtime": 1788856720.5264184,
+    "ast_hash": "3193387b56b17ba977576d9074ce529d",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/ui/pen_settings.py": {
+    "mtime": 1788769880.5345316,
+    "ast_hash": "0d299641a3df56f71b29bb2a23f67f75",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/ui/question_zone.py": {
+    "mtime": 1788769880.5365312,
+    "ast_hash": "1a6662689b8bc8578f0b133dc79b6767",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/ui/record_badge.py": {
+    "mtime": 1788856720.5274172,
+    "ast_hash": "c16fd274c1a568b92f1ef0d2bfcb3df2",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/ui/settings_dialog.py": {
+    "mtime": 1788856720.5294685,
+    "ast_hash": "80f35e346aba34e819b81a504e595577",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/ui/theme.py": {
+    "mtime": 1788770149.5215323,
+    "ast_hash": "c125ab942bdb441c16e94418f7420963",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/ui/toolbar.py": {
+    "mtime": 1788856720.530474,
+    "ast_hash": "5a9b432f5d299934adb9590c05cac84c",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/ui/webcam_panel.py": {
+    "mtime": 1788855476.5538585,
+    "ast_hash": "ae9f362a6771d92ec5cc74cedeed06cc",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/ui/widgets.py": {
+    "mtime": 1788768929.6653347,
+    "ast_hash": "24ee1874d3e0d921077b3be1ec63fca9",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/ui/work_area.py": {
+    "mtime": 1788856720.532473,
+    "ast_hash": "035304f6a19b7e2d388e51ec64f10be4",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/ui/zone.py": {
+    "mtime": 1788769880.5455315,
+    "ast_hash": "e3c9b60384a6998fa808e11b61107488",
+    "semantic_hash": ""
+  },
+  "support.js": {
+    "mtime": 1788517480.0,
+    "ast_hash": "951ae391b8ae72ef12e671c2fad23353",
+    "semantic_hash": ""
+  },
+  "tests/conftest.py": {
+    "mtime": 1788855476.5578587,
+    "ast_hash": "1d7c4247158b089e41d689b3629079b2",
+    "semantic_hash": ""
+  },
+  "tests/test_camera_worker.py": {
+    "mtime": 1788776574.9504268,
+    "ast_hash": "8ce39bb9732e78f2c3d4c40a9d1e5f56",
+    "semantic_hash": ""
+  },
+  "tests/test_cameras.py": {
+    "mtime": 1788855476.5588605,
+    "ast_hash": "d9501d3c012e61fde7626ee9ad596c93",
+    "semantic_hash": ""
+  },
+  "tests/test_canvas.py": {
+    "mtime": 1788777488.591005,
+    "ast_hash": "db58780b967666169503378d654ad83b",
+    "semantic_hash": ""
+  },
+  "tests/test_chroma_key.py": {
+    "mtime": 1788776574.9518979,
+    "ast_hash": "1c0d2063915d08d3c5cbcd6bf7322b63",
+    "semantic_hash": ""
+  },
+  "tests/test_cursors.py": {
+    "mtime": 1788768929.6748464,
+    "ast_hash": "f72742d9f999c3d2580a417e3069d7cc",
+    "semantic_hash": ""
+  },
+  "tests/test_layout_model.py": {
+    "mtime": 1788533073.7521582,
+    "ast_hash": "2524c513dd66342c8454175904b9a345",
+    "semantic_hash": ""
+  },
+  "tests/test_main_window.py": {
+    "mtime": 1788856720.5344737,
+    "ast_hash": "de8efd7cd8d1629136d0717ce9617af2",
+    "semantic_hash": ""
+  },
+  "tests/test_models.py": {
+    "mtime": 1788769880.5533805,
+    "ast_hash": "c9351ca95208e6e477d12aebde9f5b94",
+    "semantic_hash": ""
+  },
+  "tests/test_pdf_import.py": {
+    "mtime": 1788533073.75616,
+    "ast_hash": "df24076217b9184855780958a32407ce",
+    "semantic_hash": ""
+  },
+  "tests/test_pen_settings.py": {
+    "mtime": 1788769880.555133,
+    "ast_hash": "e5e948eac32609bde7009bcf3bb5e7f5",
+    "semantic_hash": ""
+  },
+  "tests/test_question_flow.py": {
+    "mtime": 1788533073.7606642,
+    "ast_hash": "df7264646bfffaf16247ccd87b725d24",
+    "semantic_hash": ""
+  },
+  "tests/test_question_loader.py": {
+    "mtime": 1788533073.7616644,
+    "ast_hash": "a0667ddef4941451b17a931abe48a39c",
+    "semantic_hash": ""
+  },
+  "tests/test_recorder.py": {
+    "mtime": 1788856720.5364742,
+    "ast_hash": "be1a9d15e37a6e9cddb84ddb41dea795",
+    "semantic_hash": ""
+  },
+  "tests/test_session_store.py": {
+    "mtime": 1788525402.261232,
+    "ast_hash": "d10a837cbc9ebd6f933525360c7b6d0e",
+    "semantic_hash": ""
+  },
+  "tests/test_settings.py": {
+    "mtime": 1788856720.5379808,
+    "ast_hash": "b40c2fb31549033a7a2c59a9665e6398",
+    "semantic_hash": ""
+  },
+  "tests/test_settings_dialog.py": {
+    "mtime": 1788856720.5399873,
+    "ast_hash": "b10f93f5c8bf49d13019d82d65f1cd19",
+    "semantic_hash": ""
+  },
+  "tests/test_stroke.py": {
+    "mtime": 1788525402.2622323,
+    "ast_hash": "b7ca43a73d85bd6398a2a9a77f875efd",
+    "semantic_hash": ""
+  },
+  "tests/test_theme.py": {
+    "mtime": 1788525402.2632313,
+    "ast_hash": "f3640950083c6e59a403f4c6cb500bed",
+    "semantic_hash": ""
+  },
+  "tests/test_toolbar.py": {
+    "mtime": 1788777488.59683,
+    "ast_hash": "6446931ee1b9dc594efcafd712799928",
+    "semantic_hash": ""
+  },
+  "tests/test_webcam_panel.py": {
+    "mtime": 1788777488.5988348,
+    "ast_hash": "b27f3bc08ab45d78b426bc4c93dfd3ae",
+    "semantic_hash": ""
+  },
+  "tests/test_work_area.py": {
+    "mtime": 1788856720.541988,
+    "ast_hash": "d87b9ec1fb9edb1faf18762dbda45659",
+    "semantic_hash": ""
+  },
+  "tests/test_zones.py": {
+    "mtime": 1788769880.562045,
+    "ast_hash": "91349b834025f335495236f8518e4933",
+    "semantic_hash": ""
+  },
+  "Ogretim Platformu.dc.html": {
+    "mtime": 1788517480.0,
+    "ast_hash": "c4931d0f4bf8132b43f7febcb870ed29",
+    "semantic_hash": ""
+  },
+  "Ozellik Listesi.dc.html": {
+    "mtime": 1788517480.0,
+    "ast_hash": "e86681d4f39250efc3f0db62e6b4f8eb",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1788856720.511656,
+    "ast_hash": "cabb4dca8cb10624d2afef411014ae30",
+    "semantic_hash": ""
+  },
+  "docs/superpowers/plans/2026-09-04-gorunus-demosu.md": {
+    "mtime": 1788522056.7579637,
+    "ast_hash": "13915e0500da7f4445bdefa70298ac50",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/assets/fonts/OFL.txt": {
+    "mtime": 1788525402.232113,
+    "ast_hash": "e3a1cc2721b8b8b106d53b45d4e608c0",
+    "semantic_hash": ""
+  },
+  "sorular_gorsel/S07.png": {
+    "mtime": 1788533073.7158759,
+    "ast_hash": "23026cc5d4211336cfc87574bc0b99b5",
+    "semantic_hash": ""
+  },
+  "sorular_gorsel/S08.png": {
+    "mtime": 1788533073.7178762,
+    "ast_hash": "67f11009de9a83ab869d1bb2444754c2",
+    "semantic_hash": ""
+  },
+  "uploads/Sketch_Input_202609041256.jpeg": {
+    "mtime": 1788517480.0,
+    "ast_hash": "a187e81ec178322d77a268051e7fe938",
+    "semantic_hash": ""
+  },
+  "uploads/Sketch_Refined_-_1._alan_202609041256 (1).jpeg": {
+    "mtime": 1788517480.0,
+    "ast_hash": "9b713541015f4e9c0114d665e1231eba",
+    "semantic_hash": ""
+  },
+  "uploads/Sketch_Refined_-_1._alan_202609041256.jpeg": {
+    "mtime": 1788517480.0,
+    "ast_hash": "6e105f86cc2b669ca0c740b08c9f9051",
+    "semantic_hash": ""
+  },
+  "uploads/UI_design_layout_specifications_202609041256.jpeg": {
+    "mtime": 1788517480.0,
+    "ast_hash": "b0bcfc698d040431b4d42cde945062f3",
+    "semantic_hash": ""
+  }
+}

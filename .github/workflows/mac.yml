@@ -1,0 +1,28 @@
+name: macOS paketi
+
+# Apple Silicon runner'da .app üretir. Çalıştırma: GitHub > Actions > "macOS paketi" > Run workflow,
+# ya da v* etiketi push edilince. Çıktı: Artifacts altında "Matematigin-Mantigi-macOS.zip".
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: macos-14            # arm64 (M1)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Paketle (.venv + testler + PyInstaller)
+        run: bash mac/build_mac.sh
+      - name: Zip
+        run: |
+          cd dist
+          ditto -c -k --sequesterRsrc --keepParent "Matematiğin Mantığı.app" "Matematigin-Mantigi-macOS.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Matematigin-Mantigi-macOS
+          path: dist/Matematigin-Mantigi-macOS.zip
+          if-no-files-found: error

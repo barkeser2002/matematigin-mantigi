@@ -7,6 +7,10 @@ cd "$(dirname "$0")/.."
 
 PY=${PYTHON:-python3}
 echo "== Python: $($PY -c 'import sys, platform; print(sys.version.split()[0], platform.machine())')"
+if ! "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'; then
+  echo "HATA: Python 3.11+ gerekir. Örn: brew install python@3.12 && PYTHON=python3.12 bash mac/build_mac.sh" >&2
+  exit 1
+fi
 if [ "$($PY -c 'import platform; print(platform.machine())')" != "arm64" ]; then
   echo "UYARI: arm64 Python değil (Rosetta?). Apple Silicon'da arm64 Python kullanın." >&2
 fi

@@ -30,14 +30,14 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz, a.scripts, [],
     exclude_binaries=True,
-    name="Matematiğin Mantığı",
+    name="MatematiginMantigi",          # ikili adı ASCII; görünen ad Info.plist'te
     debug=False,
     strip=False,
     upx=False,
     console=False,
     target_arch="arm64",
 )
-coll = COLLECT(exe, a.binaries, a.zipfiles, a.datas, strip=False, upx=False, name="Matematiğin Mantığı")
+coll = COLLECT(exe, a.binaries, a.zipfiles, a.datas, strip=False, upx=False, name="MatematiginMantigi")
 app = BUNDLE(
     coll,
     name="Matematiğin Mantığı.app",
@@ -45,6 +45,7 @@ app = BUNDLE(
     bundle_identifier="com.matematiginmantigi.tahta",
     info_plist={
         "CFBundleDisplayName": "Matematiğin Mantığı",
+        "CFBundleName": "Matematiğin Mantığı",
         "CFBundleShortVersionString": "0.1.0",
         "NSHighResolutionCapable": True,
         "LSMinimumSystemVersion": "12.0",

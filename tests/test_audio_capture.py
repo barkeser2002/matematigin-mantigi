@@ -52,13 +52,12 @@ def test_capture_writes_wav_and_measures_first_sample(tmp_path, monkeypatch):
                 currentTime = 0.0
             block = np.full((int(self.rate * 0.02), self.channels), 1000, np.int16)
             for _ in range(25):                        # sabit 25 blok = 0,5 sn ses; duvar saatine bağlı değil
-                if not self._run.is_set():
-                    break
                 self.cb(block, len(block), TI(), None)
-                time.sleep(0.005)
+                time.sleep(0.002)
 
         def stop(self):
-            self._run.clear(); self._t.join(1)
+            self._t.join(10)                           # tüm bloklar beslenmeden durmaz (yavaş CI'da da aynı sonuç)
+            self._run.clear()
 
         def close(self):
             pass
@@ -78,7 +77,7 @@ def test_capture_writes_wav_and_measures_first_sample(tmp_path, monkeypatch):
     cap = ac.AudioCapture("MacBook Pro Microphone")
     before = time.monotonic()
     cap.start(tmp_path / "a.wav")
-    time.sleep(0.4)
+    time.sleep(0.1)
     res = cap.stop()
     assert res.samplerate == 48000 and res.channels == 1
     # ilk örnek zamanı = geri çağrı anı - (sürücü gecikmesi + blok süresi 20 ms)

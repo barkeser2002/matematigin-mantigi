@@ -123,8 +123,12 @@ dshow, macOS avfoundation) seçilir. Süre araç çubuğundaki DURDUR düğmesin
 "KAYIT · 00:00" rozeti varsayılan kapalıdır (kayda girer), Görünürlük'ten açılabilir.
 Kodlayıcı otomatik seçilir: macOS'ta VideoToolbox, Windows'ta NVENC/QSV/AMF, yoksa libx264 (ultrafast). Yakalama ayrı iş
 parçacığında koşar; yakalama fps'nin altında kalırsa kareler çoğaltılır, video süresi her zaman gerçek zamanla aynıdır.
-Mikrofon girişi büyük kuyrukla (`-thread_queue_size 8192`) ve `aresample=async=1` ile alınır: video borusu bir an
-geciktiğinde ses örneği düşmez (cızırtı yok) ve ses zamanla kaymaz; 48 kHz stereo AAC 160 kb/s.
+Mikrofon ffmpeg'e değil, uygulama içinde PortAudio (sounddevice) ile alınır: ffmpeg'in avfoundation girişi tek
+tampon tutar ve video karesi geciktiğinde onu düşürür (cızırtı, birikince kayma). PortAudio geri çağrısı örnekleri
+dakikalarca yer olan bir kuyruğa koyar, ayrı iş parçacığı WAV yazar; ilk örneğin zamanı ölçülür. Durdurunca ffmpeg
+videoyu kopyalayıp sesi ölçülen farkla hizalar (48 kHz AAC 160 kb/s), ara `.video.mp4`/`.wav` dosyaları silinir;
+10 dakikadan uzun kayıtlarda mikrofon saati kayması da (ppm düzeyi) `asetrate` ile düzeltilir. ffmpeg'in çıktısı
+`kayit_<saat>.log` dosyasına gider. Durdurma birkaç saniye sürebilir; arayüz "Kayıt kapatılıyor…" der ve donmaz.
 Durdurunca durum satırı gerçek yakalama hızını yazar (Windows'ta GDI ~30 kare/sn ile sınırlar; macOS CoreGraphics daha hızlıdır).
 macOS'ta ilk kayıtta "Ekran Kaydı" izni istenir (Sistem Ayarları > Gizlilik ve Güvenlik); izin verilmezse kare siyah gelir.
 

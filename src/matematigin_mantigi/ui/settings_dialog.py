@@ -194,9 +194,9 @@ class SettingsDialog(QDialog):
             self.logo_path_edit.setText(path)
 
     def _list_audio(self) -> None:
-        from matematigin_mantigi.core.recorder import list_audio_devices
+        from matematigin_mantigi.core.audio_capture import list_input_devices
         current = self.audio_combo.currentText().strip()
-        names = list_audio_devices()
+        names = list_input_devices()
         self.audio_combo.clear()
         self.audio_combo.addItem("(ses yok)", "")
         for n in names:

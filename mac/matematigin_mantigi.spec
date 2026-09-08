@@ -19,7 +19,7 @@ a = Analysis(
         (str(ROOT / "sorular_sablon.xlsx"), "."),
         (str(ROOT / "sorular_gorsel"), "sorular_gorsel"),
     ],
-    hiddenimports=["PyQt6.QtTest", "openpyxl", "cv2", "numpy", "pymupdf", "mss", "imageio_ffmpeg"],
+    hiddenimports=["PyQt6.QtTest", "openpyxl", "cv2", "numpy", "pymupdf", "mss", "imageio_ffmpeg", "sounddevice", "_sounddevice_data"],
     hookspath=[],
     runtime_hooks=[],
     excludes=["tkinter", "matplotlib", "scipy", "pandas", "PIL.ImageQt"],

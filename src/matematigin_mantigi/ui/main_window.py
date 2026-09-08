@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Sequence
 
+from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QKeySequence, QShortcut
 from PyQt6.QtWidgets import QHBoxLayout, QMainWindow, QMessageBox, QWidget
 
@@ -27,6 +28,24 @@ from matematigin_mantigi.ui.theme import FontFamilies
 from matematigin_mantigi.ui.toolbar import ToolBar
 from matematigin_mantigi.ui.webcam_panel import WebcamPanel
 from matematigin_mantigi.ui.work_area import WorkArea
+
+
+class _StopWorker(QThread):
+    """recorder.stop() birkaç saniye sürebilir (ffmpeg kapanışı + ses birleştirme); arayüzü dondurmasın."""
+    done = pyqtSignal(object)
+
+    def __init__(self, recorder, parent=None):
+        super().__init__(parent)
+        self.recorder = recorder
+        self.exc: str | None = None
+
+    def run(self) -> None:
+        path = None
+        try:
+            path = self.recorder.stop()
+        except Exception as err:  # noqa: BLE001
+            self.exc = str(err)
+        self.done.emit(path)
 
 
 class MainWindow(QMainWindow):
@@ -89,6 +108,7 @@ class MainWindow(QMainWindow):
         self.work_area.editModeChanged.connect(tb.set_layout_edit)
         self.work_area.layoutChanged.connect(lambda lay: lm.save_layout(self.layout_path, lay))
         self.badge.ticked.connect(tb.set_recording_time)     # süre araç çubuğunda sayar (kayda girmez)
+        self.badge.ticked.connect(self._check_recorder)
 
         c.historyChanged.connect(lambda can_undo, _e: tb.set_undo_enabled(can_undo))
         c.pressureChanged.connect(lambda p: self._status(f"XP-Pen · {p:.2f}"))
@@ -231,19 +251,49 @@ class MainWindow(QMainWindow):
             self.badge.start()
             self.work_area.relayout()
         elif not on and self.recorder.is_recording:
-            path = self.recorder.stop()
             self.badge.stop()
             self.work_area.relayout()
-            err = getattr(self.recorder, "error", None)
-            if err:
-                QMessageBox.warning(self, "Kayıt hatası", err)
-            elif path is not None:
-                cap = getattr(self.recorder, "capture_fps", 0.0)
-                extra = f" · yakalama ~{cap:.0f} kare/sn" if cap else ""
-                self.work_area.set_status(f"Kayıt kaydedildi: {path}{extra}")
+            if getattr(self.recorder, "stop_is_quick", False):
+                self._on_record_stopped(self.recorder.stop())
+            else:
+                self.toolbar.set_recording(False)
+                self.toolbar.record_button.setEnabled(False)
+                self.work_area.set_status("Kayıt kapatılıyor, ses birleştiriliyor…")
+                self._stop_worker = _StopWorker(self.recorder, self)
+                self._stop_worker.done.connect(self._on_record_stopped)
+                self._stop_worker.start()
+                return
         self.toolbar.set_recording(self.recorder.is_recording)
         if self.recorder.is_recording:
             self.toolbar.set_recording_time(self.badge.seconds)
+
+    def _on_record_stopped(self, path) -> None:
+        self.toolbar.record_button.setEnabled(True)
+        self.toolbar.set_recording(False)
+        worker = getattr(self, "_stop_worker", None)
+        err = (worker.exc if worker is not None and worker.exc else None) or getattr(self.recorder, "error", None)
+        audio_err = getattr(self.recorder, "audio_error", None)
+        if err:
+            QMessageBox.warning(self, "Kayıt hatası", err)
+            return
+        if path is None:
+            return
+        cap = getattr(self.recorder, "capture_fps", 0.0)
+        parts = [f"yakalama ~{cap:.0f} kare/sn"] if cap else []
+        off = getattr(self.recorder, "av_offset_ms", None)
+        if off is not None:
+            parts.append(f"ses hizası {off:+.0f} ms telafi edildi")
+        res = getattr(self.recorder, "audio_result", None)
+        if res is not None and (res.overflows or res.dropped_blocks):
+            parts.append(f"ses taşması {res.overflows + res.dropped_blocks}")
+        if audio_err:
+            parts.append(f"UYARI: {audio_err}")
+        self.work_area.set_status(f"Kayıt kaydedildi: {path}" + (" · " + " · ".join(parts) if parts else ""))
+
+    def _check_recorder(self, _seconds: int) -> None:
+        """Yazıcı borusu koptuysa (ffmpeg çöktü) kaydı hemen kapat ve kullanıcıya söyle."""
+        if getattr(self.recorder, "failed", False) and self.recorder.is_recording:
+            self.toggle_recording(False)
 
     def open_pen_settings(self) -> None:
         dlg = PenSettingsDialog(self.settings.pen(), self.canvas.color, self.canvas.base_width, self.fam, self)
@@ -307,6 +357,8 @@ class MainWindow(QMainWindow):
                 setattr(self.recorder, attr, val)
 
     def closeEvent(self, e):
+        if self.recorder.is_recording:
+            self.recorder.stop()                 # pencere kapanırken kayıt dosyası tamamlansın
         self.webcam_panel.shutdown()
         self.settings.sync()
         super().closeEvent(e)

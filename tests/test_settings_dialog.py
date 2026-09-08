@@ -69,8 +69,8 @@ def test_camera_scan_fills_combo(qtbot, ini_settings, monkeypatch):
 
 
 def test_record_and_logo_size_fields(qtbot, ini_settings, monkeypatch):
-    from matematigin_mantigi.core import recorder as r
-    monkeypatch.setattr(r, "list_audio_devices", lambda *a, **k: ["Mikrofon (USB)", "Steam Mic"])
+    from matematigin_mantigi.core import audio_capture as ac
+    monkeypatch.setattr(ac, "list_input_devices", lambda *a, **k: ["Mikrofon (USB)", "Steam Mic"])
     d = SettingsDialog(ini_settings, FAM)
     qtbot.addWidget(d)
     v = d.value()

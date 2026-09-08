@@ -202,6 +202,8 @@ def test_real_recorder_through_window(window, qtbot, tmp_path):
     assert window.recorder.is_recording
     time.sleep(0.5)
     window.toggle_recording(False)
+    assert not window.toolbar.record_button.isEnabled()          # kapanış ayrı iş parçacığında
+    qtbot.waitUntil(lambda: window.toolbar.record_button.isEnabled(), timeout=15000)
     assert window.recorder.last_path.exists() and "Kayıt kaydedildi" in window.work_area.status_label.text()
 
 

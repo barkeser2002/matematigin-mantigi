@@ -76,7 +76,7 @@ def window(qtbot, tmp_path, ini_settings, dead_camera):
     from matematigin_mantigi.ui.theme import FontFamilies
     ini_settings.set_pen(PenSettings(reading_ms=0))      # testlerde okuma animasyonu kapalı
     win = MainWindow(FontFamilies("Arial", "Arial", False), list(SAMPLE_QUESTIONS), ini_settings,
-                     NullRecorder(), SessionStore(tmp_path / "oturum"), lambda: dead_camera,
+                     NullRecorder(), SessionStore(tmp_path / "oturum"), lambda index: dead_camera,
                      tmp_path / "duzen.json")
     qtbot.addWidget(win)
     win.resize(1920, 1080)

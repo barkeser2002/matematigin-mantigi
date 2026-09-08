@@ -19,6 +19,7 @@ VISIBILITY_KEYS: tuple[tuple[str, str], ...] = (
     ("question_number", "Soru numarası"),
     ("frame", "Ekran çerçevesi"),
     ("presenter", "Sunucu adı (webcam üstünde)"),
+    ("logo", "Logo (sol üst)"),
 )
 
 
@@ -95,6 +96,11 @@ class AppSettings:
     def font_file(self) -> str: return self._str("ui/font_file", "")
     @font_file.setter
     def font_file(self, path: str) -> None: self._q.setValue("ui/font_file", path or "")
+
+    @property
+    def logo_file(self) -> str: return self._str("ui/logo_file", "")
+    @logo_file.setter
+    def logo_file(self, path: str) -> None: self._q.setValue("ui/logo_file", path or "")
 
     @property
     def presenter_name(self) -> str: return self._str("ui/presenter_name", "Koray Varol")

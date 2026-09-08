@@ -34,9 +34,10 @@ def test_ui_settings_round_trip(tmp_path):
     path = str(tmp_path / "ui.ini")
     s = AppSettings(QSettings(path, QSettings.Format.IniFormat))
     assert s.auto_key is True and s.font_file == "" and s.visible("status") is True
-    s.auto_key = False; s.font_file = r"C:\fonts\Ozel.ttf"; s.set_visible("status", False); s.sync()
+    s.auto_key = False; s.font_file = r"C:\fonts\Ozel.ttf"; s.set_visible("status", False)
+    s.logo_file = r"C:\logo.png"; s.sync()
     t = AppSettings(QSettings(path, QSettings.Format.IniFormat))
-    assert t.auto_key is False and t.font_file == r"C:\fonts\Ozel.ttf"
+    assert t.auto_key is False and t.font_file == r"C:\fonts\Ozel.ttf" and t.logo_file == r"C:\logo.png"
     assert t.visible("status") is False and t.visible("brand") is True
 
 

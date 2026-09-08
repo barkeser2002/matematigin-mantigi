@@ -187,13 +187,35 @@ def test_restores_settings_on_start(qtbot, tmp_path, ini_settings, dead_camera):
     ini_settings.hint_mask = HintMaskMode.REDACT; ini_settings.chroma_enabled = False
     ini_settings.set_pen(PenSettings(reading_ms=0))
     win = MainWindow(FontFamilies("Arial", "Arial", False), list(SAMPLE_QUESTIONS), ini_settings,
-                     NullRecorder(), SessionStore(tmp_path / "o"), lambda: dead_camera, tmp_path / "d.json")
+                     NullRecorder(), SessionStore(tmp_path / "o"), lambda index: dead_camera, tmp_path / "d.json")
     qtbot.addWidget(win)
     assert win.canvas.tool == Tool.LASER and win.canvas.color.name() == "#1f8a4c" and win.canvas.base_width == 2
     assert win.toolbar.tool_buttons[Tool.LASER].isChecked() and win.toolbar.width_buttons[2].isChecked()
     assert win.hint_zone.mask_mode == HintMaskMode.REDACT
     assert win.webcam_panel.chroma_enabled is False           # Ayarlar'daki perde anahtarı geri gelir
     assert win.question_zone.reading_ms == 0 and not win.question_zone.is_animating
+
+
+def test_settings_camera_change_restarts_worker_and_logo(window, qtbot, tmp_path, monkeypatch):
+    from PyQt6.QtGui import QImage
+    from matematigin_mantigi.ui import settings_dialog as sd
+    img = QImage(80, 80, QImage.Format.Format_RGB32); img.fill(Qt.GlobalColor.blue)
+    logo = tmp_path / "logo.png"; img.save(str(logo))
+    old_worker = window.webcam_panel.worker
+    seen = []
+    window.camera_source_factory = lambda index: (seen.append(index), window.camera_source_factory_dead)[1]
+    window.camera_source_factory_dead = old_worker._source
+
+    def fake_exec(self):
+        self.logo_path_edit.setText(str(logo))
+        self.camera_combo.addItem("Kamera 2", 2); self.camera_combo.setCurrentIndex(self.camera_combo.count() - 1)
+        self._apply()
+        return 1
+    monkeypatch.setattr(sd.SettingsDialog, "exec", fake_exec)
+    qtbot.mouseClick(window.toolbar.settings_button, Qt.MouseButton.LeftButton)
+    assert window.settings.camera_index == 2 and seen == [2]
+    assert window.webcam_panel.worker is not old_worker
+    assert window.work_area.logo_is_file and window.settings.logo_file == str(logo)
 
 
 def test_close_is_clean(window):
@@ -279,7 +301,7 @@ def test_visibility_and_font_restored_on_start(qtbot, tmp_path, ini_settings, de
     ini_settings.set_visible("brand", False); ini_settings.set_visible("hide_link", False)
     ini_settings.font_file = str(caveat)
     win = MainWindow(FontFamilies("Arial", "Arial", False), list(SAMPLE_QUESTIONS), ini_settings,
-                     NullRecorder(), SessionStore(tmp_path / "o"), lambda: dead_camera, tmp_path / "d.json")
+                     NullRecorder(), SessionStore(tmp_path / "o"), lambda index: dead_camera, tmp_path / "d.json")
     qtbot.addWidget(win); win.show()
     assert win.work_area.brand.isHidden() and win.question_zone.hide_link.isHidden()
     assert win.question_zone.text_label.font().family() == "Caveat"

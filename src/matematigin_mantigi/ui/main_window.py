@@ -32,8 +32,10 @@ from matematigin_mantigi.ui.work_area import WorkArea
 class MainWindow(QMainWindow):
     def __init__(self, fam: FontFamilies, questions: Sequence[Question], settings: AppSettings,
                  recorder: Recorder, session_store: SessionStore,
-                 camera_source_factory: Callable[[], FrameSource] | None, layout_path: Path, parent=None):
+                 camera_source_factory: Callable[[int], FrameSource] | None, layout_path: Path, parent=None):
+        """camera_source_factory: kamera indeksinden kaynak üretir; None ise kamera açılmaz."""
         super().__init__(parent)
+        self.camera_source_factory = camera_source_factory
         self.base_fam = fam                       # paketle gelen aile; Ayarlar'daki dosya bunun üstüne biner
         self.fam, self.settings, self.recorder, self.session_store = fam, settings, recorder, session_store
         self.layout_path = Path(layout_path)
@@ -47,8 +49,9 @@ class MainWindow(QMainWindow):
         self.question_zone = QuestionZone(fam)
         self.hint_zone = HintZone(fam)
         # Yeşil perde ayarı Ayarlar penceresinden; varsayılan kaldırılmış.
-        self.webcam_panel = WebcamPanel(fam, camera_source_factory or (lambda: _NoCamera()),
-                                        settings.chroma, chroma_enabled=settings.chroma_enabled)
+        cam_index = settings.camera_index
+        factory = (lambda: camera_source_factory(cam_index)) if camera_source_factory else (lambda: _NoCamera())
+        self.webcam_panel = WebcamPanel(fam, factory, settings.chroma, chroma_enabled=settings.chroma_enabled)
         for key, zone in (("soru", self.question_zone), ("ipucu", self.hint_zone), ("webcam", self.webcam_panel)):
             self.work_area.add_zone(key, zone)
         self.work_area.set_layout(lm.load_layout(self.layout_path))
@@ -245,6 +248,12 @@ class MainWindow(QMainWindow):
         s.auto_key = v.auto_key
         s.chroma_enabled = v.chroma_enabled
         s.presenter_name = v.presenter_name
+        s.logo_file = v.logo_file
+        if v.camera_index != s.camera_index:
+            s.camera_index = v.camera_index
+            if self.camera_source_factory is not None:
+                idx = v.camera_index
+                self.webcam_panel.set_source_factory(lambda: self.camera_source_factory(idx))
         for key, on in v.visible.items():
             s.set_visible(key, on)
         self.apply_ui_settings()
@@ -268,6 +277,8 @@ class MainWindow(QMainWindow):
         self.question_zone.set_number_visible(s.visible("question_number"))
         self.work_area.set_frame_visible(s.visible("frame"))
         self.work_area.set_presenter_name(s.presenter_name if s.visible("presenter") else "")
+        self.work_area.set_logo(s.logo_file)
+        self.work_area.logo_label.setVisible(s.visible("logo"))
 
     def closeEvent(self, e):
         self.webcam_panel.shutdown()

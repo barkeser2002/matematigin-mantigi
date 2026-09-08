@@ -40,10 +40,9 @@ def build_window(args: argparse.Namespace, fam: theme.FontFamilies, settings: Ap
     settings = settings or AppSettings()
     template = Path(args.sorular) if args.sorular else paths.default_template_path()
     questions = load_questions_or_samples(template)
-    cam_index = settings.camera_index if args.kamera is None else args.kamera
     if args.kamera is not None:
         settings.camera_index = args.kamera
-    factory = None if args.kamera_yok else (lambda: OpenCvSource(cam_index))
+    factory = None if args.kamera_yok else (lambda index: OpenCvSource(index))
     layout_path = Path(args.duzen) if args.duzen else Path.cwd() / "duzen.json"
     win = MainWindow(fam, questions, settings, NullRecorder(), SessionStore(), factory, layout_path)
     win.resize(1920, 1080)

@@ -42,6 +42,32 @@ def test_choose_font_file_and_default(qtbot, ini_settings, tmp_path, monkeypatch
     assert d.value().font_file == ""
 
 
+def test_logo_choose_and_clear(qtbot, ini_settings, tmp_path, monkeypatch):
+    logo = tmp_path / "logo.png"; logo.write_bytes(b"\0")
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(logo), "")))
+    d = SettingsDialog(ini_settings, FAM)
+    qtbot.addWidget(d)
+    qtbot.mouseClick(d.choose_logo_button, Qt.MouseButton.LeftButton)
+    assert d.value().logo_file == str(logo)
+    qtbot.mouseClick(d.clear_logo_button, Qt.MouseButton.LeftButton)
+    assert d.value().logo_file == ""
+
+
+def test_camera_scan_fills_combo(qtbot, ini_settings, monkeypatch):
+    from matematigin_mantigi.core import cameras
+    ini_settings.camera_index = 1
+    monkeypatch.setattr(cameras, "list_cameras", lambda max_index=6: [cameras.CameraInfo(0, 640, 480),
+                                                                        cameras.CameraInfo(1, 1280, 720)])
+    d = SettingsDialog(ini_settings, FAM)
+    qtbot.addWidget(d)
+    assert d.value().camera_index == 1                             # taramadan önce kayıtlı indeks
+    qtbot.mouseClick(d.scan_button, Qt.MouseButton.LeftButton)
+    assert d.camera_combo.count() == 2 and d.value().camera_index == 1
+    assert d.camera_combo.currentText() == "Kamera 1 (1280×720)"
+    d.camera_combo.setCurrentIndex(0)
+    assert d.value().camera_index == 0
+
+
 def test_apply_emits_values(qtbot, ini_settings):
     d = SettingsDialog(ini_settings, FAM)
     qtbot.addWidget(d)

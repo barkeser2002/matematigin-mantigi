@@ -5,7 +5,7 @@ Düzen sınırları ve ızgara sadece düzen modunda görünür.
 from __future__ import annotations
 
 from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QLinearGradient, QMouseEvent, QPainter, QPen
+from PyQt6.QtGui import QBrush, QColor, QLinearGradient, QMouseEvent, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 from matematigin_mantigi.core import layout_model as lm
@@ -126,6 +126,13 @@ class WorkArea(QWidget):
 
         self.overlay = _EditOverlay(self)
 
+        # logo: sol üst köşe; dosya yoksa "MM" monogramı (en son: set_logo relayout çağırır)
+        self.logo_label = QLabel(self)
+        self.logo_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.logo_is_file = False
+        self.set_logo("")
+
     # --- zones & layout ----------------------------------------------------
     def add_zone(self, key: str, zone: Zone) -> None:
         zone.key = key
@@ -174,6 +181,27 @@ class WorkArea(QWidget):
         self.relayout()
         self.update()
 
+    LOGO_SIZE = 64
+
+    def set_logo(self, path: str) -> None:
+        """PNG/JPG logo; boşsa veya yüklenemezse yuvarlak 'MM' monogramı."""
+        pm = QPixmap(path) if path else QPixmap()
+        self.logo_is_file = not pm.isNull()
+        if self.logo_is_file:
+            pm = pm.scaled(self.LOGO_SIZE, self.LOGO_SIZE, Qt.AspectRatioMode.KeepAspectRatio,
+                           Qt.TransformationMode.SmoothTransformation)
+            self.logo_label.setText(""); self.logo_label.setStyleSheet("background: transparent;")
+            self.logo_label.setPixmap(pm)
+            self.logo_label.setFixedSize(pm.size())
+        else:
+            self.logo_label.setPixmap(QPixmap())
+            self.logo_label.setText("MM")
+            self.logo_label.setFont(theme.hand_font(self.fam, 26, 700))
+            self.logo_label.setFixedSize(self.LOGO_SIZE, self.LOGO_SIZE)
+            self.logo_label.setStyleSheet(f"color: {theme.PANEL_SOFT}; background: {theme.INK};"
+                                          f" border: 2px solid {theme.HINT_CARD_BORDER}; border-radius: {self.LOGO_SIZE // 2}px;")
+        self.relayout()
+
     def set_presenter_name(self, text: str) -> None:
         self.name_label.setText(text)
         self.name_label.setVisible(bool(text.strip()))
@@ -207,6 +235,8 @@ class WorkArea(QWidget):
         self.brand.adjustSize()
         self.brand.move((self.width() - self.brand.width()) // 2, 0)
         self.brand.raise_()
+        self.logo_label.move(inner.x() + 10, inner.y() + 8)
+        self.logo_label.raise_()
         webcam = self._zones.get("webcam")
         anchor = webcam.geometry() if webcam is not None else inner
         self.name_label.adjustSize()

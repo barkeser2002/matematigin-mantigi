@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import (QCheckBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-                             QSlider, QVBoxLayout)
+from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+                             QPushButton, QSlider, QVBoxLayout)
 
 from matematigin_mantigi.core.settings import VISIBILITY_KEYS, AppSettings
 from matematigin_mantigi.ui import theme
@@ -20,6 +20,8 @@ class SettingsValues:
     auto_key: bool = True
     chroma_enabled: bool = True
     presenter_name: str = "Koray Varol"
+    logo_file: str = ""
+    camera_index: int = 0
     visible: dict[str, bool] = field(default_factory=dict)
 
 
@@ -68,6 +70,31 @@ class SettingsDialog(QDialog):
         self._refresh_reading()
         root.addWidget(speed_card)
 
+        logo_card, lcol = _card("Logo (sol üst)", fam)
+        row = QHBoxLayout()
+        self.logo_path_edit = QLineEdit(settings.logo_file); self.logo_path_edit.setReadOnly(True)
+        self.logo_path_edit.setPlaceholderText("Seçilmezse 'MM' monogramı")
+        self.choose_logo_button = QPushButton("Dosya seç…"); self.choose_logo_button.setObjectName("pill")
+        self.clear_logo_button = QPushButton("Kaldır"); self.clear_logo_button.setObjectName("pill")
+        self.choose_logo_button.clicked.connect(self._choose_logo)
+        self.clear_logo_button.clicked.connect(lambda: self.logo_path_edit.setText(""))
+        row.addWidget(self.logo_path_edit, 1); row.addWidget(self.choose_logo_button); row.addWidget(self.clear_logo_button)
+        lcol.addLayout(row)
+        root.addWidget(logo_card)
+
+        cam_sel_card, kcol = _card("Kamera", fam)
+        row = QHBoxLayout()
+        self.camera_combo = QComboBox()
+        self.camera_combo.addItem(f"Kamera {settings.camera_index} (kayıtlı)", settings.camera_index)
+        self.scan_button = QPushButton("Kameraları tara"); self.scan_button.setObjectName("pill")
+        self.scan_button.clicked.connect(self._scan_cameras)
+        row.addWidget(self.camera_combo, 1); row.addWidget(self.scan_button)
+        kcol.addLayout(row)
+        self.camera_note = QLabel("Tarama birkaç saniye sürer; kare veren cihazlar listelenir.")
+        self.camera_note.setFont(theme.font(fam, 10, 400)); self.camera_note.setStyleSheet(f"color: {theme.MUTED};")
+        kcol.addWidget(self.camera_note)
+        root.addWidget(cam_sel_card)
+
         name_card, ncol = _card("Sunucu adı (el yazısı, webcam üstünde)", fam)
         self.presenter_edit = QLineEdit(settings.presenter_name)
         self.presenter_edit.setPlaceholderText("Boş bırakılırsa gösterilmez")
@@ -102,6 +129,24 @@ class SettingsDialog(QDialog):
         if path:
             self.font_path_edit.setText(path)
 
+    def _choose_logo(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Logo dosyası", "", "Görsel (*.png *.jpg *.jpeg)")
+        if path:
+            self.logo_path_edit.setText(path)
+
+    def _scan_cameras(self) -> None:
+        from matematigin_mantigi.core.cameras import list_cameras
+        current = self.camera_combo.currentData()
+        cams = list_cameras()
+        self.camera_combo.clear()
+        for cam in cams:
+            self.camera_combo.addItem(cam.label, cam.index)
+        if not cams:
+            self.camera_combo.addItem(f"Kamera {current} (bulunamadı)", current)
+        idx = self.camera_combo.findData(current)
+        self.camera_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.camera_note.setText(f"{len(cams)} kamera bulundu." if cams else "Kamera bulunamadı; bağlantı ve izinleri kontrol et.")
+
     def _refresh_reading(self, *_) -> None:
         v = self.reading_slider.value()
         self.reading_value.setText("kapalı" if v == 0 else f"{v} ms/harf")
@@ -112,6 +157,8 @@ class SettingsDialog(QDialog):
                               auto_key=self.auto_key_check.isChecked(),
                               chroma_enabled=self.chroma_check.isChecked(),
                               presenter_name=self.presenter_edit.text().strip(),
+                              logo_file=self.logo_path_edit.text().strip(),
+                              camera_index=int(self.camera_combo.currentData() or 0),
                               visible={k: cb.isChecked() for k, cb in self.visibility_checks.items()})
 
     def _apply(self) -> None:

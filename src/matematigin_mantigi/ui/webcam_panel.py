@@ -77,11 +77,27 @@ class WebcamPanel(Zone):
         self.overlay_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         # İş parçacığı kurucuda oluşturulur; start() sadece başlatır. OpenCvSource open() öncesi kamera açmaz.
-        self.worker = CameraWorker(source_factory(), params, chroma_enabled, parent=self)
-        self.worker.frameReady.connect(lambda img: self.view.set_frame(img))
-        self.worker.opened.connect(self._on_opened)
-        self.worker.cameraError.connect(self._on_error)
+        self._auto_key = True
+        self.worker = self._make_worker(source_factory)
         self._refresh_overlay()
+
+    def _make_worker(self, source_factory: Callable[[], FrameSource]) -> CameraWorker:
+        w = CameraWorker(source_factory(), self._params, self.chroma_enabled, auto_key=self._auto_key, parent=self)
+        w.frameReady.connect(lambda img: self.view.set_frame(img))
+        w.opened.connect(self._on_opened)
+        w.cameraError.connect(self._on_error)
+        return w
+
+    def set_source_factory(self, source_factory: Callable[[], FrameSource]) -> None:
+        """Kamera değişimi: eski iş parçacığı durur, yenisi aynı ayarlarla başlar."""
+        was_running = self.worker.isRunning()
+        self.shutdown()
+        self.worker.deleteLater()
+        self.has_camera = False
+        self.view.set_placeholder("Kamera bekleniyor…")
+        self.worker = self._make_worker(source_factory)
+        if was_running:
+            self.worker.start()
 
     def _refresh_overlay(self) -> None:
         mode = "kaldırıldı" if self.chroma_enabled else "ham görüntü"
@@ -109,6 +125,7 @@ class WebcamPanel(Zone):
         self.worker.set_params(p)
 
     def set_auto_key(self, on: bool) -> None:
+        self._auto_key = on
         self.worker.set_auto_key(on)
 
     def _toggle(self) -> None:

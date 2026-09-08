@@ -21,8 +21,9 @@ Sayfa başına tek soru; "Sıradaki soru →" (N) ve "← Önceki soru" (P) ile 
 belirir, son harfler solarak gelir (varsayılan 40 ms/harf; ⚙ Ayarlar > "Soru yazma hızı", 0 = kapalı); tıklayınca
 tamamlanır. İpucu kartları blur veya redakte ile gizlidir, tıklanmadan açılmaz; açılırken bulanıklık 300 ms'de çözülür.
 
-⚙ Ayarlar: yazı tipi dosyası (.ttf/.otf; soru, seçenekler ve ipucu kartlarına uygulanır), soru yazma hızı, yeşil perde
-tonunun otomatik ölçümü (aç/kapat) ve tahtadaki yazısal öğelerin görünürlüğü: ipucu kontrolleri (1/3 ◀ ▶ Blur Redakte),
+⚙ Ayarlar: yazı tipi dosyası (.ttf/.otf; soru, seçenekler ve ipucu kartlarına uygulanır), logo dosyası (sol üst; yoksa
+"MM" monogramı), kamera seçimi ("Kameraları tara" kare veren cihazları listeler, seçim kalıcıdır), soru yazma hızı,
+yeşil perde (kaldır aç/kapat, tonun otomatik ölçümü) ve tahtadaki yazısal öğelerin görünürlüğü: ipucu kontrolleri (1/3 ◀ ▶ Blur Redakte),
 "AKILLI İPUÇLARI" başlığı, durum satırı, kamera etiketi, marka plakası, "gizle" bağlantısı, soru numarası.
 
 Araçlar: kalem (5 kalınlık: 1/2/4/8/12 px), silgi, lazer (izi 1,5 sn'de sönerek kaybolur), yazı (tıkla, yaz,
@@ -60,6 +61,18 @@ Yatay soru PDF'ini (sayfa başına 1 soru + AKILLI İPUÇLARI kartları) aktarma
 
 Soru metni, A–D seçenekleri, 3–4 ipucu ve şekiller (`sorular_gorsel/SNN.png`) alınır; `konu` ve `cevap` boş
 kalır, Excel'de doldurulur. `pymupdf` gerekir (`pip install pymupdf`).
+
+## macOS paketleme (.app)
+
+Mac'te proje kökünde:
+
+    bash mac/build_mac.sh
+
+Betik `.venv` kurar, tüm kütüphaneleri (`PyQt6, opencv-python, numpy, openpyxl, pymupdf, pytest, pyinstaller`)
+yükler, testleri koşar ve `dist/Matematiğin Mantığı.app` üretir. Kamera, mikrofon ve ekran kaydı izin metinleri
+(`NSCameraUsageDescription` vb.) `mac/matematigin_mantigi.spec` içinde gömülüdür; ilk açılışta macOS izin sorar.
+İmzasız uygulama için ilk açılış: sağ tık > Aç (veya `xattr -dr com.apple.quarantine "dist/Matematiğin Mantığı.app"`).
+Logo hazır olunca `mac/icon.icns` ekleyip spec'teki `icon` alanına yazın.
 
 ## macOS (hedef makine, XP-Pen)
 

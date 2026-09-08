@@ -71,6 +71,20 @@ def test_ink_layer_sits_above_zones_but_below_webcam(qtbot):
     assert order.index(zones["ipucu"]) < order.index(wa.ink)
 
 
+def test_logo_monogram_and_file(qtbot, tmp_path):
+    from PyQt6.QtGui import QImage
+    wa, _ = make(qtbot)
+    inner = wa.inner_rect()
+    assert not wa.logo_is_file and wa.logo_label.text() == "MM"
+    assert wa.logo_label.x() == inner.x() + 10 and wa.logo_label.y() == inner.y() + 8
+    img = QImage(200, 100, QImage.Format.Format_RGB32); img.fill(Qt.GlobalColor.red)
+    path = tmp_path / "logo.png"; img.save(str(path))
+    wa.set_logo(str(path))
+    assert wa.logo_is_file and wa.logo_label.text() == "" and wa.logo_label.width() == 64
+    wa.set_logo("")
+    assert not wa.logo_is_file
+
+
 def test_zone_forwards_drawing_to_board(qtbot):
     wa, zones = make(qtbot)
     z = zones["soru"]

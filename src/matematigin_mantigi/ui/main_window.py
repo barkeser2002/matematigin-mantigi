@@ -6,13 +6,13 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from PyQt6.QtGui import QColor, QKeySequence, QShortcut
-from PyQt6.QtWidgets import QHBoxLayout, QMainWindow, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QMainWindow, QMessageBox, QWidget
 
 from matematigin_mantigi.core import layout_model as lm
 from matematigin_mantigi.core.models import (SHAPE_META, TOOL_META, PenSettings, Question, QuestionStatus, Tool,
                                              next_shape)
 from matematigin_mantigi.core.question_flow import QuestionFlow
-from matematigin_mantigi.core.recorder import Recorder, record_rect_for
+from matematigin_mantigi.core.recorder import Recorder, RecorderError, record_rect_for
 from matematigin_mantigi.core.session_store import SessionStore
 from matematigin_mantigi.core.settings import AppSettings
 from matematigin_mantigi.ui.camera_worker import FrameSource
@@ -87,6 +87,7 @@ class MainWindow(QMainWindow):
         tb.layoutEditToggled.connect(self.work_area.set_edit_mode)
         self.work_area.editModeChanged.connect(tb.set_layout_edit)
         self.work_area.layoutChanged.connect(lambda lay: lm.save_layout(self.layout_path, lay))
+        self.badge.ticked.connect(tb.set_recording_time)     # süre araç çubuğunda sayar (kayda girmez)
 
         c.historyChanged.connect(lambda can_undo, _e: tb.set_undo_enabled(can_undo))
         c.pressureChanged.connect(lambda p: self._status(f"XP-Pen · {p:.2f}"))
@@ -215,17 +216,33 @@ class MainWindow(QMainWindow):
         self.settings.hint_mask = m
 
     def toggle_recording(self, on: bool) -> None:
+        fps = self.settings.record_fps
         if on and not self.recorder.is_recording:
             rect = record_rect_for(self.work_area.recording_rect())
-            self.recorder.start(rect, fps=60)
-            self.badge.set_format(rect.width, rect.height, 60)
+            try:
+                self.recorder.start(rect, fps=fps)
+            except RecorderError as err:
+                self.toolbar.set_recording(False)
+                QMessageBox.warning(self, "Kayıt başlatılamadı", str(err))
+                return
+            h = self.settings.record_height or rect.height
+            self.badge.set_format(round(rect.width * h / rect.height), h, fps)
             self.badge.start()
             self.work_area.relayout()
         elif not on and self.recorder.is_recording:
-            self.recorder.stop()
+            path = self.recorder.stop()
             self.badge.stop()
             self.work_area.relayout()
+            err = getattr(self.recorder, "error", None)
+            if err:
+                QMessageBox.warning(self, "Kayıt hatası", err)
+            elif path is not None:
+                cap = getattr(self.recorder, "capture_fps", 0.0)
+                extra = f" · yakalama ~{cap:.0f} kare/sn" if cap else ""
+                self.work_area.set_status(f"Kayıt kaydedildi: {path}{extra}")
         self.toolbar.set_recording(self.recorder.is_recording)
+        if self.recorder.is_recording:
+            self.toolbar.set_recording_time(self.badge.seconds)
 
     def open_pen_settings(self) -> None:
         dlg = PenSettingsDialog(self.settings.pen(), self.canvas.color, self.canvas.base_width, self.fam, self)
@@ -249,6 +266,8 @@ class MainWindow(QMainWindow):
         s.chroma_enabled = v.chroma_enabled
         s.presenter_name = v.presenter_name
         s.logo_file = v.logo_file
+        s.logo_size = v.logo_size
+        s.record_fps, s.record_height, s.audio_device = v.record_fps, v.record_height, v.audio_device
         if v.camera_index != s.camera_index:
             s.camera_index = v.camera_index
             if self.camera_source_factory is not None:
@@ -277,8 +296,14 @@ class MainWindow(QMainWindow):
         self.question_zone.set_number_visible(s.visible("question_number"))
         self.work_area.set_frame_visible(s.visible("frame"))
         self.work_area.set_presenter_name(s.presenter_name if s.visible("presenter") else "")
-        self.work_area.set_logo(s.logo_file)
+        self.work_area.set_logo(s.logo_file, s.logo_size)
         self.work_area.logo_label.setVisible(s.visible("logo"))
+        self.badge.show_on_board = s.visible("badge")
+        if self.badge.active:
+            self.badge.setVisible(self.badge.show_on_board)
+        for attr, val in (("fps", s.record_fps), ("out_height", s.record_height), ("audio_device", s.audio_device or None)):
+            if hasattr(self.recorder, attr):
+                setattr(self.recorder, attr, val)
 
     def closeEvent(self, e):
         self.webcam_panel.shutdown()

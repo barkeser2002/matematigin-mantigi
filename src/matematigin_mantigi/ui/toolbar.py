@@ -160,6 +160,10 @@ class ToolBar(QWidget):
         self.record_label.setText("DURDUR" if on else "KAYIT")
         self.record_button.update()
 
+    def set_recording_time(self, seconds: int) -> None:
+        """Kayıt süresi araç çubuğunda sayar (kayda girmez): 'DURDUR · 01:23'."""
+        self.record_label.setText(f"DURDUR · {seconds // 60:02d}:{seconds % 60:02d}")
+
     def set_undo_enabled(self, on: bool) -> None:
         self.undo_button.setEnabled(on)
 

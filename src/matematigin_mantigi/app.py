@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from matematigin_mantigi import paths
 from matematigin_mantigi.core.models import SAMPLE_QUESTIONS
 from matematigin_mantigi.core.question_loader import QuestionTemplateError, ensure_template, load_questions
-from matematigin_mantigi.core.recorder import NullRecorder
+from matematigin_mantigi.core.recorder import MssFfmpegRecorder
 from matematigin_mantigi.core.session_store import SessionStore
 from matematigin_mantigi.core.settings import AppSettings
 from matematigin_mantigi.ui import theme
@@ -44,7 +44,10 @@ def build_window(args: argparse.Namespace, fam: theme.FontFamilies, settings: Ap
         settings.camera_index = args.kamera
     factory = None if args.kamera_yok else (lambda index: OpenCvSource(index))
     layout_path = Path(args.duzen) if args.duzen else Path.cwd() / "duzen.json"
-    win = MainWindow(fam, questions, settings, NullRecorder(), SessionStore(), factory, layout_path)
+    store = SessionStore()
+    recorder = MssFfmpegRecorder(lambda: store.session_dir, fps=settings.record_fps,
+                                 audio_device=settings.audio_device or None, out_height=settings.record_height)
+    win = MainWindow(fam, questions, settings, recorder, store, factory, layout_path)
     win.resize(1920, 1080)
     return win
 

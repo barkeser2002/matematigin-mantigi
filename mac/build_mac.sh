@@ -20,6 +20,7 @@ source .venv/bin/activate
 python -m pip install --upgrade pip wheel
 echo "== Kütüphaneler: uygulama + PDF aktarımı + test + pyinstaller"
 python -m pip install -e ".[dev,pdf]" pyinstaller
+python -c "import imageio_ffmpeg; print('ffmpeg:', imageio_ffmpeg.get_ffmpeg_exe())"   # ikili paketle gelir
 
 echo "== Testler (başsız)"
 QT_QPA_PLATFORM=offscreen python -m pytest -q

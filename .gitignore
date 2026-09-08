@@ -7,3 +7,4 @@ duzen.json
 *.egg-info/
 build/
 dist/
+~$*

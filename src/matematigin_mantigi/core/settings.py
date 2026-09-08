@@ -20,7 +20,9 @@ VISIBILITY_KEYS: tuple[tuple[str, str], ...] = (
     ("frame", "Ekran çerçevesi"),
     ("presenter", "Sunucu adı (webcam üstünde)"),
     ("logo", "Logo (sol üst)"),
+    ("badge", "Tahtadaki kayıt rozeti (KAYIT · 00:00; kayda girer)"),
 )
+VISIBILITY_DEFAULTS = {"badge": False}
 
 
 class AppSettings:
@@ -109,7 +111,27 @@ class AppSettings:
 
     def visible(self, key: str) -> bool:
         """Tahtadaki yazısal öğe görünürlüğü; anahtarlar VISIBILITY_KEYS içinde."""
-        return self._bool(f"ui/show_{key}", True)
+        return self._bool(f"ui/show_{key}", VISIBILITY_DEFAULTS.get(key, True))
+
+    @property
+    def logo_size(self) -> int: return max(24, min(200, self._int("ui/logo_size", 48)))
+    @logo_size.setter
+    def logo_size(self, px: int) -> None: self._q.setValue("ui/logo_size", int(px))
+
+    @property
+    def record_fps(self) -> int: return 30 if self._int("record/fps", 60) == 30 else 60
+    @record_fps.setter
+    def record_fps(self, fps: int) -> None: self._q.setValue("record/fps", int(fps))
+
+    @property
+    def record_height(self) -> int: return self._int("record/height", 1440)      # 0 = doğal
+    @record_height.setter
+    def record_height(self, h: int) -> None: self._q.setValue("record/height", int(h))
+
+    @property
+    def audio_device(self) -> str: return self._str("record/audio_device", "")
+    @audio_device.setter
+    def audio_device(self, name: str) -> None: self._q.setValue("record/audio_device", name or "")
 
     def set_visible(self, key: str, on: bool) -> None:
         self._q.setValue(f"ui/show_{key}", bool(on))

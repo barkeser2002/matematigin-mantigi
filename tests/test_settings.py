@@ -41,6 +41,16 @@ def test_ui_settings_round_trip(tmp_path):
     assert t.visible("status") is False and t.visible("brand") is True
 
 
+def test_record_and_logo_settings(tmp_path):
+    path = str(tmp_path / "r.ini")
+    s = AppSettings(QSettings(path, QSettings.Format.IniFormat))
+    assert (s.record_fps, s.record_height, s.audio_device, s.logo_size) == (60, 1440, "", 48)
+    assert s.visible("badge") is False and s.visible("logo") is True      # rozet varsayılan kapalı
+    s.record_fps = 30; s.record_height = 0; s.audio_device = "Mikrofon (USB)"; s.logo_size = 300; s.sync()
+    t = AppSettings(QSettings(path, QSettings.Format.IniFormat))
+    assert (t.record_fps, t.record_height, t.audio_device, t.logo_size) == (30, 0, "Mikrofon (USB)", 200)
+
+
 def test_stale_per_word_reading_speed_resets_to_default(tmp_path):
     q = QSettings(str(tmp_path / "old.ini"), QSettings.Format.IniFormat)
     q.setValue("pen/reading_ms", 350); q.sync()                   # eski sürüm: ms/kelime

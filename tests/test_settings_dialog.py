@@ -68,6 +68,23 @@ def test_camera_scan_fills_combo(qtbot, ini_settings, monkeypatch):
     assert d.value().camera_index == 0
 
 
+def test_record_and_logo_size_fields(qtbot, ini_settings, monkeypatch):
+    from matematigin_mantigi.core import recorder as r
+    monkeypatch.setattr(r, "list_audio_devices", lambda *a, **k: ["Mikrofon (USB)", "Steam Mic"])
+    d = SettingsDialog(ini_settings, FAM)
+    qtbot.addWidget(d)
+    v = d.value()
+    assert (v.record_fps, v.record_height, v.audio_device, v.logo_size) == (60, 1440, "", 48)
+    d.fps_combo.setCurrentIndex(d.fps_combo.findData(30)); d.res_combo.setCurrentIndex(d.res_combo.findData(0))
+    d.logo_size_slider.setValue(96)
+    qtbot.mouseClick(d.list_audio_button, Qt.MouseButton.LeftButton)
+    assert d.audio_combo.count() == 3
+    d.audio_combo.setCurrentIndex(1)
+    v = d.value()
+    assert (v.record_fps, v.record_height, v.audio_device, v.logo_size) == (30, 0, "Mikrofon (USB)", 96)
+    assert d.logo_size_value.text() == "96 px"
+
+
 def test_apply_emits_values(qtbot, ini_settings):
     d = SettingsDialog(ini_settings, FAM)
     qtbot.addWidget(d)

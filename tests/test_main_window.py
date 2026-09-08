@@ -157,14 +157,52 @@ def test_drawing_over_question_zone_reaches_board(window, qtbot):
 
 def test_recording_stub_and_badge(window, qtbot):
     qtbot.mouseClick(window.toolbar.record_button, Qt.MouseButton.LeftButton)
-    assert window.recorder.is_recording and window.badge.active and not window.badge.isHidden()
-    assert window.recorder.last_rect.width == window.work_area.width()
-    assert window.toolbar.record_label.text() == "DURDUR"
+    assert window.recorder.is_recording and window.badge.active
+    assert window.badge.isHidden()                                     # rozet varsayılan kapalı: kayda girmesin
+    assert window.recorder.last_rect.width == window.work_area.width() and window.recorder.fps == 60
+    assert window.toolbar.record_label.text() == "DURDUR · 00:00"
     window.badge.tick(); window.badge.tick()
-    assert window.badge.text().startswith("KAYIT · 00:02 · ")
+    assert window.badge.text().startswith("KAYIT · 00:02 · ") and window.toolbar.record_label.text() == "DURDUR · 00:02"
+    assert "1440" in window.badge.text()                              # 2K çıktı
     qtbot.mouseClick(window.toolbar.record_button, Qt.MouseButton.LeftButton)
     assert not window.recorder.is_recording and window.badge.isHidden()
     assert window.toolbar.record_label.text() == "KAYIT"
+
+
+def test_badge_can_be_shown_on_board_from_settings(window, qtbot):
+    window.settings.set_visible("badge", True); window.apply_ui_settings()
+    window.toggle_recording(True)
+    assert not window.badge.isHidden()
+    window.toggle_recording(False)
+
+
+def test_recorder_error_reverts_button(window, qtbot, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+    from matematigin_mantigi.core.recorder import RecorderError
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: shown.append(a[2])))
+
+    def boom(rect, fps=60):
+        raise RecorderError("ffmpeg bulunamadı")
+    monkeypatch.setattr(window.recorder, "start", boom)
+    qtbot.mouseClick(window.toolbar.record_button, Qt.MouseButton.LeftButton)
+    assert not window.recorder.is_recording and not window.toolbar.record_button.isChecked()
+    assert shown and "ffmpeg" in shown[0]
+
+
+def test_real_recorder_through_window(window, qtbot, tmp_path):
+    import time
+    from matematigin_mantigi.core.recorder import MssFfmpegRecorder, find_ffmpeg
+    import pytest
+    if find_ffmpeg() is None:
+        pytest.skip("ffmpeg yok")
+    frame = __import__("numpy").full((120, 160, 4), 255, __import__("numpy").uint8)
+    window.recorder = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=10, grabber=lambda r: frame, out_height=0)
+    window.toggle_recording(True)
+    assert window.recorder.is_recording
+    time.sleep(0.5)
+    window.toggle_recording(False)
+    assert window.recorder.last_path.exists() and "Kayıt kaydedildi" in window.work_area.status_label.text()
 
 
 def test_layout_edit_persists_to_file(window, qtbot, tmp_path):

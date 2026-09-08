@@ -81,9 +81,11 @@ def test_logo_monogram_and_file(qtbot, tmp_path):
     img = QImage(200, 100, QImage.Format.Format_RGB32); img.fill(Qt.GlobalColor.red)
     path = tmp_path / "logo.png"; img.save(str(path))
     wa.set_logo(str(path))
-    assert wa.logo_is_file and wa.logo_label.text() == "" and wa.logo_label.width() == 48   # 48x24, en-boy korunur
-    wa.set_logo("")
-    assert not wa.logo_is_file
+    assert wa.logo_is_file and wa.logo_label.text() == "" and wa.logo_label.height() == 48   # 96x48, en-boy korunur
+    wa.set_logo("", size=96)
+    assert not wa.logo_is_file and wa.logo_label.width() == 96 and wa.logo_size == 96
+    wa.set_logo(str(path), size=32)
+    assert wa.logo_label.height() == 32
 
 
 def test_zone_forwards_drawing_to_board(qtbot):

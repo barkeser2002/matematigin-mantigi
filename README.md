@@ -93,6 +93,18 @@ Logo hazır olunca `mac/icon.icns` ekleyip spec'teki `icon` alanına yazın.
 
 `oturum/<tarih-saat>/<soruId>_<nn>.png` — soru değişirken tuval boş değilse kaydedilir.
 
+## Kayıt
+
+KAYIT düğmesi (R) tahtayı (araç çubuğu hariç) `mss` ile yakalar, `ffmpeg` (imageio-ffmpeg ile gelir, ayrıca
+kurulum gerekmez) H.264 MP4 yazar: `oturum/<tarih-saat>/kayit_<saat>.mp4`. Varsayılan 60 fps ve 2K (1440p'ye
+ölçeklenir); ⚙ Ayarlar > Kayıt'tan 30/60 fps, Doğal/1080p/2K/4K ve mikrofon ("Ses aygıtlarını listele": Windows
+dshow, macOS avfoundation) seçilir. Süre araç çubuğundaki DURDUR düğmesinin altında sayar; tahtadaki
+"KAYIT · 00:00" rozeti varsayılan kapalıdır (kayda girer), Görünürlük'ten açılabilir.
+Kodlayıcı otomatik seçilir: macOS'ta VideoToolbox, Windows'ta NVENC/QSV/AMF, yoksa libx264 (ultrafast). Yakalama ayrı iş
+parçacığında koşar; yakalama fps'nin altında kalırsa kareler çoğaltılır, video süresi her zaman gerçek zamanla aynıdır.
+Durdurunca durum satırı gerçek yakalama hızını yazar (Windows'ta GDI ~30 kare/sn ile sınırlar; macOS CoreGraphics daha hızlıdır).
+macOS'ta ilk kayıtta "Ekran Kaydı" izni istenir (Sistem Ayarları > Gizlilik ve Güvenlik); izin verilmezse kare siyah gelir.
+
 ## Bu sürümde taslak olan kısımlar
 
-Kayıt düğmesi (NullRecorder + rozet), Keras tanıma.
+Keras tanıma.

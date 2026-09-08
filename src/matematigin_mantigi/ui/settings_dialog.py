@@ -8,6 +8,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
                              QPushButton, QSlider, QVBoxLayout)
 
+from matematigin_mantigi.core.recorder import RESOLUTIONS
 from matematigin_mantigi.core.settings import VISIBILITY_KEYS, AppSettings
 from matematigin_mantigi.ui import theme
 from matematigin_mantigi.ui.theme import FontFamilies
@@ -21,7 +22,11 @@ class SettingsValues:
     chroma_enabled: bool = True
     presenter_name: str = "Koray Varol"
     logo_file: str = ""
+    logo_size: int = 48
     camera_index: int = 0
+    record_fps: int = 60
+    record_height: int = 1440
+    audio_device: str = ""
     visible: dict[str, bool] = field(default_factory=dict)
 
 
@@ -80,7 +85,47 @@ class SettingsDialog(QDialog):
         self.clear_logo_button.clicked.connect(lambda: self.logo_path_edit.setText(""))
         row.addWidget(self.logo_path_edit, 1); row.addWidget(self.choose_logo_button); row.addWidget(self.clear_logo_button)
         lcol.addLayout(row)
+        row = QHBoxLayout()
+        size_lab = QLabel("Boyut"); size_lab.setFont(theme.font(fam, 11, 500))
+        self.logo_size_slider = QSlider(Qt.Orientation.Horizontal); self.logo_size_slider.setRange(24, 200)
+        self.logo_size_slider.setValue(settings.logo_size)
+        self.logo_size_value = QLabel(f"{settings.logo_size} px")
+        self.logo_size_slider.valueChanged.connect(lambda v: self.logo_size_value.setText(f"{v} px"))
+        row.addWidget(size_lab); row.addWidget(self.logo_size_slider, 1); row.addWidget(self.logo_size_value)
+        lcol.addLayout(row)
         root.addWidget(logo_card)
+
+        rec_card, rcol = _card("Kayıt (mss + ffmpeg, MP4)", fam)
+        row = QHBoxLayout()
+        fps_lab = QLabel("Kare hızı"); fps_lab.setFont(theme.font(fam, 11, 500))
+        self.fps_combo = QComboBox()
+        for f in (30, 60):
+            self.fps_combo.addItem(f"{f} fps", f)
+        self.fps_combo.setCurrentIndex(self.fps_combo.findData(settings.record_fps))
+        res_lab = QLabel("Çözünürlük"); res_lab.setFont(theme.font(fam, 11, 500))
+        self.res_combo = QComboBox()
+        for label, h in RESOLUTIONS:
+            self.res_combo.addItem(label, h)
+        idx = self.res_combo.findData(settings.record_height)
+        self.res_combo.setCurrentIndex(idx if idx >= 0 else 2)
+        row.addWidget(fps_lab); row.addWidget(self.fps_combo); row.addSpacing(12)
+        row.addWidget(res_lab); row.addWidget(self.res_combo, 1)
+        rcol.addLayout(row)
+        row = QHBoxLayout()
+        mic_lab = QLabel("Mikrofon"); mic_lab.setFont(theme.font(fam, 11, 500))
+        self.audio_combo = QComboBox(); self.audio_combo.setEditable(True)
+        self.audio_combo.addItem("(ses yok)", "")
+        if settings.audio_device:
+            self.audio_combo.addItem(settings.audio_device, settings.audio_device)
+            self.audio_combo.setCurrentIndex(1)
+        self.list_audio_button = QPushButton("Ses aygıtlarını listele"); self.list_audio_button.setObjectName("pill")
+        self.list_audio_button.clicked.connect(self._list_audio)
+        row.addWidget(mic_lab); row.addWidget(self.audio_combo, 1); row.addWidget(self.list_audio_button)
+        rcol.addLayout(row)
+        rec_note = QLabel("Kayıt dosyası: oturum/<tarih>/kayit_<saat>.mp4. Araç çubuğu kayda girmez.")
+        rec_note.setFont(theme.font(fam, 10, 400)); rec_note.setStyleSheet(f"color: {theme.MUTED};")
+        rcol.addWidget(rec_note)
+        root.addWidget(rec_card)
 
         cam_sel_card, kcol = _card("Kamera", fam)
         row = QHBoxLayout()
@@ -134,6 +179,17 @@ class SettingsDialog(QDialog):
         if path:
             self.logo_path_edit.setText(path)
 
+    def _list_audio(self) -> None:
+        from matematigin_mantigi.core.recorder import list_audio_devices
+        current = self.audio_combo.currentText().strip()
+        names = list_audio_devices()
+        self.audio_combo.clear()
+        self.audio_combo.addItem("(ses yok)", "")
+        for n in names:
+            self.audio_combo.addItem(n, n)
+        idx = self.audio_combo.findText(current)
+        self.audio_combo.setCurrentIndex(idx if idx >= 0 else 0)
+
     def _scan_cameras(self) -> None:
         from matematigin_mantigi.core.cameras import list_cameras
         current = self.camera_combo.currentData()
@@ -158,7 +214,12 @@ class SettingsDialog(QDialog):
                               chroma_enabled=self.chroma_check.isChecked(),
                               presenter_name=self.presenter_edit.text().strip(),
                               logo_file=self.logo_path_edit.text().strip(),
+                              logo_size=self.logo_size_slider.value(),
                               camera_index=int(self.camera_combo.currentData() or 0),
+                              record_fps=int(self.fps_combo.currentData() or 60),
+                              record_height=int(self.res_combo.currentData() or 0),
+                              audio_device=("" if self.audio_combo.currentText().strip() == "(ses yok)"
+                                            else self.audio_combo.currentText().strip()),
                               visible={k: cb.isChecked() for k, cb in self.visibility_checks.items()})
 
     def _apply(self) -> None:

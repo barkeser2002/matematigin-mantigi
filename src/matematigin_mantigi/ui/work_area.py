@@ -131,6 +131,7 @@ class WorkArea(QWidget):
         self.logo_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.logo_is_file = False
+        self.logo_size = self.LOGO_SIZE
         self.set_logo("")
 
     # --- zones & layout ----------------------------------------------------
@@ -181,14 +182,16 @@ class WorkArea(QWidget):
         self.relayout()
         self.update()
 
-    LOGO_SIZE = 48      # üst banda asılı, plaka gibi; soru numarasının üstüne binmez
+    LOGO_SIZE = 48      # varsayılan; üst banda asılı, plaka gibi
 
-    def set_logo(self, path: str) -> None:
-        """PNG/JPG logo; boşsa veya yüklenemezse yuvarlak 'MM' monogramı."""
+    def set_logo(self, path: str, size: int | None = None) -> None:
+        """PNG/JPG logo; boşsa veya yüklenemezse yuvarlak 'MM' monogramı. size: piksel (Ayarlar)."""
+        size = int(size or self.LOGO_SIZE)
+        self.logo_size = size
         pm = QPixmap(path) if path else QPixmap()
         self.logo_is_file = not pm.isNull()
         if self.logo_is_file:
-            pm = pm.scaled(self.LOGO_SIZE, self.LOGO_SIZE, Qt.AspectRatioMode.KeepAspectRatio,
+            pm = pm.scaled(size * 3, size, Qt.AspectRatioMode.KeepAspectRatio,       # geniş logolar için en 3x
                            Qt.TransformationMode.SmoothTransformation)
             self.logo_label.setText(""); self.logo_label.setStyleSheet("background: transparent;")
             self.logo_label.setPixmap(pm)
@@ -196,10 +199,10 @@ class WorkArea(QWidget):
         else:
             self.logo_label.setPixmap(QPixmap())
             self.logo_label.setText("MM")
-            self.logo_label.setFont(theme.hand_font(self.fam, 20, 700))
-            self.logo_label.setFixedSize(self.LOGO_SIZE, self.LOGO_SIZE)
+            self.logo_label.setFont(theme.hand_font(self.fam, max(10, int(size * 0.42)), 700))
+            self.logo_label.setFixedSize(size, size)
             self.logo_label.setStyleSheet(f"color: {theme.PANEL_SOFT}; background: {theme.INK};"
-                                          f" border: 2px solid {theme.HINT_CARD_BORDER}; border-radius: {self.LOGO_SIZE // 2}px;")
+                                          f" border: 2px solid {theme.HINT_CARD_BORDER}; border-radius: {size // 2}px;")
         self.relayout()
 
     def set_presenter_name(self, text: str) -> None:

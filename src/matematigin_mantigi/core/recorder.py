@@ -279,6 +279,7 @@ class MssFfmpegRecorder:
             try:
                 if proc.stdin:
                     proc.stdin.close()
+                    proc.stdin = None        # communicate() kapalı boruyu flush etmesin (Py3.12/macOS ValueError)
                 _, err = proc.communicate(timeout=30)
                 if proc.returncode not in (0, None) and err:
                     self.error = err.decode("utf-8", "replace").strip()[-400:]

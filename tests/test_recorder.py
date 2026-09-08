@@ -152,3 +152,13 @@ def test_mac_audio_device_passes_only_index(tmp_path):
     assert m[m.index("avfoundation") + 2] == ":0"
     assert ffmpeg_args("ffmpeg", 640, 480, 30, out, "1", platform="darwin")[-1] == str(out)
     assert ":1" in ffmpeg_args("ffmpeg", 640, 480, 30, out, "1", platform="darwin")
+
+
+def test_audio_args_have_big_queues_and_async_resample(tmp_path):
+    out = tmp_path / "k.mp4"
+    for platform, dev in (("win32", "Mikrofon (USB)"), ("darwin", ":0 MacBook Pro Microphone")):
+        a = ffmpeg_args("ffmpeg", 640, 480, 60, out, dev, platform=platform)
+        assert a.count("-thread_queue_size") == 2 and a[a.index("-thread_queue_size") + 1] == "1024"
+        assert "aresample=async=1:first_pts=0" in a and "48000" in a and "-fps_mode" in a
+    no_audio = ffmpeg_args("ffmpeg", 640, 480, 60, out, None, platform="win32")
+    assert "-af" not in no_audio and no_audio.count("-thread_queue_size") == 1

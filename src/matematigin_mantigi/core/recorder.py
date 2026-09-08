@@ -153,11 +153,14 @@ def ffmpeg_args(exe: str, width: int, height: int, fps: int, out: Path, audio_de
     """ffmpeg komut satırı: ham BGRA kareler stdin'den, isteğe bağlı mikrofon, H.264 + AAC MP4.
     out_height > 0 ise çıktı o yüksekliğe ölçeklenir (en-boy korunur, genişlik çift)."""
     platform = platform or sys.platform
-    args = [exe, "-y", "-hide_banner", "-loglevel", "error",
+    # thread_queue_size: ffmpeg'in giriş kuyruğu varsayılan 8 paket; video borusu bir an geciktiğinde mikrofon
+    # kuyruğu taşar, örnekler düşer (cızırtı) ve ses zamanla geriye kayar. Büyük kuyruk + aresample=async bunu önler.
+    args = [exe, "-y", "-hide_banner", "-loglevel", "error", "-thread_queue_size", "1024",
             "-f", "rawvideo", "-pix_fmt", "bgra", "-s", f"{width}x{height}", "-framerate", str(fps), "-i", "pipe:0"]
     if audio_device:
+        args += ["-thread_queue_size", "8192"]
         if platform == "win32":
-            args += ["-f", "dshow", "-i", f"audio={audio_device}"]
+            args += ["-f", "dshow", "-audio_buffer_size", "40", "-i", f"audio={audio_device}"]
         elif platform == "darwin":
             m = re.match(r":?\s*(\d+)", audio_device)          # ":0 MacBook Pro Microphone" -> ":0"
             dev = f":{m.group(1)}" if m else f":{audio_device.lstrip(':')}"
@@ -166,9 +169,12 @@ def ffmpeg_args(exe: str, width: int, height: int, fps: int, out: Path, audio_de
             args += ["-f", "pulse", "-i", audio_device]
     if out_height and out_height != height:
         args += ["-vf", f"scale=-2:{out_height}:flags=bicubic"]
-    args += [*ENCODER_ARGS.get(encoder, ENCODER_ARGS["libx264"]), "-pix_fmt", "yuv420p", "-r", str(fps)]
+    args += [*ENCODER_ARGS.get(encoder, ENCODER_ARGS["libx264"]), "-pix_fmt", "yuv420p",
+             "-r", str(fps), "-fps_mode", "cfr"]
     if audio_device:
-        args += ["-c:a", "aac", "-b:a", "160k", "-shortest"]
+        # async=1: zaman damgalarına göre boşluk doldurur / fazlayı kırpar; ses videoyla hizalı kalır
+        args += ["-af", "aresample=async=1:first_pts=0", "-ar", "48000", "-ac", "2",
+                 "-c:a", "aac", "-b:a", "160k", "-shortest"]
     args += ["-movflags", "+faststart", str(out)]
     return args
 

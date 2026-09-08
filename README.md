@@ -123,6 +123,8 @@ dshow, macOS avfoundation) seçilir. Süre araç çubuğundaki DURDUR düğmesin
 "KAYIT · 00:00" rozeti varsayılan kapalıdır (kayda girer), Görünürlük'ten açılabilir.
 Kodlayıcı otomatik seçilir: macOS'ta VideoToolbox, Windows'ta NVENC/QSV/AMF, yoksa libx264 (ultrafast). Yakalama ayrı iş
 parçacığında koşar; yakalama fps'nin altında kalırsa kareler çoğaltılır, video süresi her zaman gerçek zamanla aynıdır.
+Mikrofon girişi büyük kuyrukla (`-thread_queue_size 8192`) ve `aresample=async=1` ile alınır: video borusu bir an
+geciktiğinde ses örneği düşmez (cızırtı yok) ve ses zamanla kaymaz; 48 kHz stereo AAC 160 kb/s.
 Durdurunca durum satırı gerçek yakalama hızını yazar (Windows'ta GDI ~30 kare/sn ile sınırlar; macOS CoreGraphics daha hızlıdır).
 macOS'ta ilk kayıtta "Ekran Kaydı" izni istenir (Sistem Ayarları > Gizlilik ve Güvenlik); izin verilmezse kare siyah gelir.
 

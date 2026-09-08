@@ -92,3 +92,11 @@ def test_apply_emits_values(qtbot, ini_settings):
     with qtbot.waitSignal(d.applied) as sig:
         qtbot.mouseClick(d.apply_button, Qt.MouseButton.LeftButton)
     assert sig.args[0].reading_ms == 70 and d.result() == d.DialogCode.Accepted.value
+
+
+def test_dialog_scrolls_and_keeps_apply_visible_on_small_screen(qtbot, ini_settings):
+    d = SettingsDialog(ini_settings, FAM); qtbot.addWidget(d)
+    d.setMaximumHeight(420); d.resize(620, 420); d.show(); qtbot.waitExposed(d)
+    assert d.scroll.widget() is d.content and d.content.sizeHint().height() > 420
+    assert d.apply_button.isVisible() and d.apply_button.geometry().bottom() <= d.height()
+    assert d.scroll.verticalScrollBar().maximum() > 0

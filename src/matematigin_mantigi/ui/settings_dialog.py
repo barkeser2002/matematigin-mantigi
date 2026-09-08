@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-                             QPushButton, QSlider, QVBoxLayout)
+from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel,
+                             QLineEdit, QPushButton, QScrollArea, QSlider, QVBoxLayout, QWidget)
 
 from matematigin_mantigi.core.recorder import RESOLUTIONS
 from matematigin_mantigi.core.settings import VISIBILITY_KEYS, AppSettings
@@ -48,6 +48,12 @@ class SettingsDialog(QDialog):
         root = QVBoxLayout(self); root.setContentsMargins(24, 20, 24, 20); root.setSpacing(14)
 
         title = QLabel("⚙ Ayarlar"); title.setFont(theme.font(fam, 20, 600)); root.addWidget(title)
+        # Kartlar kaydırılabilir alanda; küçük ekranlarda (MacBook) Uygula düğmesi hep görünür kalır.
+        self.content = QWidget(); col = QVBoxLayout(self.content); col.setContentsMargins(0, 0, 8, 0); col.setSpacing(14)
+        self.scroll = QScrollArea(); self.scroll.setWidgetResizable(True); self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setWidget(self.content); self.scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        self.content.setStyleSheet("background: transparent;")
+        root.addWidget(self.scroll, 1)
 
         font_card, fcol = _card("Yazı tipi (soru ve ipuçları)", fam)
         row = QHBoxLayout()
@@ -62,7 +68,7 @@ class SettingsDialog(QDialog):
         note = QLabel(".ttf veya .otf dosyası. Değişiklik uygulanınca soru metni, seçenekler ve ipucu kartları bu yazı tipine geçer.")
         note.setWordWrap(True); note.setFont(theme.font(fam, 10, 400)); note.setStyleSheet(f"color: {theme.MUTED};")
         fcol.addWidget(note)
-        root.addWidget(font_card)
+        col.addWidget(font_card)
 
         speed_card, scol = _card("Soru yazma hızı", fam)
         row = QHBoxLayout()
@@ -73,7 +79,7 @@ class SettingsDialog(QDialog):
         row.addWidget(self.reading_slider, 1); row.addWidget(self.reading_value)
         scol.addLayout(row)
         self._refresh_reading()
-        root.addWidget(speed_card)
+        col.addWidget(speed_card)
 
         logo_card, lcol = _card("Logo (sol üst)", fam)
         row = QHBoxLayout()
@@ -93,7 +99,7 @@ class SettingsDialog(QDialog):
         self.logo_size_slider.valueChanged.connect(lambda v: self.logo_size_value.setText(f"{v} px"))
         row.addWidget(size_lab); row.addWidget(self.logo_size_slider, 1); row.addWidget(self.logo_size_value)
         lcol.addLayout(row)
-        root.addWidget(logo_card)
+        col.addWidget(logo_card)
 
         rec_card, rcol = _card("Kayıt (mss + ffmpeg, MP4)", fam)
         row = QHBoxLayout()
@@ -125,7 +131,7 @@ class SettingsDialog(QDialog):
         rec_note = QLabel("Kayıt dosyası: oturum/<tarih>/kayit_<saat>.mp4. Araç çubuğu kayda girmez.")
         rec_note.setFont(theme.font(fam, 10, 400)); rec_note.setStyleSheet(f"color: {theme.MUTED};")
         rcol.addWidget(rec_note)
-        root.addWidget(rec_card)
+        col.addWidget(rec_card)
 
         cam_sel_card, kcol = _card("Kamera", fam)
         row = QHBoxLayout()
@@ -138,13 +144,13 @@ class SettingsDialog(QDialog):
         self.camera_note = QLabel("Tarama birkaç saniye sürer; kare veren cihazlar listelenir.")
         self.camera_note.setFont(theme.font(fam, 10, 400)); self.camera_note.setStyleSheet(f"color: {theme.MUTED};")
         kcol.addWidget(self.camera_note)
-        root.addWidget(cam_sel_card)
+        col.addWidget(cam_sel_card)
 
         name_card, ncol = _card("Sunucu adı (el yazısı, webcam üstünde)", fam)
         self.presenter_edit = QLineEdit(settings.presenter_name)
         self.presenter_edit.setPlaceholderText("Boş bırakılırsa gösterilmez")
         ncol.addWidget(self.presenter_edit)
-        root.addWidget(name_card)
+        col.addWidget(name_card)
 
         cam_card, ccol = _card("Yeşil perde", fam)
         self.chroma_check = QCheckBox("Yeşil perdeyi kaldır (kişi tahtanın üstüne biner)")
@@ -152,14 +158,14 @@ class SettingsDialog(QDialog):
         self.auto_key_check = QCheckBox("Perde tonunu kameranın kenarlarından otomatik ölç")
         self.auto_key_check.setChecked(settings.auto_key)
         ccol.addWidget(self.chroma_check); ccol.addWidget(self.auto_key_check)
-        root.addWidget(cam_card)
+        col.addWidget(cam_card)
 
         vis_card, vcol = _card("Görünürlük (tahtadaki yazılar)", fam)
         self.visibility_checks: dict[str, QCheckBox] = {}
         for key, label in VISIBILITY_KEYS:
             cb = QCheckBox(label); cb.setChecked(settings.visible(key))
             vcol.addWidget(cb); self.visibility_checks[key] = cb
-        root.addWidget(vis_card)
+        col.addWidget(vis_card)
 
         buttons = QHBoxLayout(); buttons.addStretch(1)
         self.cancel_button = QPushButton("Vazgeç"); self.cancel_button.setObjectName("pill")
@@ -167,6 +173,14 @@ class SettingsDialog(QDialog):
         self.cancel_button.clicked.connect(self.reject); self.apply_button.clicked.connect(self._apply)
         buttons.addWidget(self.cancel_button); buttons.addWidget(self.apply_button)
         root.addLayout(buttons)
+        self._fit_to_screen()
+
+    def _fit_to_screen(self) -> None:
+        """Yükseklik: içerik kadar, ama ekranın kullanılabilir alanını aşmaz."""
+        screen = self.parent().screen() if self.parent() is not None else QApplication.primaryScreen()
+        avail = screen.availableGeometry().height() if screen else 900
+        wanted = self.content.sizeHint().height() + 140
+        self.resize(max(self.minimumWidth(), 620), min(wanted, avail - 60))
 
     def _choose_font(self) -> None:
         start = str(Path(self.font_path_edit.text()).parent) if self.font_path_edit.text() else ""

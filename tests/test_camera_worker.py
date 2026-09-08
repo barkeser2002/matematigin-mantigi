@@ -89,3 +89,27 @@ def test_stream_end_reports_error(qtbot):
         w.start()
     assert "kesildi" in sig.args[0]
     assert w.wait(2000)
+
+
+def test_open_retries_until_camera_becomes_available(qtbot):
+    class LateCamera(FakeCamera):
+        def __init__(self):
+            super().__init__(frames=1000); self.attempts = 0
+        def open(self):
+            self.attempts += 1
+            if self.attempts < 3:
+                return False
+            return super().open()
+    cam = LateCamera()
+    w = CameraWorker(cam, ChromaParams(), open_retries=5, retry_ms=100, target_fps=60)
+    with qtbot.waitSignal(w.frameReady, timeout=3000):
+        w.start()
+    assert cam.attempts == 3
+    w.stop(); assert w.wait(2000)
+
+
+def test_stop_aborts_open_retries(qtbot, dead_camera):
+    w = CameraWorker(dead_camera, ChromaParams(), open_retries=100, retry_ms=1000)
+    w.start(); qtbot.wait(150)
+    w.stop()
+    assert w.wait(2000)

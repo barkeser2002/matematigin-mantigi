@@ -82,6 +82,19 @@ Mac elinizde değilse: depoyu GitHub'a gönderin, Actions > "macOS paketi" > Run
 Homebrew Python için: `brew install python@3.12` sonra `PYTHON=python3.12 bash mac/build_mac.sh`.
 Logo hazır olunca `mac/icon.icns` ekleyip spec'teki `icon` alanına yazın.
 
+## macOS izinleri (.app)
+
+Kamera, mikrofon, ekran kaydı ve Documents klasörü izinleri ilk kullanımda sorulur; uygulama kamera açılana kadar
+2 sn arayla 15 kez yeniden dener, izin verildikten sonra görüntü kendiliğinden gelir. İzin penceresi hiç çıkmazsa
+(imzasız .app) Terminal'de:
+
+    codesign --force --deep --sign - "/Applications/Matematiğin Mantığı.app" && xattr -dr com.apple.quarantine "/Applications/Matematiğin Mantığı.app"
+    tccutil reset Camera com.matematiginmantigi.tahta; tccutil reset Microphone com.matematiginmantigi.tahta; tccutil reset ScreenCapture com.matematiginmantigi.tahta
+    open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+
+Ekran kaydı izni verildikten sonra uygulamayı yeniden başlat (macOS bunu ister). Birden fazla kamera varsa
+(ör. OBS Virtual Camera 0, FaceTime 1) ⚙ Ayarlar > Kamera > "Kameraları tara" gerçek adlarıyla listeler.
+
 ## macOS (hedef makine, XP-Pen)
 
 - arm64 Python kullanın (`python3 -c "import platform; print(platform.machine())"` → arm64). PyQt6 universal2 wheel, macOS 12+.

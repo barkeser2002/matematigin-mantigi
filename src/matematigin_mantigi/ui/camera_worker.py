@@ -100,7 +100,8 @@ class CameraWorker(QThread):
     AUTO_KEY_EVERY = 90                       # kare; ~3 sn'de bir yeniden ölç
 
     def __init__(self, source: FrameSource, params: ChromaParams, chroma_enabled: bool = True,
-                 out_width: int = 640, target_fps: int = 30, auto_key: bool = True, parent=None):
+                 out_width: int = 640, target_fps: int = 30, auto_key: bool = True, parent=None,
+                 open_retries: int = 0, retry_ms: int = 2000):
         super().__init__(parent)
         self._source = source
         self._params = params
@@ -108,6 +109,7 @@ class CameraWorker(QThread):
         self._auto_key = auto_key
         self._out_width = out_width
         self._period = 1.0 / max(1, target_fps)
+        self._open_retries, self._retry_ms, self._abort = max(0, int(open_retries)), max(100, int(retry_ms)), False
         self._running = False
         self._frames = 0
 
@@ -136,9 +138,26 @@ class CameraWorker(QThread):
 
     def stop(self) -> None:
         self._running = False
+        self._abort = True
+
+    def _open_with_retries(self) -> bool:
+        """İlk açılış başarısızsa (ör. macOS izin penceresi henüz onaylanmadı) belirli aralıkla yeniden dener."""
+        for attempt in range(self._open_retries + 1):
+            if self._source.open():
+                return True
+            if attempt == self._open_retries:
+                break
+            waited = 0
+            while waited < self._retry_ms and not self._abort:
+                self.msleep(100)
+                waited += 100
+            if self._abort:
+                return False
+        return False
 
     def run(self) -> None:
-        if not self._source.open():
+        self._abort = False
+        if not self._open_with_retries():
             self.cameraError.emit("Kamera bulunamadı")
             return
         self._running = True

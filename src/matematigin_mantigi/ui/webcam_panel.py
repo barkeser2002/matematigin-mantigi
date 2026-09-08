@@ -60,7 +60,8 @@ class WebcamPanel(Zone):
     chromaToggled = pyqtSignal(bool)
 
     def __init__(self, fam: FontFamilies, source_factory: Callable[[], FrameSource],
-                 params: ChromaParams, chroma_enabled: bool = True, parent=None):
+                 params: ChromaParams, chroma_enabled: bool = True, parent=None, open_retries: int = 0):
+        self.open_retries = open_retries          # kamera açılmazsa (izin bekleniyor) 2 sn arayla yeniden deneme
         super().__init__(parent)
         self._params = params
         self.chroma_enabled = chroma_enabled
@@ -82,7 +83,8 @@ class WebcamPanel(Zone):
         self._refresh_overlay()
 
     def _make_worker(self, source_factory: Callable[[], FrameSource]) -> CameraWorker:
-        w = CameraWorker(source_factory(), self._params, self.chroma_enabled, auto_key=self._auto_key, parent=self)
+        w = CameraWorker(source_factory(), self._params, self.chroma_enabled, auto_key=self._auto_key, parent=self,
+                         open_retries=self.open_retries)
         w.frameReady.connect(lambda img: self.view.set_frame(img))
         w.opened.connect(self._on_opened)
         w.cameraError.connect(self._on_error)

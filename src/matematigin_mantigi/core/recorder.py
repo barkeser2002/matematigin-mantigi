@@ -159,7 +159,8 @@ def ffmpeg_args(exe: str, width: int, height: int, fps: int, out: Path, audio_de
         if platform == "win32":
             args += ["-f", "dshow", "-i", f"audio={audio_device}"]
         elif platform == "darwin":
-            dev = audio_device if audio_device.startswith(":") else f":{audio_device}"
+            m = re.match(r":?\s*(\d+)", audio_device)          # ":0 MacBook Pro Microphone" -> ":0"
+            dev = f":{m.group(1)}" if m else f":{audio_device.lstrip(':')}"
             args += ["-f", "avfoundation", "-i", dev]
         else:
             args += ["-f", "pulse", "-i", audio_device]

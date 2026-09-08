@@ -51,7 +51,8 @@ class MainWindow(QMainWindow):
         # Yeşil perde ayarı Ayarlar penceresinden; varsayılan kaldırılmış.
         cam_index = settings.camera_index
         factory = (lambda: camera_source_factory(cam_index)) if camera_source_factory else (lambda: _NoCamera())
-        self.webcam_panel = WebcamPanel(fam, factory, settings.chroma, chroma_enabled=settings.chroma_enabled)
+        self.webcam_panel = WebcamPanel(fam, factory, settings.chroma, chroma_enabled=settings.chroma_enabled,
+                                        open_retries=15 if camera_source_factory is not None else 0)
         for key, zone in (("soru", self.question_zone), ("ipucu", self.hint_zone), ("webcam", self.webcam_panel)):
             self.work_area.add_zone(key, zone)
         self.work_area.set_layout(lm.load_layout(self.layout_path))

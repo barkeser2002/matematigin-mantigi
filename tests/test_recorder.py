@@ -48,7 +48,7 @@ def test_ffmpeg_args_per_platform(tmp_path):
     w = ffmpeg_args("ffmpeg", 640, 480, 30, out, "Mikrofon (USB)", platform="win32")
     assert "dshow" in w and "audio=Mikrofon (USB)" in w and "aac" in w and "-shortest" in w
     m = ffmpeg_args("ffmpeg", 640, 480, 30, out, ":0 Built-in Mic", platform="darwin")
-    assert "avfoundation" in m and m[m.index("avfoundation") + 2] == ":0 Built-in Mic"
+    assert "avfoundation" in m and m[m.index("avfoundation") + 2] == ":0"
     s = ffmpeg_args("ffmpeg", 1832, 1080, 60, out, None, platform="win32", out_height=1440)
     assert "-vf" in s and s[s.index("-vf") + 1] == "scale=-2:1440:flags=bicubic" and s[s.index("-framerate") + 1] == "60"
     assert "-vf" not in ffmpeg_args("ffmpeg", 1832, 1080, 60, out, None, platform="win32", out_height=0)
@@ -144,3 +144,11 @@ def test_grab_screen_returns_bgra():
     except Exception as err:  # noqa: BLE001 - ekran yoksa (CI)
         pytest.skip(f"ekran yakalanamadı: {err}")
     assert frame.shape == (48, 64, 4) and frame.dtype == np.uint8
+
+
+def test_mac_audio_device_passes_only_index(tmp_path):
+    out = tmp_path / "k.mp4"
+    m = ffmpeg_args("ffmpeg", 640, 480, 30, out, ":0 MacBook Pro Microphone", platform="darwin")
+    assert m[m.index("avfoundation") + 2] == ":0"
+    assert ffmpeg_args("ffmpeg", 640, 480, 30, out, "1", platform="darwin")[-1] == str(out)
+    assert ":1" in ffmpeg_args("ffmpeg", 640, 480, 30, out, "1", platform="darwin")

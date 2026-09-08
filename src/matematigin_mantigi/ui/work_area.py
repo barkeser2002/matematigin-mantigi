@@ -181,7 +181,7 @@ class WorkArea(QWidget):
         self.relayout()
         self.update()
 
-    LOGO_SIZE = 64
+    LOGO_SIZE = 48      # üst banda asılı, plaka gibi; soru numarasının üstüne binmez
 
     def set_logo(self, path: str) -> None:
         """PNG/JPG logo; boşsa veya yüklenemezse yuvarlak 'MM' monogramı."""
@@ -196,7 +196,7 @@ class WorkArea(QWidget):
         else:
             self.logo_label.setPixmap(QPixmap())
             self.logo_label.setText("MM")
-            self.logo_label.setFont(theme.hand_font(self.fam, 26, 700))
+            self.logo_label.setFont(theme.hand_font(self.fam, 20, 700))
             self.logo_label.setFixedSize(self.LOGO_SIZE, self.LOGO_SIZE)
             self.logo_label.setStyleSheet(f"color: {theme.PANEL_SOFT}; background: {theme.INK};"
                                           f" border: 2px solid {theme.HINT_CARD_BORDER}; border-radius: {self.LOGO_SIZE // 2}px;")
@@ -235,7 +235,7 @@ class WorkArea(QWidget):
         self.brand.adjustSize()
         self.brand.move((self.width() - self.brand.width()) // 2, 0)
         self.brand.raise_()
-        self.logo_label.move(inner.x() + 10, inner.y() + 8)
+        self.logo_label.move(inner.x() + 12, 2)
         self.logo_label.raise_()
         webcam = self._zones.get("webcam")
         anchor = webcam.geometry() if webcam is not None else inner

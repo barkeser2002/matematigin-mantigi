@@ -49,7 +49,8 @@ def build_window(args: argparse.Namespace, fam: theme.FontFamilies, settings: Ap
     return win
 
 
-_HARMLESS_QT_MESSAGES = ("cached device pixel ratio value was stale",)
+_HARMLESS_QT_MESSAGES = ("cached device pixel ratio value was stale",
+                         "QFont::setPointSize: Point size <= 0")      # piksel boyutlu uygulama fontuyla combo kutusu
 
 
 def _qt_message_filter(mode, context, message: str) -> None:

@@ -207,6 +207,34 @@ def test_real_recorder_through_window(window, qtbot, tmp_path):
     assert window.recorder.last_path.exists() and "Kayıt kaydedildi" in window.work_area.status_label.text()
 
 
+def test_real_recorder_with_audio_muxes_and_cleans_up(window, qtbot, tmp_path):
+    """Pencere üzerinden ses+video: mikrofon (sahte) alınır, mux edilir, ara dosyalar silinir, süre gerçek."""
+    import time
+    import numpy as np
+    import pytest
+    from matematigin_mantigi.core.recorder import MssFfmpegRecorder, find_ffmpeg
+    from tests.test_recorder import FakeAudioCapture, synthetic_grabber
+    if find_ffmpeg() is None:
+        pytest.skip("ffmpeg yok")
+    window.settings.audio_device = "Sahte Mikrofon"          # apply_ui_settings bunu kaydediciye taşır
+    window.recorder = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber,
+                                        out_height=0, audio_device="Sahte Mikrofon", audio_factory=FakeAudioCapture)
+    window.toggle_recording(True)
+    assert window.recorder.is_recording
+    time.sleep(1.2)
+    window.toggle_recording(False)
+    assert not window.toolbar.record_button.isEnabled()      # mux ayrı iş parçacığında, arayüz donmaz
+    qtbot.waitUntil(lambda: window.toolbar.record_button.isEnabled(), timeout=20000)
+    path = window.recorder.last_path
+    assert path.exists() and window.recorder.error is None and window.recorder.audio_error is None
+    assert window.recorder.audio_result is not None and window.recorder.audio_result.samples > 40000
+    assert window.recorder.av_offset_ms is not None          # ses-video başlangıç farkı ölçüldü
+    assert not list(path.parent.glob("*.wav")) and not list(path.parent.glob("*.video.mp4"))   # ara dosyalar silindi
+    import cv2
+    cap = cv2.VideoCapture(str(path)); frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)); cap.release()
+    assert frames > 10
+
+
 def test_layout_edit_persists_to_file(window, qtbot, tmp_path):
     qtbot.mouseClick(window.toolbar.layout_button, Qt.MouseButton.LeftButton)
     assert window.work_area.edit_mode
@@ -256,6 +284,50 @@ def test_settings_camera_change_restarts_worker_and_logo(window, qtbot, tmp_path
     assert window.settings.camera_index == 2 and seen == [2]
     assert window.webcam_panel.worker is not old_worker
     assert window.work_area.logo_is_file and window.settings.logo_file == str(logo)
+
+
+def test_reload_questions_updates_flow_and_zone(window):
+    from matematigin_mantigi.core.models import Question
+    new = [Question("Z1", "Yeni konu", 5, "Yepyeni soru?", ("ip",), "cevap", ("a", "b", "c", "d"), None),
+           Question("Z2", "Konu2", None, "İkinci?", (), "x", (), None)]
+    window.reload_questions(new)
+    assert [q.id for q in window.flow.questions] == ["Z1", "Z2"] and window.flow.index == 0
+    assert window.question_zone.number_label.text() == "1."
+    assert window.question_zone.text_label.text() == "Yepyeni soru?"
+    assert len(window.hint_zone.cards) == 1
+
+
+def test_reload_empty_list_does_not_crash(window):
+    window.reload_questions([])
+    assert window.flow.questions == () and window.flow.index == 0
+
+
+def test_editor_button_disabled_and_open_is_guarded_without_path(window, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+    calls = []
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: calls.append(a)))
+    assert not window.toolbar.editor_button.isEnabled()          # fixture questions_path yok
+    window.open_editor()
+    assert calls                                                 # bilgi kutusu gösterildi, başka iş yok
+
+
+def test_window_with_questions_path_enables_editor(qtbot, tmp_path, ini_settings, dead_camera):
+    from matematigin_mantigi.core.models import PenSettings, Question
+    from matematigin_mantigi.core.question_loader import write_questions
+    from matematigin_mantigi.core.recorder import NullRecorder
+    from matematigin_mantigi.core.session_store import SessionStore
+    from matematigin_mantigi.ui.main_window import MainWindow
+    from matematigin_mantigi.ui.theme import FontFamilies
+    path = write_questions(tmp_path / "sorular.xlsx", list(SAMPLE_QUESTIONS))
+    ini_settings.set_pen(PenSettings(reading_ms=0))
+    win = MainWindow(FontFamilies("Arial", "Arial", False), list(SAMPLE_QUESTIONS), ini_settings,
+                     NullRecorder(), SessionStore(tmp_path / "o"), lambda index: dead_camera,
+                     tmp_path / "d.json", questions_path=path)
+    qtbot.addWidget(win)
+    assert win.questions_path == path and win.toolbar.editor_button.isEnabled()
+    win.reload_questions([Question("Z1", "K", 5, "Yeni?", ("i",), "c", ("a", "b", "c", "d"), None)])
+    assert [q.id for q in win.flow.questions] == ["Z1"] and win.flow.index == 0
+    assert win.question_zone.text_label.text() == "Yeni?"
 
 
 def test_close_is_clean(window):

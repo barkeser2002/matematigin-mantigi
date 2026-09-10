@@ -74,6 +74,15 @@ class QuestionFlow(QObject):
             self.statusChanged.emit(i, s)
             self.progressChanged.emit(self.done_count(), len(self._questions))
 
+    def set_questions(self, questions: Sequence[Question]) -> None:
+        """Soru listesini tümüyle değiştirir; sıra başa döner, durumlar ve ipucu durumu sıfırlanır.
+        Arayüz tazelemesini çağıran taraf yapar (MainWindow._on_question_changed)."""
+        self._questions = tuple(questions)
+        self._index = 0
+        self._status = [QuestionStatus.WAITING for _ in self._questions]
+        self._hint_index = 0
+        self._revealed = set()
+
     def select(self, i: int) -> None:
         if not self._questions or not 0 <= i < len(self._questions):
             return

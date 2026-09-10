@@ -20,6 +20,7 @@ from matematigin_mantigi.ui.camera_worker import FrameSource
 from matematigin_mantigi.ui.cursors import cursor_for
 from matematigin_mantigi.ui.hint_zone import HintZone
 from matematigin_mantigi.ui.pen_settings import PenSettingsDialog
+from matematigin_mantigi.ui.question_editor import QuestionEditorDialog
 from matematigin_mantigi.ui.question_zone import QuestionZone
 from matematigin_mantigi.ui.record_badge import RecordBadge
 from matematigin_mantigi.ui.settings_dialog import SettingsDialog, SettingsValues
@@ -51,13 +52,16 @@ class _StopWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self, fam: FontFamilies, questions: Sequence[Question], settings: AppSettings,
                  recorder: Recorder, session_store: SessionStore,
-                 camera_source_factory: Callable[[int], FrameSource] | None, layout_path: Path, parent=None):
-        """camera_source_factory: kamera indeksinden kaynak üretir; None ise kamera açılmaz."""
+                 camera_source_factory: Callable[[int], FrameSource] | None, layout_path: Path, parent=None,
+                 *, questions_path: "Path | None" = None):
+        """camera_source_factory: kamera indeksinden kaynak üretir; None ise kamera açılmaz.
+        questions_path: soru dosyası (xlsx); verilmezse soru editörü açılmaz."""
         super().__init__(parent)
         self.camera_source_factory = camera_source_factory
         self.base_fam = fam                       # paketle gelen aile; Ayarlar'daki dosya bunun üstüne biner
         self.fam, self.settings, self.recorder, self.session_store = fam, settings, recorder, session_store
         self.layout_path = Path(layout_path)
+        self.questions_path = Path(questions_path) if questions_path else None
         self.setWindowTitle("Matematiğin Mantığı")
 
         central = QWidget(); row = QHBoxLayout(central)
@@ -85,6 +89,7 @@ class MainWindow(QMainWindow):
         self._shortcuts()
         self._restore_settings()
         self.apply_ui_settings()
+        self.toolbar.editor_button.setEnabled(self.questions_path is not None)
         if questions:
             self._on_question_changed(self.flow.index)
         if camera_source_factory is not None:
@@ -104,6 +109,7 @@ class MainWindow(QMainWindow):
         tb.recordToggled.connect(self.toggle_recording)
         tb.penSettingsRequested.connect(self.open_pen_settings)
         tb.settingsRequested.connect(self.open_settings)
+        tb.editorRequested.connect(self.open_editor)
         tb.layoutEditToggled.connect(self.work_area.set_edit_mode)
         self.work_area.editModeChanged.connect(tb.set_layout_edit)
         self.work_area.layoutChanged.connect(lambda lay: lm.save_layout(self.layout_path, lay))
@@ -309,6 +315,22 @@ class MainWindow(QMainWindow):
         dlg.applied.connect(self.apply_settings_values)
         dlg.exec()
 
+    def open_editor(self) -> None:
+        if self.questions_path is None:
+            QMessageBox.information(self, "Soru editörü", "Soru dosyası tanımlı değil.")
+            return
+        dlg = QuestionEditorDialog(self.flow.questions, self.questions_path, self.fam, self)
+        dlg.saved.connect(self.reload_questions)
+        dlg.exec()
+
+    def reload_questions(self, questions) -> None:
+        """Editörden gelen yeni listeyi uygular; akış başa döner, arayüz yeniden restart olmadan tazelenir."""
+        self.canvas.clear()
+        self.flow.set_questions(list(questions))
+        if self.flow.questions:
+            self._on_question_changed(self.flow.index)
+        self._refresh_progress()
+
     def apply_settings_values(self, v: SettingsValues) -> None:
         s = self.settings
         s.font_file = v.font_file
@@ -359,6 +381,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, e):
         if self.recorder.is_recording:
             self.recorder.stop()                 # pencere kapanırken kayıt dosyası tamamlansın
+        worker = getattr(self, "_stop_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.wait(60000)                   # arka planda ses birleştirme sürüyorsa bitmesini bekle
         self.webcam_panel.shutdown()
         self.settings.sync()
         super().closeEvent(e)

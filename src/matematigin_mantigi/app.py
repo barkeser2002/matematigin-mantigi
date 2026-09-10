@@ -49,7 +49,7 @@ def build_window(args: argparse.Namespace, fam: theme.FontFamilies, settings: Ap
     store = SessionStore()
     recorder = MssFfmpegRecorder(lambda: store.session_dir, fps=settings.record_fps,
                                  audio_device=settings.audio_device or None, out_height=settings.record_height)
-    win = MainWindow(fam, questions, settings, recorder, store, factory, layout_path)
+    win = MainWindow(fam, questions, settings, recorder, store, factory, layout_path, questions_path=template)
     win.resize(1920, 1080)
     return win
 

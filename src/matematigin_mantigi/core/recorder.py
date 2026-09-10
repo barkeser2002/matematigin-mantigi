@@ -177,9 +177,10 @@ def mux_args(exe: str, video: Path, audio: Path, out: Path, offset_s: float,
         args += ["-ss", f"{offset_s:.3f}", "-i", str(audio)]
     else:
         args += ["-itsoffset", f"{-offset_s:.3f}", "-i", str(audio)]
-    args += ["-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy"]
+    af = ["afade=t=in:st=0:d=0.01"]                  # -ss kesim noktasındaki tek örneklik tıkı yumuşatır (10 ms)
     if asetrate:
-        args += ["-af", f"asetrate={asetrate},aresample={out_rate}"]
+        af = [f"asetrate={asetrate}", f"aresample={out_rate}", *af]
+    args += ["-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-af", ",".join(af)]
     args += ["-ar", str(out_rate), "-c:a", "aac", "-b:a", "160k", "-shortest", "-movflags", "+faststart", str(out)]
     return args
 
@@ -218,6 +219,7 @@ class MssFfmpegRecorder:
         self._log_path: Path | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        self._stop_lock = threading.Lock()          # stop() iki yerden (kapatma + işçi) aynı anda çağrılmasın
         self._latest: bytes = b""
         self._latest_lock = threading.Lock()
         self._audio: AudioCapture | None = None
@@ -284,8 +286,12 @@ class MssFfmpegRecorder:
     def stop(self) -> Path | None:
         """Kaydı kapatır ve sesi videoyla birleştirir. Uzun sürebilir (birkaç sn); arayüz bunu ayrı iş
         parçacığında çağırmalı."""
-        if not self.is_recording:
-            return self.last_path
+        with self._stop_lock:
+            if not self.is_recording:
+                return self.last_path
+            return self._stop_locked()
+
+    def _stop_locked(self) -> Path | None:
         self._stop.set()
         self.last_duration = time.monotonic() - (self.started_at or time.monotonic())
         if self._thread is not None:

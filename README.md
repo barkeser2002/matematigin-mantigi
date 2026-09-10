@@ -62,6 +62,11 @@ Yatay soru PDF'ini (sayfa başına 1 soru + AKILLI İPUÇLARI kartları) aktarma
 Soru metni, A–D seçenekleri, 3–4 ipucu ve şekiller (`sorular_gorsel/SNN.png`) alınır; `konu` ve `cevap` boş
 kalır, Excel'de doldurulur. `pymupdf` gerekir (`pip install pymupdf`).
 
+Excel'i elle açmadan: sol araç çubuğundaki **✎ Sorular** tuşu soru editörünü açar. Soru ekle/sil, `id/konu/sınıf`,
+soru metni, A–D şıkları, cevap ve 4 ipucu doldur, **Resim seç…** ile görsel seç (otomatik `sorular_gorsel/` altına
+kopyalanır). **Kaydet** xlsx'e yazar ve uygulamayı yeniden başlatmadan tazeler. `--sorular` verilmezse veri
+klasöründeki `sorular_sablon.xlsx` düzenlenir.
+
 ## macOS paketleme (.app)
 
 Mac'te proje kökünde:
@@ -95,6 +100,18 @@ Kamera, mikrofon, ekran kaydı ve Documents klasörü izinleri ilk kullanımda s
 Ekran kaydı izni verildikten sonra uygulamayı yeniden başlat (macOS bunu ister). Birden fazla kamera varsa
 (ör. OBS Virtual Camera 0, FaceTime 1) ⚙ Ayarlar > Kamera > "Kameraları tara" gerçek adlarıyla listeler.
 
+## Windows paketi (.exe)
+
+Yerelde: `powershell -ExecutionPolicy Bypass -File windows\build_win.ps1` — `.venv` kurar, testleri koşar,
+`dist\Matematigin Mantigi\Matematigin Mantigi.exe` (tek klasör) üretir. ffmpeg ve PortAudio (ses) ikilileri pakete girer.
+
+## Otomatik yapı ve release (GitHub Actions)
+
+`main`'e her push'ta `.github/workflows/release.yml` **Windows `.exe`** ve **macOS `.app`** derler, ikisini bir
+GitHub Release'e (`build-<numara>`) ekler. Elle: Actions > **Release** > Run workflow (ya da `gh workflow run release.yml`).
+Yalnız Mac için `.github/workflows/mac.yml` de var. İndirdikten sonra Windows: klasörü kopyala, `.exe` çalıştır;
+macOS: `.app`'i sağ tık > Aç (imzasız).
+
 ## macOS (hedef makine, XP-Pen)
 
 - arm64 Python kullanın (`python3 -c "import platform; print(platform.machine())"` → arm64). PyQt6 universal2 wheel, macOS 12+.
@@ -118,8 +135,8 @@ Ekran kaydı izni verildikten sonra uygulamayı yeniden başlat (macOS bunu iste
 
 KAYIT düğmesi (R) tahtayı (araç çubuğu hariç) `mss` ile yakalar, `ffmpeg` (imageio-ffmpeg ile gelir, ayrıca
 kurulum gerekmez) H.264 MP4 yazar: `oturum/<tarih-saat>/kayit_<saat>.mp4`. Varsayılan 60 fps ve 2K (1440p'ye
-ölçeklenir); ⚙ Ayarlar > Kayıt'tan 30/60 fps, Doğal/1080p/2K/4K ve mikrofon ("Ses aygıtlarını listele": Windows
-dshow, macOS avfoundation) seçilir. Süre araç çubuğundaki DURDUR düğmesinin altında sayar; tahtadaki
+ölçeklenir); ⚙ Ayarlar > Kayıt'tan 30/60 fps, Doğal/1080p/2K/4K ve mikrofon ("Ses aygıtlarını listele": PortAudio
+aygıtları — Windows'ta en iyi host API, macOS'ta CoreAudio) seçilir. Süre araç çubuğundaki DURDUR düğmesinin altında sayar; tahtadaki
 "KAYIT · 00:00" rozeti varsayılan kapalıdır (kayda girer), Görünürlük'ten açılabilir.
 Kodlayıcı otomatik seçilir: macOS'ta VideoToolbox, Windows'ta NVENC/QSV/AMF, yoksa libx264 (ultrafast). Yakalama ayrı iş
 parçacığında koşar; yakalama fps'nin altında kalırsa kareler çoğaltılır, video süresi her zaman gerçek zamanla aynıdır.

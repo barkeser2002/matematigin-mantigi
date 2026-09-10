@@ -1,6 +1,8 @@
 """Excel şablonu: sütun doğrulama, örnek şablon üretme, soru yükleme/yazma."""
 from __future__ import annotations
 
+import filecmp
+import shutil
 from pathlib import Path
 from typing import Sequence
 
@@ -39,6 +41,33 @@ def write_questions(path: Path, questions: Sequence[Question]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(path)
     return path
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    try:
+        return filecmp.cmp(a, b, shallow=False)
+    except OSError:
+        return False
+
+
+def save_question_image(image_path: Path, images_dir: Path) -> str:
+    """Görseli images_dir içine kopyalar, ad çakışması varsa '_1' gibi ekle çözer.
+    xlsx klasörüne göre göreli posix yol döndürür: 'sorular_gorsel/<ad>'."""
+    image_path = Path(image_path)
+    images_dir = Path(images_dir)
+    images_dir.mkdir(parents=True, exist_ok=True)
+    target = images_dir / image_path.name
+    if target.exists() and not _same_file(image_path, target):
+        stem, suffix = image_path.stem, image_path.suffix
+        i = 1
+        while True:
+            target = images_dir / f"{stem}_{i}{suffix}"
+            if not target.exists() or _same_file(image_path, target):
+                break
+            i += 1
+    if not target.exists():
+        shutil.copyfile(image_path, target)
+    return f"{images_dir.name}/{target.name}"
 
 
 def write_template(path: Path, with_samples: bool = True) -> Path:

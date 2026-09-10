@@ -61,8 +61,9 @@ def test_mux_args_offsets_and_rate_fix(tmp_path):
     assert late[late.index("-itsoffset") + 1] == "0.100" and "-ss" not in late
     assert "-c:v" in early and early[early.index("-c:v") + 1] == "copy" and "aac" in early and early[-1] == str(out)
     fixed = mux_args("ffmpeg", v, a, out, 0.0, asetrate=48003)
-    assert fixed[fixed.index("-af") + 1] == "asetrate=48003,aresample=48000"
-    assert "-af" not in mux_args("ffmpeg", v, a, out, 0.0)
+    assert fixed[fixed.index("-af") + 1] == "asetrate=48003,aresample=48000,afade=t=in:st=0:d=0.01"
+    plain = mux_args("ffmpeg", v, a, out, 0.0)                    # saat düzeltmesi yoksa da 10 ms fade-in (tık önler)
+    assert plain[plain.index("-af") + 1] == "afade=t=in:st=0:d=0.01"
 
 
 def test_audio_rate_correction_only_for_long_clear_drift():

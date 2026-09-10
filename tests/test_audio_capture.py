@@ -26,6 +26,75 @@ def test_list_and_resolve_prefer_wasapi_on_windows(monkeypatch):
     assert ac.resolve_input_device("yok böyle") is None and ac.resolve_input_device("") is None
 
 
+def test_list_falls_back_when_wasapi_has_no_inputs(monkeypatch):
+    """Aygıt indeksleri değişince WASAPI'de giriş kalmayabilir; liste boş kalmamalı, bir alt API'ye düşmeli."""
+    class SD:
+        @staticmethod
+        def query_hostapis():
+            return [{"name": "MME"}, {"name": "Windows DirectSound"},
+                    {"name": "Windows WASAPI"}, {"name": "Windows WDM-KS"}]
+
+        @staticmethod
+        def query_devices(*a, **k):
+            return [{"name": "Realtek Mik", "max_input_channels": 2, "hostapi": 0},   # MME
+                    {"name": "Realtek Mik", "max_input_channels": 2, "hostapi": 1},   # DirectSound
+                    {"name": "Hoparlör (WASAPI)", "max_input_channels": 0, "hostapi": 2},
+                    {"name": "Realtek Mik (WDM)", "max_input_channels": 2, "hostapi": 3}]
+    monkeypatch.setattr(ac, "_sd", lambda: SD)
+    # WASAPI'de giriş yok -> DirectSound (rank 1) seçilir, MME (rank 2) değil
+    assert ac.list_input_devices() == ["Realtek Mik"]
+    assert ac.resolve_input_device("Realtek Mik") == 1          # DirectSound kopyası
+
+
+def test_list_never_empty_when_only_wdmks_has_inputs(monkeypatch):
+    class SD:
+        @staticmethod
+        def query_hostapis():
+            return [{"name": "MME"}, {"name": "Windows WASAPI"}, {"name": "Windows WDM-KS"}]
+
+        @staticmethod
+        def query_devices(*a, **k):
+            return [{"name": "USB Mik (U850)", "max_input_channels": 1, "hostapi": 2}]  # yalnız WDM-KS
+    monkeypatch.setattr(ac, "_sd", lambda: SD)
+    assert ac.list_input_devices() == ["USB Mik (U850)"]
+    assert ac.resolve_input_device("USB Mik (U850)") == 0
+
+
+def test_start_falls_back_when_no_default_input(monkeypatch, tmp_path):
+    """Varsayılan giriş -1 (PortAudioError) olduğunda ilk listelenen mikrofona düşer, çökmeden başlar."""
+    import sounddevice
+    calls = {"opened_device": "SENTINEL"}
+
+    class FakeStream:
+        def __init__(self, device, **k):
+            calls["opened_device"] = device
+        def start(self): pass
+        def stop(self): pass
+        def close(self): pass
+
+    class SD:
+        PortAudioError = sounddevice.PortAudioError
+        InputStream = FakeStream
+
+        @staticmethod
+        def query_hostapis():
+            return [{"name": "Windows WASAPI"}]
+
+        @staticmethod
+        def query_devices(device=None, kind=None):
+            if device is None and kind == "input":             # varsayılan giriş yok (-1)
+                raise sounddevice.PortAudioError("Error querying device -1")
+            if device is None:                                 # tüm aygıtlar
+                return [{"name": "Tek Mik", "max_input_channels": 1, "hostapi": 0,
+                         "default_samplerate": 44100.0}]
+            return {"name": "Tek Mik", "max_input_channels": 1, "hostapi": 0, "default_samplerate": 44100.0}
+    monkeypatch.setattr(ac, "_sd", lambda: SD)
+    cap = ac.AudioCapture(None)
+    cap.start(tmp_path / "a.wav")
+    assert calls["opened_device"] == 0 and cap.samplerate == 44100    # ilk mikrofon seçildi
+    cap.stop()
+
+
 def test_list_is_empty_without_portaudio(monkeypatch):
     def boom():
         raise OSError("PortAudio yok")
@@ -90,8 +159,12 @@ def test_capture_writes_wav_and_measures_first_sample(tmp_path, monkeypatch):
 
 @pytest.mark.skipif(not ac.list_input_devices(), reason="mikrofon yok")
 def test_real_microphone_short_capture(tmp_path):
+    import sounddevice
     cap = ac.AudioCapture(None)
-    cap.start(tmp_path / "real.wav")
+    try:
+        cap.start(tmp_path / "real.wav")
+    except (sounddevice.PortAudioError, RuntimeError) as err:
+        pytest.skip(f"mikrofon açılamadı (donanım/izin): {err}")
     time.sleep(0.6)
     res = cap.stop()
     assert res.samples > res.samplerate * 0.3 and res.first_sample_monotonic is not None

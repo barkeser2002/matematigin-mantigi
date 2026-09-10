@@ -43,47 +43,72 @@ def _sd():
     return sd
 
 
-def _input_devices() -> list[tuple[int, dict]]:
-    """(indeks, aygıt) çiftleri; Windows'ta yalnızca WASAPI (adlar üç kez tekrarlanmasın, düşük gecikme)."""
-    sd = _sd()
-    hostapis, devices = sd.query_hostapis(), sd.query_devices()
-    preferred = next((i for i, h in enumerate(hostapis) if "WASAPI" in h["name"]), None)
-    out = []
-    for idx, d in enumerate(devices):
-        if d["max_input_channels"] <= 0:
-            continue
-        if preferred is not None and d["hostapi"] != preferred:
-            continue
-        out.append((idx, d))
-    return out
+def _all_input_devices(sd) -> list[tuple[int, dict]]:
+    """Girişi olan tüm (indeks, aygıt) çiftleri, host API'den bağımsız."""
+    return [(i, d) for i, d in enumerate(sd.query_devices()) if int(d.get("max_input_channels", 0) or 0) > 0]
+
+
+def _hostapi_rank(sd):
+    """Host API tercih sırası (küçük = iyi): WASAPI < DirectSound < MME < WDM-KS/diğer.
+    macOS'ta tek API (CoreAudio) vardır, hepsi eşit."""
+    names = [h.get("name", "") for h in sd.query_hostapis()]
+
+    def rank(hostapi_idx: int) -> int:
+        n = names[hostapi_idx] if 0 <= hostapi_idx < len(names) else ""
+        if "WASAPI" in n:
+            return 0
+        if "DirectSound" in n:
+            return 1
+        if "MME" in n:
+            return 2
+        if "Core" in n or "ALSA" in n or "JACK" in n:
+            return 0          # macOS/Linux tek modern API: en iyi
+        return 3
+    return rank
 
 
 def list_input_devices() -> list[str]:
-    """Mikrofon adları (ayarlar listesi için)."""
+    """Mikrofon adları (ayarlar listesi için). Girişi olan en iyi host API'nin aygıtları; boşsa bir alt API.
+    Böylece adlar tekrarlanmaz ve tam gelir; aygıt indeksleri değişse de liste boş kalmaz."""
     try:
+        sd = _sd()
+        by_api: dict[int, list[str]] = {}
+        for _, d in _all_input_devices(sd):
+            by_api.setdefault(int(d["hostapi"]), []).append(d["name"])
+        if not by_api:
+            return []
+        rank = _hostapi_rank(sd)
+        best = min(by_api, key=rank)
+        seen: set[str] = set()
         names: list[str] = []
-        for _, d in _input_devices():
-            if d["name"] not in names:
-                names.append(d["name"])
+        for name in by_api[best]:
+            if name and name not in seen:
+                seen.add(name)
+                names.append(name)
         return names
     except Exception:  # noqa: BLE001 - PortAudio yoksa / aygıt sorgusu patlarsa liste boş
         return []
 
 
 def resolve_input_device(name: str | None) -> int | None:
-    """Ad -> sounddevice indeksi. Tam ad, sonra alt dize; bulunmazsa None (varsayılan giriş)."""
+    """Ad -> sounddevice indeksi. Tam ad önce, sonra alt dize; her ikisinde de en iyi host API'yi seçer.
+    Bulunmazsa None (varsayılan giriş). Aygıtlar tüm host API'lerden aranır, böylece eski kayıtlı adlar da tutar."""
     if not name:
         return None
     try:
-        devs = _input_devices()
+        sd = _sd()
+        cands = _all_input_devices(sd)
+        rank = _hostapi_rank(sd)
     except Exception:  # noqa: BLE001
         return None
-    for idx, d in devs:
-        if d["name"] == name:
-            return idx
-    for idx, d in devs:
-        if name.lower() in d["name"].lower() or d["name"].lower() in name.lower():
-            return idx
+    exact = [(rank(int(d["hostapi"])), i) for i, d in cands if d["name"] == name]
+    if exact:
+        return min(exact)[1]
+    low = name.lower()
+    sub = [(rank(int(d["hostapi"])), i) for i, d in cands
+           if low in d["name"].lower() or d["name"].lower() in low]
+    if sub:
+        return min(sub)[1]
     return None
 
 
@@ -109,8 +134,7 @@ class AudioCapture:
 
     def start(self, path: Path) -> None:
         sd = _sd()
-        idx = resolve_input_device(self.device)
-        info = sd.query_devices(idx, "input") if idx is not None else sd.query_devices(kind="input")
+        idx, info = self._pick_device(sd)
         self.samplerate = int(info.get("default_samplerate") or 48000)     # aygıtın kendi hızı: yeniden örnekleme yok
         channels = max(1, min(self.channels, int(info.get("max_input_channels") or 1)))
         self.channels = channels
@@ -126,6 +150,25 @@ class AudioCapture:
         self._stream = sd.InputStream(device=idx, samplerate=self.samplerate, channels=channels, dtype="int16",
                                       latency="high", callback=self._callback)
         self._stream.start()
+
+    def _pick_device(self, sd) -> tuple[int | None, dict]:
+        """Aygıtı sağlam çöz: seçilen ad, sonra PortAudio varsayılanı, o da yoksa listedeki ilk mikrofon.
+        Bu makinede varsayılan giriş -1 olabilir (PortAudioError); o durumda ilk mikrofona düşer."""
+        idx = resolve_input_device(self.device)
+        if idx is not None:
+            try:
+                return idx, sd.query_devices(idx, "input")
+            except Exception:  # noqa: BLE001 - seçilen indeks geçersiz: varsayılana düş
+                pass
+        try:
+            return None, sd.query_devices(kind="input")          # None = PortAudio varsayılan girişi
+        except Exception:  # noqa: BLE001 - varsayılan giriş yok (-1)
+            pass
+        names = list_input_devices()
+        fallback = resolve_input_device(names[0]) if names else None
+        if fallback is None:
+            raise RuntimeError("kullanılabilir mikrofon bulunamadı")
+        return fallback, sd.query_devices(fallback, "input")
 
     def _callback(self, indata, frames, time_info, status) -> None:
         if status and getattr(status, "input_overflow", False):

@@ -1,0 +1,73 @@
+name: Release (Windows + macOS)
+
+# main'e her push'ta Windows .exe ve macOS .app üretir, ikisini bir GitHub Release'e ekler.
+# Elle de çalıştırılabilir (Actions > Release > Run workflow).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write        # release yayınlamak için gerekli
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Paketle (.venv + testler + PyInstaller)
+        run: powershell -ExecutionPolicy Bypass -File windows\build_win.ps1
+      - name: Zip
+        run: Compress-Archive -Path "dist\Matematigin Mantigi\*" -DestinationPath "Matematigin-Mantigi-Windows.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Matematigin-Mantigi-Windows
+          path: Matematigin-Mantigi-Windows.zip
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-14        # arm64 (Apple Silicon)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Paketle (.venv + testler + PyInstaller)
+        run: bash mac/build_mac.sh
+      - name: Zip
+        run: |
+          cd dist
+          ditto -c -k --sequesterRsrc --keepParent "Matematiğin Mantığı.app" "Matematigin-Mantigi-macOS.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Matematigin-Mantigi-macOS
+          path: dist/Matematigin-Mantigi-macOS.zip
+          if-no-files-found: error
+
+  release:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Yayınla
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Yapı ${{ github.run_number }}
+          body: |
+            Otomatik yapı (commit ${{ github.sha }}).
+            - Windows: Matematigin-Mantigi-Windows.zip — aç, klasörü kopyala, "Matematigin Mantigi.exe" çalıştır.
+            - macOS: Matematigin-Mantigi-macOS.zip — aç, .app'i Uygulamalar'a taşı (imzasız: sağ tık > Aç).
+          files: |
+            artifacts/Matematigin-Mantigi-Windows/Matematigin-Mantigi-Windows.zip
+            artifacts/Matematigin-Mantigi-macOS/Matematigin-Mantigi-macOS.zip
+          fail_on_unmatched_files: true

@@ -29,6 +29,7 @@ class ToolBar(QWidget):
     recordToggled = pyqtSignal(bool)
     penSettingsRequested = pyqtSignal()
     settingsRequested = pyqtSignal()
+    editorRequested = pyqtSignal()
     layoutEditToggled = pyqtSignal(bool)
 
     def __init__(self, fam: FontFamilies, parent=None):
@@ -53,10 +54,13 @@ class ToolBar(QWidget):
         self.pen_settings_button.clicked.connect(self.penSettingsRequested)
         self.settings_button = QPushButton("⚙ Ayarlar"); self.settings_button.setStyleSheet(_BTN_CSS)
         self.settings_button.clicked.connect(self.settingsRequested)
+        self.editor_button = QPushButton("✎ Sorular"); self.editor_button.setStyleSheet(_BTN_CSS)
+        self.editor_button.clicked.connect(self.editorRequested)
         self.layout_button = QPushButton("⧉ Düzen"); self.layout_button.setCheckable(True)
         self.layout_button.setStyleSheet(_BTN_CSS)
         self.layout_button.toggled.connect(self.layoutEditToggled)
-        col.addWidget(self.pen_settings_button); col.addWidget(self.settings_button); col.addWidget(self.layout_button)
+        col.addWidget(self.pen_settings_button); col.addWidget(self.settings_button)
+        col.addWidget(self.editor_button); col.addWidget(self.layout_button)
         col.addWidget(self._rule())
 
         self._tool_group = QButtonGroup(self); self._tool_group.setExclusive(True)

@@ -62,6 +62,14 @@ class _EditOverlay(QWidget):
             p.setPen(QColor(theme.ACCENT))
             p.drawText(geo.adjusted(10, 6, -10, -6), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft,
                        zone.key.upper())
+        for key, widget in area._items.items():   # öğeler: tutamaksız (yalnız taşınır) ince kesikli çerçeve
+            geo = widget.geometry()                # + anahtar etiketi -- yoksa düzen modunda görünmez hedef olurlar
+            pen = QPen(QColor(theme.ACCENT), 2); pen.setStyle(Qt.PenStyle.DashLine); p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRect(QRectF(geo).adjusted(1, 1, -1, -1))
+            p.setPen(QColor(theme.ACCENT))
+            p.drawText(geo.adjusted(4, 2, -4, -2), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft,
+                       key.upper())
         p.end()
 
 
@@ -96,6 +104,8 @@ class WorkArea(QWidget):
         self.fam = fam
         self._zones: dict[str, Zone] = {}
         self._layout: lm.Layout = dict(lm.DEFAULT_LAYOUT)
+        self._item_pos: dict[str, lm.ItemPos] = {}    # yalnız sürüklenmiş öğeler; eksik anahtar = bugünkü formül
+        self._items: dict[str, QWidget] = {}          # relayout() sırasında yeniden kurulur (rozet tembel okunsun)
         self.edit_mode = False
         self.frame_visible = True
         self.aspect_lock = True
@@ -170,7 +180,7 @@ class WorkArea(QWidget):
         return list(self._zones.values())
 
     def layout(self) -> lm.Layout:                      # type: ignore[override]
-        return dict(self._layout)
+        return {**self._layout, **self._item_pos}
 
     def set_layout(self, layout: lm.Layout) -> None:
         # lm.clamp_free alansız çağrılır (self.inner_rect() ile DEĞİL): bu bir yükleme yolu (ör. MainWindow
@@ -181,6 +191,10 @@ class WorkArea(QWidget):
         self._layout = {k: lm.clamp_free(v) for k, v in layout.items() if k in lm.ZONE_KEYS}
         for k in lm.ZONE_KEYS:
             self._layout.setdefault(k, lm.DEFAULT_LAYOUT[k])
+        # Öğelerde varsayılan YOK: verilen düzende anılmayan bir öğe anahtarı, "hiç sürüklenmemiş" demektir
+        # -- relayout() o öğe için bugünkü formülü kullanır (bkz. _place_item). Zone'larla simetrik olarak
+        # TAM DEĞİŞTİRİR (birleştirmez): reset_layout() böylece öğe geçersiz kılmalarını da sıfırlar.
+        self._item_pos = {k: v for k, v in layout.items() if k in lm.ITEM_KEYS}
         self.relayout()
 
     def reset_layout(self) -> None:
@@ -288,22 +302,33 @@ class WorkArea(QWidget):
         self.ink.raise_()                                   # mürekkep soru/ipucu üstünde
         if "webcam" in self._zones:
             self._zones["webcam"].raise_()                  # kişi mürekkebin üstünde
+
+        # Öğeler (marka, logo, sunucu adı, rozet, durum satırı): rozet MainWindow tarafından __init__'ten
+        # SONRA gerçek RecordBadge ile değiştirildiği için (main_window.py:83) self.badge_slot burada HER
+        # relayout()'ta yeniden okunur -- __init__'te bir kez yakalansaydı öksüz placeholder'a saplanırdı.
+        self._items = {
+            "status": self.status_label, "brand": self.brand, "logo": self.logo_label,
+            "presenter": self.name_label, "badge": self.badge_slot,
+        }
         self.status_label.adjustSize()
-        self.status_label.move(inner.x() + 12, inner.bottom() - self.status_label.height() - 6)
-        self.status_label.raise_()
         self.brand.adjustSize()
-        self.brand.move(stage.x() + (stage.width() - self.brand.width()) // 2, stage.y())
-        self.brand.raise_()
-        self.logo_label.move(inner.x() + 12, stage.y() + 2)      # sahnenin üst bandına asılı: kayda girer
-        self.logo_label.raise_()
         webcam = self._zones.get("webcam")
         anchor = webcam.geometry() if webcam is not None else inner
         self.name_label.adjustSize()
-        self.name_label.move(anchor.right() - self.name_label.width() - 8, anchor.top() - self.name_label.height() - 2)
-        self.name_label.raise_()
-        top = inner.y() + 4
-        self.badge_slot.move(inner.right() - self.badge_slot.width() - 12, top)
-        self.badge_slot.raise_()
+        # Sırayla: kayıtlı geçersiz kılma varsa onu kullan (stage_rect'e göre kesirli), yoksa bugünkü
+        # formül (else dalı = regresyon yüzeyi, hiç sürüklenmemiş öğe birebir aynı görünmeli). raise_()
+        # sırası bilerek KORUNUR (status -> brand -> logo -> presenter -> badge -> overlay).
+        self._place_item("status", self.status_label, stage,
+                         QPoint(inner.x() + 12, inner.bottom() - self.status_label.height() - 6))
+        self._place_item("brand", self.brand, stage,
+                         QPoint(stage.x() + (stage.width() - self.brand.width()) // 2, stage.y()))
+        self._place_item("logo", self.logo_label, stage,
+                         QPoint(inner.x() + 12, stage.y() + 2))      # sahnenin üst bandına asılı: kayda girer
+        self._place_item("presenter", self.name_label, stage,
+                         QPoint(anchor.right() - self.name_label.width() - 8,
+                                anchor.top() - self.name_label.height() - 2))
+        self._place_item("badge", self.badge_slot, stage,
+                         QPoint(inner.right() - self.badge_slot.width() - 12, inner.y() + 4))
         self.overlay.setGeometry(self.rect())
         self.overlay.raise_()
         self.edit_bar.adjustSize()
@@ -311,6 +336,17 @@ class WorkArea(QWidget):
                            stage.y() + self.brand.height() + 8)
         self.edit_bar.raise_()
         self.overlay.update()
+
+    def _place_item(self, key: str, widget: QWidget, stage: QRect, default: QPoint) -> None:
+        """Kayıtlı bir geçersiz kılma (`self._item_pos[key]`, stage_rect'e göre kesirli) varsa onu
+        kullanır; yoksa `default`'u (bugünkü sert kodlu formül) kullanır."""
+        override = self._item_pos.get(key)
+        if override is not None:
+            dx, dy = lm.item_pixel_from_pos(override, stage.width(), stage.height())
+            widget.move(stage.x() + dx, stage.y() + dy)
+        else:
+            widget.move(default)
+        widget.raise_()
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -339,7 +375,14 @@ class WorkArea(QWidget):
 
     # --- edit mode mouse handling ---------------------------------------------
     def _hit(self, pos: QPoint) -> tuple[str, str] | None:
-        for key in reversed(list(self._zones)):           # üstteki bölge önce
+        # Öğeler her zaman bölgelerin üstünde çizilir (relayout()'un raise_ sırası) -- ör. rozetin
+        # varsayılan konumu ipucu'yla, marka plakası da soru/ipucu'nun üst kenarıyla görsel olarak çakışır.
+        # Ama bölgenin kendi tutamağı (kenar/köşe) yine de HER ZAMAN kazanmalı -- yoksa marka plakasının
+        # altında soru/ipucu'yu üst kenarından yeniden boyutlandırmak imkansız olurdu. Bu yüzden: önce
+        # üstteki bölgenin tutamak isabeti (varsa) hemen döner; değilse (bölgenin İÇİ) önce öğelere bakılır,
+        # bir öğe isabet etmezse en baştaki bölgenin "taşı" isabetine geri dönülür.
+        zone_move: tuple[str, str] | None = None
+        for key in reversed(list(self._zones)):           # üstteki bölge önce; yalnız en üsttekine bakılır
             geo = self._zones[key].geometry()
             if not geo.contains(pos):
                 continue
@@ -347,24 +390,31 @@ class WorkArea(QWidget):
             near_r = geo.right() - pos.x() <= GRIP
             near_t = pos.y() - geo.top() <= GRIP
             near_b = geo.bottom() - pos.y() <= GRIP
-            if near_t and near_l: mode = "nw"
-            elif near_t and near_r: mode = "ne"
-            elif near_b and near_l: mode = "sw"
-            elif near_b and near_r: mode = "se"
-            elif near_t: mode = "n"
-            elif near_b: mode = "s"
-            elif near_l: mode = "w"
-            elif near_r: mode = "e"
-            else: mode = "move"
-            return key, mode
-        return None
+            if near_t and near_l: return key, "nw"
+            if near_t and near_r: return key, "ne"
+            if near_b and near_l: return key, "sw"
+            if near_b and near_r: return key, "se"
+            if near_t: return key, "n"
+            if near_b: return key, "s"
+            if near_l: return key, "w"
+            if near_r: return key, "e"
+            zone_move = (key, "move")
+            break
+        for key in reversed(list(self._items)):            # öğeler yalnız taşınır, tutamak aranmaz
+            if self._items[key].geometry().contains(pos):
+                return key, "move"
+        return zone_move
+
+    def _widget(self, key: str) -> QWidget:
+        """`key` bir bölge mi öğe mi -- `_drag` tarafından tutulan geometri hangi çocuğa uygulanacak."""
+        return self._zones[key] if key in self._zones else self._items[key]
 
     def mousePressEvent(self, e: QMouseEvent):
         if self.edit_mode and e.button() == Qt.MouseButton.LeftButton:
             hit = self._hit(e.position().toPoint())
             if hit:
                 key, mode = hit
-                self._drag = (key, mode, e.position().toPoint(), QRect(self._zones[key].geometry()))
+                self._drag = (key, mode, e.position().toPoint(), QRect(self._widget(key).geometry()))
                 e.accept(); return
         super().mousePressEvent(e)
 
@@ -399,12 +449,19 @@ class WorkArea(QWidget):
                 if "n" in mode:
                     y -= lm.MIN_FREE_H - h
                 h = lm.MIN_FREE_H
-        inner = self.inner_rect()                            # canlı kırpma: tahtadan dışarı sürüklenemez
-        w = min(w, inner.width())
-        h = min(h, inner.height())
-        x = max(inner.x(), min(x, inner.x() + inner.width() - w))
-        y = max(inner.y(), min(y, inner.y() + inner.height() - h))
-        self._zones[key].setGeometry(x, y, w, h)
+        if key in self._zones:                                # canlı kırpma: tahtadan dışarı sürüklenemez
+            inner = self.inner_rect()
+            w = min(w, inner.width())
+            h = min(h, inner.height())
+            x = max(inner.x(), min(x, inner.x() + inner.width() - w))
+            y = max(inner.y(), min(y, inner.y() + inner.height() - h))
+        else:                                                  # öğeler sahneye göre kırpılır (inner_rect
+            stage = self.stage_rect()                          # DEĞİL: marka/logo bandın üstünde durur)
+            w = min(w, stage.width())
+            h = min(h, stage.height())
+            x = max(stage.x(), min(x, stage.x() + stage.width() - w))
+            y = max(stage.y(), min(y, stage.y() + stage.height() - h))
+        self._widget(key).setGeometry(x, y, w, h)
         self.overlay.update()
         e.accept()
 
@@ -414,12 +471,18 @@ class WorkArea(QWidget):
         key, _mode, _start, _geo = self._drag
         self._drag = None
         self._snap_active = False
-        inner = self.inner_rect()
-        g = self._zones[key].geometry()
-        ctrl = bool(e.modifiers() & Qt.KeyboardModifier.ControlModifier)
-        to_geom = lm.snap_rect if ctrl else lm.free_rect
-        self._layout[key] = to_geom(g.x() - inner.x(), g.y() - inner.y(), g.width(), g.height(),
-                                    inner.width(), inner.height(), theme.GRID_GAP)
+        if key in self._zones:
+            inner = self.inner_rect()
+            g = self._zones[key].geometry()
+            ctrl = bool(e.modifiers() & Qt.KeyboardModifier.ControlModifier)
+            to_geom = lm.snap_rect if ctrl else lm.free_rect
+            self._layout[key] = to_geom(g.x() - inner.x(), g.y() - inner.y(), g.width(), g.height(),
+                                        inner.width(), inner.height(), theme.GRID_GAP)
+        else:
+            stage = self.stage_rect()                          # KARAR: öğe konumu stage_rect'e göre kesirli
+            g = self._items[key].geometry()
+            self._item_pos[key] = lm.item_pos_from_pixel(g.x() - stage.x(), g.y() - stage.y(),
+                                                          stage.width(), stage.height())
         self.relayout()
         self.layoutChanged.emit(self.layout())
         e.accept()

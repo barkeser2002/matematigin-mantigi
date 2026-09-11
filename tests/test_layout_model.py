@@ -126,3 +126,59 @@ def test_load_layout_reads_legacy_integer_file_unchanged(tmp_path):
     assert layout["soru"] == lm.PanelGeom(2, 1, 5, 4)
     assert layout["ipucu"] == lm.PanelGeom(7, 1, 5, 4)
     assert layout["webcam"] == lm.PanelGeom(0, 8, 2, 2)
+
+
+# --- Görev 5: tahta öğeleri (marka, logo, sunucu adı, rozet, durum satırı) ---------------------------
+
+def test_item_keys_match_visibility_keys_strings_exactly():
+    """ITEM_KEYS, settings.VISIBILITY_KEYS'teki karşılıklarıyla birebir aynı dizeleri kullanır -- görünürlük
+    ve düzen anahtarları hizalı kalsın (Görev 6 buna dayanacak)."""
+    from matematigin_mantigi.core.settings import VISIBILITY_KEYS
+    visibility_key_strings = {k for k, _ in VISIBILITY_KEYS}
+    assert lm.ITEM_KEYS == ("brand", "logo", "presenter", "badge", "status")
+    assert set(lm.ITEM_KEYS) <= visibility_key_strings
+
+
+def test_item_pos_pixel_round_trip():
+    """item_pos_from_pixel/item_pixel_from_pos: stage_rect başlangıcına göreli piksel <-> kesirli ItemPos."""
+    stage_w, stage_h = 1600, 900
+    pos = lm.item_pos_from_pixel(480, 45, stage_w, stage_h)
+    assert pos == lm.ItemPos(480 / 1600, 45 / 900)
+    assert lm.item_pixel_from_pos(pos, stage_w, stage_h) == (480, 45)
+
+
+def test_to_json_from_json_round_trips_item_positions():
+    """Öğe konumları (ItemPos) da bölgeler gibi JSON'a yazılıp aynen geri okunmalı."""
+    layout: lm.Layout = dict(lm.DEFAULT_LAYOUT)
+    layout["brand"] = lm.ItemPos(0.4125, 0.0)
+    layout["badge"] = lm.ItemPos(0.91, 0.032)
+    text = lm.to_json(layout)
+    restored = lm.from_json(text)
+    assert restored["brand"] == lm.ItemPos(0.4125, 0.0)
+    assert restored["badge"] == lm.ItemPos(0.91, 0.032)
+    assert restored["soru"] == lm.DEFAULT_LAYOUT["soru"]
+    assert "logo" not in restored and "presenter" not in restored and "status" not in restored
+
+
+def test_from_json_legacy_zone_only_file_has_no_item_overrides():
+    """Eski duzen.json (yalnız bölge anahtarları) öğe anahtarı içermez -- WorkArea bunu 'kayıtlı override
+    yok, bugünkü formülü kullan' olarak okur (bkz. test_work_area.py'deki entegrasyon testi)."""
+    text = json.dumps({
+        "soru": {"col": 0, "row": 0, "col_span": 6, "row_span": 4},
+        "ipucu": {"col": 6, "row": 0, "col_span": 6, "row_span": 4},
+        "webcam": {"col": 9, "row": 7, "col_span": 3, "row_span": 3},
+    })
+    layout = lm.from_json(text)
+    assert set(layout) == set(lm.ZONE_KEYS)
+    for key in lm.ITEM_KEYS:
+        assert key not in layout
+
+
+def test_from_json_ignores_malformed_item_entry_but_keeps_others():
+    """Bozuk bir öğe girdisi (float'a çevrilemeyen x) yalnız o anahtarı atlar; aynı dosyadaki başka bir
+    öğe anahtarı etkilenmeden okunur -- bozuk bölge girdisiyle aynı 'sessizce yok say' davranışı, ama
+    yok saymanın döngüyü tamamen durdurmadığının kanıtı."""
+    text = json.dumps({"brand": {"x": "oops", "y": 0.1}, "logo": {"x": 0.02, "y": 0.01}})
+    layout = lm.from_json(text)
+    assert "brand" not in layout
+    assert layout["logo"] == lm.ItemPos(0.02, 0.01)

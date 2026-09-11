@@ -1,4 +1,7 @@
+import json
+
 from PyQt6.QtCore import QPoint, QRect, Qt
+from PyQt6.QtWidgets import QWidget
 
 from matematigin_mantigi.core import layout_model as lm
 from matematigin_mantigi.ui import theme
@@ -37,6 +40,11 @@ class DprArea(WorkArea):
 def cells(wa):
     inner = wa.inner_rect()
     return lm.cell_size(inner.width(), inner.height(), 14)
+
+
+def item_widgets(wa):
+    return {"brand": wa.brand, "logo": wa.logo_label, "presenter": wa.name_label,
+            "badge": wa.badge_slot, "status": wa.status_label}
 
 
 def brightest(img, y, xs) -> int:
@@ -416,3 +424,109 @@ def test_status_line(qtbot):
     assert wa.status_label.text().startswith("Araç: Kalem")
     inner = wa.inner_rect()
     assert wa.status_label.x() == inner.x() + 12 and wa.status_label.geometry().bottom() <= inner.bottom()
+
+
+# --- Görev 5: tahta öğeleri de taşınabilsin ------------------------------------------------------------
+
+def test_unmoved_items_render_at_todays_default_positions(qtbot):
+    """Hiç sürüklenmemiş öğeler (kayıtlı override yok) bugünkü sert kodlu formüllerle birebir aynı yerde
+    olmalı -- else dalı regresyon testi (Görev 5 öncesi davranış)."""
+    wa, zones = make(qtbot)
+    stage, inner = wa.stage_rect(), wa.inner_rect()
+    assert (wa.logo_label.x(), wa.logo_label.y()) == (inner.x() + 12, stage.y() + 2)
+    assert (wa.status_label.x(), wa.status_label.y()) == (
+        inner.x() + 12, inner.bottom() - wa.status_label.height() - 6)
+    assert wa.brand.y() == stage.y()
+    assert wa.brand.x() == stage.x() + (stage.width() - wa.brand.width()) // 2
+    cam = zones["webcam"].geometry()
+    assert (wa.name_label.x(), wa.name_label.y()) == (
+        cam.right() - wa.name_label.width() - 8, cam.top() - wa.name_label.height() - 2)
+    assert (wa.badge_slot.x(), wa.badge_slot.y()) == (
+        inner.right() - wa.badge_slot.width() - 12, inner.y() + 4)
+
+
+def test_edit_mode_drag_moves_brand_and_round_trips_via_duzen_json(qtbot, tmp_path):
+    """Düzen modunda marka plakasını sürükle -> yeni konuma gidiyor, layoutChanged yayılıyor, duzen.json
+    yuvarlak yolculuğundan sonra aynı yerde."""
+    wa, _ = make(qtbot)
+    original = (wa.brand.x(), wa.brand.y())
+    wa.set_edit_mode(True)
+    start = wa.brand.geometry().center()
+    end = start + QPoint(60, 4)
+    qtbot.mousePress(wa, Qt.MouseButton.LeftButton, pos=start)
+    qtbot.mouseMove(wa, end)
+    with qtbot.waitSignal(wa.layoutChanged) as sig:
+        qtbot.mouseRelease(wa, Qt.MouseButton.LeftButton, pos=end)
+    assert isinstance(sig.args[0]["brand"], lm.ItemPos)
+    moved = (wa.brand.x(), wa.brand.y())
+    assert moved != original
+
+    p = tmp_path / "duzen.json"
+    lm.save_layout(p, wa.layout())
+    wa.set_layout(lm.load_layout(p))
+    assert (wa.brand.x(), wa.brand.y()) == moved
+
+
+def test_dragged_item_stays_proportional_to_stage_after_resize(qtbot):
+    """Sürüklenmiş bir öğe pencere yeniden boyutlandığında (letterbox bantları kayarken bile) sahneye göre
+    aynı oranlı noktada kalmalı -- Görev 5'in koordinat tabanı kararının (stage_rect, inner_rect DEĞİL)
+    doğrudan testi."""
+    wa, _ = make(qtbot)
+    wa.set_layout(dict(wa.layout(), brand=lm.ItemPos(0.3, 0.1)))
+    stage1 = wa.stage_rect()
+    assert (wa.brand.x(), wa.brand.y()) == (stage1.x() + round(0.3 * stage1.width()),
+                                            stage1.y() + round(0.1 * stage1.height()))
+
+    wa.resize(900, 1200)                       # çok farklı en-boy oranı: bantlar tamamen değişir
+    stage2 = wa.stage_rect()
+    assert stage2 != stage1
+    assert (wa.brand.x(), wa.brand.y()) == (stage2.x() + round(0.3 * stage2.width()),
+                                            stage2.y() + round(0.1 * stage2.height()))
+
+
+def test_badge_drag_applies_to_real_widget_bound_after_construction(qtbot):
+    """Rozet tembel okunuyor: MainWindow work_area.badge_slot'u gerçek RecordBadge ile değiştirdikten
+    (main_window.py:83) SONRA rozet sürüklenebiliyor -- __init__'te yakalanmış öksüz bir placeholder'a
+    değil, o anki self.badge_slot'a uygulanıyor."""
+    wa, _ = make(qtbot)
+    placeholder = wa.badge_slot
+    placeholder_pos_before = (placeholder.x(), placeholder.y())
+
+    real_badge = QWidget(wa)                   # main_window.py:83'teki RecordBadge atamasını taklit eder
+    real_badge.resize(160, 28)
+    real_badge.show()
+    wa.badge_slot = real_badge
+    wa.relayout()                              # __init__ sonrası ilk relayout: gerçek akışla aynı sıra
+
+    wa.set_edit_mode(True)
+    # Rozetin dikey merkezi ipucu bölgesinin üst kenar tutamağına (GRIP=18px) çok yakın -- bilerek
+    # rozetin alt kısmından tutuyoruz, yoksa isabet testi tutamağa mı yoksa rozete mi gittiği belirsiz olur.
+    start = QPoint(real_badge.geometry().center().x(), real_badge.geometry().bottom() - 3)
+    end = start + QPoint(-30, 10)
+    qtbot.mousePress(wa, Qt.MouseButton.LeftButton, pos=start)
+    qtbot.mouseMove(wa, end)
+    with qtbot.waitSignal(wa.layoutChanged) as sig:
+        qtbot.mouseRelease(wa, Qt.MouseButton.LeftButton, pos=end)
+
+    assert isinstance(sig.args[0]["badge"], lm.ItemPos)
+    assert (placeholder.x(), placeholder.y()) == placeholder_pos_before   # öksüz placeholder hiç kıpırdamadı
+
+
+def test_legacy_duzen_json_without_item_keys_keeps_items_at_default_positions(qtbot, tmp_path):
+    """Görev 5 öncesi yazılmış (yalnız bölge anahtarlı) bir duzen.json bugün de sorunsuz okunmalı ve beş
+    öğe de varsayılan (bugünkü formül) konumunda kalmalı -- geriye uyumluluk."""
+    wa, _ = make(qtbot)
+    widgets = item_widgets(wa)
+    defaults = {k: (w.x(), w.y()) for k, w in widgets.items()}
+
+    p = tmp_path / "duzen.json"
+    p.write_text(json.dumps({
+        "soru": {"col": 0, "row": 0, "col_span": 6, "row_span": 4},
+        "ipucu": {"col": 6, "row": 0, "col_span": 6, "row_span": 4},
+        "webcam": {"col": 9, "row": 7, "col_span": 3, "row_span": 3},
+    }), encoding="utf-8")
+
+    wa.set_layout(lm.load_layout(p))
+    for k, w in widgets.items():
+        assert (w.x(), w.y()) == defaults[k], k
+    assert not (set(lm.ITEM_KEYS) & set(wa.layout()))     # dosyada öğe yoktu -> hiç override kaydı yok

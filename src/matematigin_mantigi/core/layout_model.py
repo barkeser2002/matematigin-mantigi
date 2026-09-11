@@ -14,6 +14,9 @@ _MIN_POSITIVE_SPAN = 1e-6   # clamp_free'nin alansız modunda yalnız sıfır/ne
                             # boyut tabanı DEĞİL (bkz. clamp_free docstring'i)
 ZONE_KEYS = ("soru", "ipucu", "webcam")
 PANEL_KEYS = ZONE_KEYS   # eski ad
+# Tahtadaki sabit "kroze" öğeleri (bölge değil): bilerek settings.VISIBILITY_KEYS'teki karşılıklarıyla
+# birebir aynı dizeler -- görünürlük ve düzen anahtarları hizalı kalsın (Görev 6 bunu kullanacak).
+ITEM_KEYS = ("brand", "logo", "presenter", "badge", "status")
 
 
 @dataclass(frozen=True)
@@ -24,7 +27,20 @@ class PanelGeom:
     row_span: float
 
 
-Layout = dict[str, PanelGeom]
+@dataclass(frozen=True)
+class ItemPos:
+    """Bir tahta öğesinin (marka, logo, sunucu adı, rozet, durum satırı) konumu.
+
+    Öğeler yalnız TAŞINIR, boyutlandırılmaz -- boyutları içerik (`adjustSize`) veya ayardan (logo için
+    `AppSettings.logo_size`) gelir, bu yüzden `PanelGeom`'un span alanları öğeler için anlamsızdır. x/y,
+    `stage_rect()`'e göre kesirlidir (bkz. `item_pos_from_pixel`/`item_pixel_from_pos`) -- `inner_rect()`'e
+    göre DEĞİL: marka plakası çerçeve bandının üstünde, `inner_rect()`'in dışında duruyor.
+    """
+    x: float
+    y: float
+
+
+Layout = dict[str, PanelGeom | ItemPos]   # bölge (PanelGeom) ve öğe (ItemPos) anahtarları bir arada
 
 DEFAULT_LAYOUT: Layout = {
     "soru": PanelGeom(0, 0, 6, 4),      # sol üst
@@ -108,12 +124,27 @@ def free_rect(x: float, y: float, w: float, h: float, area_w: float, area_h: flo
     return clamp_free(PanelGeom(col, row, col_span, row_span), area_w, area_h, gap)
 
 
+def item_pos_from_pixel(x: float, y: float, stage_w: float, stage_h: float) -> ItemPos:
+    """Bir öğenin `stage_rect()` başlangıcına göreli piksel konumunu kesirli `ItemPos`'a çevirir
+    (`free_rect`'in öğeler için karşılığı; çağıran `g.x() - stage.x()` gibi önceden çıkarır)."""
+    return ItemPos(x / stage_w, y / stage_h)
+
+
+def item_pixel_from_pos(pos: ItemPos, stage_w: float, stage_h: float) -> tuple[int, int]:
+    """`item_pos_from_pixel`'in tersi: kesirli konumu `stage_rect()` başlangıcına göreli, yuvarlanmış
+    piksele çevirir (`pixel_rect`'in öğeler için karşılığı; çağıran sonucuna `stage.x()`/`stage.y()` ekler)."""
+    return round(pos.x * stage_w), round(pos.y * stage_h)
+
+
 def to_json(layout: Layout) -> str:
     return json.dumps({k: asdict(v) for k, v in layout.items()}, indent=2, ensure_ascii=False)
 
 
 def from_json(text: str) -> Layout:
-    """Bilinmeyen anahtarlar (örn. eski 'cizim') yok sayılır; bozuk girdi varsayılana döner."""
+    """Bilinmeyen anahtarlar (örn. eski 'cizim') yok sayılır; bozuk girdi varsayılana döner. Öğe
+    anahtarlarının (`ITEM_KEYS`) varsayılanı YOKTUR -- dosyada yoksa sonuçta da yok (WorkArea bunu
+    "hiç sürüklenmemiş, bugünkü formülü kullan" olarak okur); bu, eski (yalnız bölge anahtarlı)
+    duzen.json'ların geriye dönük uyumluluğunu sağlar."""
     result: Layout = dict(DEFAULT_LAYOUT)
     try:
         raw = json.loads(text)
@@ -130,6 +161,15 @@ def from_json(text: str) -> Layout:
         except (KeyError, TypeError, ValueError):
             continue
         result[key] = clamp_free(g)
+    for key in ITEM_KEYS:
+        item = raw.get(key)
+        if not isinstance(item, dict):
+            continue
+        try:
+            pos = ItemPos(float(item["x"]), float(item["y"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        result[key] = pos
     return result
 
 

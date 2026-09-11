@@ -59,6 +59,8 @@ class CameraView(QWidget):
 class WebcamPanel(Zone):
     chromaToggled = pyqtSignal(bool)
 
+    MAX_PENDING_WORKERS = 2   # durdurulamamış (takılı) worker üst sınırı; doluyken start() yeni iş parçacığı açmaz
+
     def __init__(self, fam: FontFamilies, source_factory: Callable[[], FrameSource],
                  params: ChromaParams, chroma_enabled: bool = True, parent=None, open_retries: int = 0):
         self.open_retries = open_retries          # kamera açılmazsa (izin bekleniyor) 2 sn arayla yeniden deneme
@@ -79,6 +81,13 @@ class WebcamPanel(Zone):
 
         # İş parçacığı kurucuda oluşturulur; start() sadece başlatır. OpenCvSource open() öncesi kamera açmaz.
         self._auto_key = True
+        self._source_factory = source_factory      # start()'ın winding-down durumunda taze worker kurabilmesi için
+        self._stop_requested = False                # shutdown() çağrıldı ama iş parçacığı henüz bitmedi mi (bkz. start())
+        self._pending_workers: list[CameraWorker] = []   # emekli edilmiş ama hâlâ çalışan (durdurulamamış) worker'lar
+        # DEĞİŞMEZ: self.worker HER ZAMAN yaşayan, geçerli bir nesnedir. Emekli edilen worker asla burada
+        # kalmaz (emeklilik hemen ardından taze bir worker kurar) -- aksi hâlde emeklinin finished sinyali
+        # onu sildiğinde start()/shutdown()/set_source_factory() "wrapped C/C++ object ... has been deleted"
+        # ile patlardı (kapanışta MainWindow.closeEvent dahil; review'da 3/3 üretildi).
         self.worker = self._make_worker(source_factory)
         self._refresh_overlay()
 
@@ -94,12 +103,69 @@ class WebcamPanel(Zone):
         """Kamera değişimi: eski iş parçacığı durur, yenisi aynı ayarlarla başlar."""
         was_running = self.worker.isRunning()
         self.shutdown()
-        self.worker.deleteLater()
+        self._retire_worker(self.worker)
+        self._source_factory = source_factory
+        self.worker = self._make_worker(source_factory)      # DEĞİŞMEZ: emekli worker self.worker'da kalmaz
+        self._stop_requested = False               # taze worker: winding-down bayrağı onunla ilgili değil
         self.has_camera = False
-        self.view.set_placeholder("Kamera bekleniyor…")
-        self.worker = self._make_worker(source_factory)
+        # Panel BOŞTAYKEN (was_running False -- ör. bir önceki start() üst sınıra takıldığı için worker hiç
+        # başlatılmamışsa) start() çağrılmaz; koşulsuz "bekleniyor" yazmak üst sınırda YANILTICI olurdu
+        # (takılı kamera sürerken Ayarlar'dan kamera değiştirmek 'yanıt vermiyor'u siliyordu -- review bulgusu).
+        self.view.set_placeholder("Kamera yanıt vermiyor" if self._at_pending_cap() else "Kamera bekleniyor…")
         if was_running:
-            self.worker.start()
+            self.start()                 # üst sınır + "yanıt vermiyor" göstergesi tek yerde: start()
+
+    def _reclaim_worker(self, worker: CameraWorker) -> None:
+        """Emekli `worker` artık çalışmıyor: listeden ÇIKAR ve sil -- bu ikisi hep birlikte.
+
+        Silmeyi worker'ın kendi `finished` sinyaline ertelemek ZORUNLU: hâlâ çalışan bir iş
+        parçacığında `deleteLater()`'ı doğrudan çağırmak GUI iş parçacığını gerçek bir KİLİTLENMEYE
+        sokar (elle doğrulandı, bkz. önceki review notları). Listeden çıkarmak da aynı ölçüde zorunlu:
+        aksi hâlde liste SİLİNMİŞ bir C++ nesnesi tutar ve ona sonradan dokunmak (isRunning())
+        "wrapped C/C++ object ... has been deleted" ile patlar -- bu kural sayesinde `_pending_workers`
+        üyeleri HER ZAMAN yaşayan nesnelerdir. Hem doğrudan hem `finished` sinyalinden çağrılabilir;
+        ikinci çağrı (nesne o sırada silinmiş olabilir) listede bulamayıp hemen döner."""
+        if not any(w is worker for w in self._pending_workers):
+            return
+        self._pending_workers = [w for w in self._pending_workers if w is not worker]
+        worker.deleteLater()
+
+    def _live_pending_count(self) -> int:
+        """Emeklilerden hâlâ ÇALIŞAN (durdurulamamış) olanların sayısı. Bitmiş olanları bu arada geri
+        alır: `finished` kuyruğa alınan bir sinyaldir, henüz işlenmemiş olabilir."""
+        for w in list(self._pending_workers):
+            if not w.isRunning():
+                self._reclaim_worker(w)
+        return len(self._pending_workers)
+
+    def _at_pending_cap(self) -> bool:
+        """Üst sınır dolu mu: yeni iş parçacığı AÇILAMAZ, 'Kamera yanıt vermiyor' gösterilir."""
+        return self._live_pending_count() >= self.MAX_PENDING_WORKERS
+
+    def _retire_worker(self, worker: CameraWorker) -> None:
+        """`worker`ı emekliye ayırır. Çağıranın hemen ardından self.worker'ı YENİLEMESİ zorunludur.
+
+        ÖNCE sinyallerini (frameReady/opened/cameraError) koparır: aksi hâlde stop() sonrası hâlâ
+        işlenmekte olan (in-flight) bir read() dönünce worker tek bir GEÇ kare/hata daha yayar -- bu,
+        YENİ worker akmaya başladıktan SONRA bile aynı self.view'i etkileyip görünümü kısaca eskiye
+        döndürebilir (kare) ya da paneli yanlışlıkla kamerasız duruma düşürebilir (hata) -- review'da
+        350ms gecikmeli/hızlı iki sahte kamerayla ölçüldü.
+
+        Sonra silinmeyi `finished`e bağlar (bkz. _reclaim_worker). Zaten çalışmıyorsa (bitmiş ya da hiç
+        başlatılmamış -- üst sınırdayken kurulan worker gibi) hemen geri alınır; `finished` ile arasındaki
+        yarışı da bu kapatır.
+
+        `read()` GERÇEKTEN hiç dönmezse (yavaş değil, tamamen takılı bir sürücü) `finished` de asla
+        ateşlenmez: worker `_pending_workers`te kalır. Sınırsız birikmesini start() engeller -- üst
+        sınır doluyken yeni iş parçacığı AÇILMAZ, dolayısıyla emekli edilecek yeni bir çalışan worker
+        da doğmaz (bkz. start())."""
+        worker.frameReady.disconnect()
+        worker.opened.disconnect()
+        worker.cameraError.disconnect()
+        self._pending_workers.append(worker)
+        worker.finished.connect(lambda: self._reclaim_worker(worker))
+        if not worker.isRunning():
+            self._reclaim_worker(worker)
 
     def _refresh_overlay(self) -> None:
         mode = "kaldırıldı" if self.chroma_enabled else "ham görüntü"
@@ -109,13 +175,41 @@ class WebcamPanel(Zone):
         self.view.set_raw_mode(not self.chroma_enabled)
 
     def start(self) -> None:
-        if not self.worker.isRunning():
-            self.worker.start()
+        """`isRunning()` tek başına 'sağlıklı çalışıyor' anlamına gelmez: shutdown(timeout_ms) süresi
+        dolduğunda (ör. sürücü read()'de takılıysa) worker HÂLÂ ÇALIŞIYOR olabilir, yalnız durmakta
+        (_running=False, _abort=True) ama henüz bitmemiş. Böyle bir worker'ı 'zaten çalışıyor' sayıp
+        dokunmamak kamerayı süresiz kapalı bırakırdı (bkz. review bulgusu) -- CameraWorker.stop() bir
+        bloklayan read() çağrısını kesemez, yalnız bayrak çevirir. Eskiyi kendi kendine bitmeye bırakıp
+        (bkz. _retire_worker) TAZE bir worker kuruyoruz; açık kalan bir aygıtı devralma ihtimaline karşı
+        open_retries zaten birkaç saniye aralıklı yeniden deniyor.
 
-    def shutdown(self) -> None:
+        Kalıcı olarak takılı bir sürücüde emekliler hiç bitmez: üst sınıra ulaşınca yeni İŞ PARÇACIĞI
+        açılmaz (yoksa her göz düğmesi tıklaması bir OS iş parçacığı + kamera kaynağı daha biriktirirdi)
+        ve kullanıcıya durum gösterilir. Worker NESNESİ yine de tazedir -- self.worker asla emekli
+        (silinmek üzere olan) bir nesneyi göstermez, bkz. __init__'teki DEĞİŞMEZ."""
+        if self.worker.isRunning():
+            if not self._stop_requested:
+                return                              # gerçekten sağlıklı çalışıyor: dokunma
+            self._retire_worker(self.worker)
+            self.worker = self._make_worker(self._source_factory)
+        self._stop_requested = False                # buradan sonra self.worker ya taze ya da durmuş
+        if self._at_pending_cap():
+            self.has_camera = False
+            self.view.set_placeholder("Kamera yanıt vermiyor")
+            return                                  # iş parçacığı açılmaz; self.worker yine de geçerli
+        self.worker.start()
+
+    def shutdown(self, timeout_ms: int = 2000) -> None:
+        """timeout_ms: iş parçacığının durmasını bekleme üst sınırı. İş parçacığı normalde bir kare
+        süresinde (~33ms) durur -- bu üst sınır yalnız `_source.read()` bir sürücü arızasıyla takılırsa
+        işe yarar. Varsayılan (2000ms) pencere kapanışı için (kapanışta birkaç saniyelik gecikme kabul
+        edilebilir); görünürlük yolunda (apply_ui_settings, göz düğmesiyle her tetiklenebilen rutin bir
+        düzenleme eylemi) çok daha kısa bir değer geçilir ki takılı bir sürücü arayüzü iki saniye
+        dondurmasın (bkz. main_window.py). Süre dolduğunda worker hâlâ çalışıyor olabilir -- bkz. start()."""
         if self.worker.isRunning():
             self.worker.stop()
-            self.worker.wait(2000)
+            self._stop_requested = True
+            self.worker.wait(timeout_ms)
 
     def set_chroma_enabled(self, on: bool) -> None:
         self.chroma_enabled = on

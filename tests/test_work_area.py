@@ -570,3 +570,151 @@ def test_reset_layout_also_clears_item_overrides(qtbot):
     assert "brand" in wa.layout()
     wa.reset_layout()
     assert "brand" not in wa.layout()
+
+
+# --- Görev 6: göz düğmeleri + tam panel gizleme -----------------------------------------------------
+
+EYE_KEYS = {"question_zone", "hint_zone", "webcam", "brand", "logo", "presenter", "badge", "status"}
+
+
+def test_hidden_zone_is_excluded_from_hit_test(qtbot):
+    wa, zones = make(qtbot)
+    wa.set_edit_mode(True)
+    center = zones["soru"].geometry().center()
+    assert wa._hit(center) == ("soru", "move")            # önce sürüklenebilir (regresyon emniyeti)
+    wa.set_item_visible("question_zone", False)
+    assert wa._hit(center) is None                        # artık yokmuş gibi davranılır, sürüklenmez
+
+
+def test_hidden_item_is_excluded_from_hit_test(qtbot):
+    wa, _ = make(qtbot)
+    wa.set_edit_mode(True)
+    center = wa.logo_label.geometry().center()
+    assert wa._hit(center) == ("logo", "move")
+    wa.set_item_visible("logo", False)
+    assert wa._hit(center) is None
+
+
+def test_hidden_zone_and_item_render_as_translucent_ghost_not_normal_outline(qtbot):
+    """_EditOverlay artık gizli bölge/öğeyi normal kesikli çerçeve yerine yarı saydam bir 'hayalet'
+    dolguyla çiziyor (bkz. work_area._paint_ghost) -- kesikli çerçeve hiçbir zaman iç dolgu çizmediği
+    için bölge/öğenin ortası düzen modunda bugün beyaz kalır; hayalet modda artık dolu."""
+    wa, zones = make(qtbot)
+    wa.set_edit_mode(True)
+    zprobe = zones["webcam"].geometry().center()
+    iprobe = wa.badge_slot.geometry().center()             # gizli varsayılan placeholder: kendi başına hiç çizmez
+    img = wa.grab().toImage()
+    assert img.pixelColor(zprobe).name() == "#ffffff"
+    assert img.pixelColor(iprobe).name() == "#ffffff"
+
+    wa.set_item_visible("webcam", False)
+    wa.set_item_visible("badge", False)
+    img2 = wa.grab().toImage()
+    assert img2.pixelColor(zprobe).name() != "#ffffff"     # hayalet dolgu artık var
+    assert img2.pixelColor(iprobe).name() != "#ffffff"
+
+
+def test_eye_buttons_exist_for_all_zones_and_items_and_only_show_in_edit_mode(qtbot):
+    wa, _ = make(qtbot)
+    assert EYE_KEYS <= set(wa._eye_buttons)
+    for key in EYE_KEYS:
+        assert wa._eye_buttons[key].isHidden()             # henüz düzen modu kapalı
+    wa.set_edit_mode(True)
+    for key in EYE_KEYS:
+        assert wa._eye_buttons[key].isVisible() and wa._eye_buttons[key].isChecked()   # varsayılan görünür
+    wa.set_edit_mode(False)
+    for key in EYE_KEYS:
+        assert wa._eye_buttons[key].isHidden()
+
+
+def test_eye_button_click_toggles_hit_test_and_emits_signal(qtbot):
+    wa, zones = make(qtbot)
+    wa.set_edit_mode(True)
+    btn = wa._eye_buttons["webcam"]
+    center = zones["webcam"].geometry().center()
+    assert btn.isChecked() and wa._hit(center) == ("webcam", "move")
+
+    with qtbot.waitSignal(wa.visibilityToggled) as sig:
+        qtbot.mouseClick(btn, Qt.MouseButton.LeftButton)
+    assert sig.args == ["webcam", False]
+    assert not btn.isChecked() and wa._hit(center) is None
+
+    with qtbot.waitSignal(wa.visibilityToggled) as sig2:
+        qtbot.mouseClick(btn, Qt.MouseButton.LeftButton)
+    assert sig2.args == ["webcam", True]
+    assert btn.isChecked() and wa._hit(center) == ("webcam", "move")
+
+
+def test_eye_button_click_through_real_event_path(qtbot):
+    """Göz düğmesi gerçek bir Qt çocuğu: pencere seviyesinde yönlendirilen gerçek bir tıklama (qtbot.mouseClick
+    gibi widget'a doğrudan gönderilen değil) düğmeye ulaşmalı, WorkArea.mousePressEvent/_hit()'e değil --
+    aksi hâlde düzen modunda düğme yalnız sentetik testlerde çalışıp gerçek kullanıcıda tıklanamaz olurdu."""
+    from PyQt6.QtTest import QTest
+    wa, zones = make(qtbot)
+    wa.set_edit_mode(True)
+    btn = wa._eye_buttons["webcam"]
+    center = btn.mapTo(wa, btn.rect().center())
+    win = wa.windowHandle()
+    QTest.mouseClick(win, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, center)
+    assert not btn.isChecked()
+    assert wa._hit(zones["webcam"].geometry().center()) is None   # tıklama sürükleme başlatmadı, görünürlüğü kapattı
+
+
+def test_eye_buttons_stay_reachable_at_common_window_sizes(qtbot):
+    """CRITICAL düzeltme (review): düğme WorkArea'nın kendi sınırlarının dışına taşarsa -- pencere
+    WorkArea'ya sıfır kenar boşluğuyla bitişik olduğundan (main_window.py) -- fiilen pencerenin dışında/
+    başlık çubuğunda kalır, tıklanamaz olur. Bu, çerçeve kapalıyken ya da pencere tam/dara-yakın 16:9
+    iken (stage.y() == 0'a çok yakın) YAYGINDIR: 1920x1080, 1280x720, 1600x900 hepsi review'da brand/
+    logo/soru için negatif y üretiyordu. `wa.childAt(center)` gerçek Qt hit-testiyle (childAt overlay'in
+    WA_TransparentForMouseEvents'ini atlar) düğmenin GERÇEKTEN tıklanabilir olduğunu doğrular."""
+    wa, zones = make(qtbot)
+    wa.set_edit_mode(True)
+    sizes = [(1832, 1080), (1920, 1080), (1280, 720), (1600, 900), (1600, 850), (1920, 1000)]
+    for w, h in sizes:
+        wa.resize(w, h)
+        for key in EYE_KEYS:
+            btn = wa._eye_buttons[key]
+            center = btn.geometry().center()
+            assert wa.rect().contains(center), (w, h, key, center)
+            assert wa.childAt(center) is btn, (w, h, key, center)
+
+    # Çerçeve kapalıyken inner_rect == stage_rect: "soru" bölgesi de stage'in en üst satırına biner.
+    wa.set_frame_visible(False)
+    for w, h in ((1920, 1080), (1280, 720), (1600, 900)):
+        wa.resize(w, h)
+        for key in ("question_zone", "hint_zone", "webcam"):
+            btn = wa._eye_buttons[key]
+            center = btn.geometry().center()
+            assert wa.rect().contains(center), (w, h, key, center)
+            assert wa.childAt(center) is btn, (w, h, key, center)
+
+
+def test_presenter_name_and_visibility_do_not_stomp_each_other(qtbot):
+    """Görev 6'nın 'presenter tuzağı': set_presenter_name artık metni GÖRÜNÜRLÜKTEN bağımsız taşır (eski
+    kod boş metin geçerek gizliyordu, bu da metni kalıcı olarak siliyordu) -- set_item_visible ayrı."""
+    wa, _ = make(qtbot)
+    wa.set_presenter_name("Barış Keser")
+    wa.set_item_visible("presenter", False)
+    assert wa.name_label.isHidden()                        # dolu ad + kapalı görünürlük -> gizli
+    assert wa.name_label.text() == "Barış Keser"           # metin silinmedi, korunuyor
+
+    wa.set_presenter_name("")
+    wa.set_item_visible("presenter", True)
+    assert wa.name_label.isHidden()                        # açık görünürlük + boş ad -> yine gizli (gösterilecek yok)
+
+    wa.set_presenter_name("Barış Keser")
+    assert not wa.name_label.isHidden()                    # ikisi de dolu/açık -> görünür
+
+
+def test_presenter_visibility_survives_a_later_set_presenter_name_call(qtbot):
+    """IMPORTANT (review): sıra tersine çevrilirse de doğru olmalı. Bugüne kadarki testlerin hepsi
+    set_presenter_name'i set_item_visible'dan HEMEN ÖNCE çağırıyordu (apply_ui_settings'in kendi sırası
+    da bu) -- bu, set_presenter_name'in kendi görünürlük kontrolünü hep maskeliyordu: o satır tamamen
+    silinse bile (reviewer'ın doğruladığı gibi) tüm suit hâlâ 282/282 geçiyordu. Burada göz düğmesiyle
+    ÖNCE kapatılıyor, SONRA (araya başka hiçbir set_item_visible girmeden) yalnız set_presenter_name
+    çağrılıyor -- bir canlı ad-alanı önizlemesinin (yalnız metni güncelleyip görünürlüğe dokunmayan)
+    karşılaşacağı sıra. Etiket yine de gizli kalmalı."""
+    wa, _ = make(qtbot)
+    wa.set_item_visible("presenter", False)
+    wa.set_presenter_name("Barış Keser")
+    assert wa.name_label.isHidden()

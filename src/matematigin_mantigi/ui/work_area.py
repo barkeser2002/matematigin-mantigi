@@ -26,6 +26,27 @@ _EDGE_CURSORS = {
     "ne": Qt.CursorShape.SizeBDiagCursor, "sw": Qt.CursorShape.SizeBDiagCursor,
 }
 
+EYE_SIZE = 20   # göz düğmesi çapı (px)
+
+# Bölgelerin (lm.ZONE_KEYS) yapısal anahtarından settings.VISIBILITY_KEYS'teki karşılığına: düzen dosyası
+# (duzen.json) hâlâ "soru"/"ipucu" gibi kısa Türkçe anahtarlarla çalışır, ama görünürlük göz düğmesi +
+# AppSettings ile bu görev için eklenen "question_zone"/"hint_zone" dizeleriyle konuşur -- "webcam" ikisinde
+# de aynı. WorkArea AppSettings'i görmediği için bu çeviri burada, tek yerde yaşar.
+_ZONE_VIS_KEY = {"soru": "question_zone", "ipucu": "hint_zone", "webcam": "webcam"}
+
+
+def _paint_ghost(p: QPainter, geo: QRect, label: str) -> None:
+    """Gizli (göz düğmesiyle kapatılmış) bölge/öğe: normal kesikli çerçeve yerine soluk dolgu + anahtar
+    etiketi -- sürüklenemez, ama düzen modunda kullanıcı nerede olduğunu görüp göz düğmesinden geri açabilir."""
+    fill = QColor(theme.ACCENT); fill.setAlpha(45)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(fill)
+    p.drawRect(QRectF(geo).adjusted(1, 1, -1, -1))
+    muted = QColor(theme.ACCENT); muted.setAlpha(150)
+    p.setPen(muted)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawText(geo.adjusted(6, 4, -6, -4), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, label)
+
 
 class _EditOverlay(QWidget):
     """Düzen modunda ızgara ve bölge sınırlarını en üstte çizer; fareye şeffaftır."""
@@ -56,6 +77,9 @@ class _EditOverlay(QWidget):
             p.drawLine(inner.left(), y, inner.right(), y)
         for zone in area.zones():
             geo = zone.geometry()
+            if not area._visible.get(_ZONE_VIS_KEY.get(zone.key, zone.key), True):
+                _paint_ghost(p, geo, zone.key.upper())
+                continue
             pen = QPen(QColor(theme.ACCENT), 2); pen.setStyle(Qt.PenStyle.DashLine); p.setPen(pen)
             p.drawRoundedRect(QRectF(geo).adjusted(1, 1, -1, -1), theme.PANEL_RADIUS, theme.PANEL_RADIUS)
             p.fillRect(QRect(geo.right() - GRIP, geo.bottom() - GRIP, GRIP, GRIP), QColor(theme.ACCENT))
@@ -64,6 +88,9 @@ class _EditOverlay(QWidget):
                        zone.key.upper())
         for key, widget in area._items.items():   # öğeler: tutamaksız (yalnız taşınır) ince kesikli çerçeve
             geo = widget.geometry()                # + anahtar etiketi -- yoksa düzen modunda görünmez hedef olurlar
+            if not area._visible.get(key, True):
+                _paint_ghost(p, geo, key.upper())
+                continue
             pen = QPen(QColor(theme.ACCENT), 2); pen.setStyle(Qt.PenStyle.DashLine); p.setPen(pen)
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRect(QRectF(geo).adjusted(1, 1, -1, -1))
@@ -92,6 +119,7 @@ class InkLayer(QWidget):
 class WorkArea(QWidget):
     layoutChanged = pyqtSignal(object)     # Layout dict
     editModeChanged = pyqtSignal(bool)
+    visibilityToggled = pyqtSignal(str, bool)   # anahtar (VISIBILITY_KEYS ile aynı dize), yeni durum
 
     ASPECT_W, ASPECT_H = 16, 9
     ASPECT = ASPECT_W / ASPECT_H
@@ -106,6 +134,12 @@ class WorkArea(QWidget):
         self._layout: lm.Layout = dict(lm.DEFAULT_LAYOUT)
         self._item_pos: dict[str, lm.ItemPos] = {}    # yalnız sürüklenmiş öğeler; eksik anahtar = bugünkü formül
         self._items: dict[str, QWidget] = {}          # relayout() sırasında yeniden kurulur (rozet tembel okunsun)
+        # Görünürlük: WorkArea AppSettings görmez, bu yalnız MainWindow.apply_ui_settings'in bildirdiği
+        # (set_item_visible) durumun bir ÖNBELLEĞİ -- göz düğmesinin açık/kapalı çizimi, _hit'in gizliyi
+        # sürüklemeyi reddetmesi ve overlay'in hayalet çizimi için. Anahtar dizeleri VISIBILITY_KEYS ile
+        # aynı ("question_zone"/"hint_zone"/"webcam" + ITEM_KEYS); eksik anahtar = varsayılan görünür.
+        self._visible: dict[str, bool] = {}
+        self._eye_buttons: dict[str, QPushButton] = {}
         self.edit_mode = False
         self.frame_visible = True
         self.aspect_lock = True
@@ -253,10 +287,27 @@ class WorkArea(QWidget):
         self.relayout()
 
     def set_presenter_name(self, text: str) -> None:
+        """Yalnız METNİ taşır; GÖRÜNÜRLÜĞÜ artık tek başına belirlemez (bkz. set_item_visible("presenter", ..)) --
+        göz düğmesi ile Ayarlar'daki ad kutusu birbirini ezmesin diye ayrıldı. Boş ad hâlâ etiketi gizler
+        (gösterilecek bir şey yok), ama dolu bir ad "presenter" kapalıyken görünmez kalır."""
         self.name_label.setText(text)
-        self.name_label.setVisible(bool(text.strip()))
+        self.name_label.setVisible(bool(text.strip()) and self._visible.get("presenter", True))
         self.name_label.adjustSize()
         self.relayout()
+
+    def set_item_visible(self, key: str, on: bool) -> None:
+        """MainWindow.apply_ui_settings'in her görünürlük anahtarı için çağırdığı bildirim: WorkArea
+        AppSettings'i hiç görmez, yalnız BU çağrıdan öğrenir -- göz düğmesinin işaretli durumu, _hit'in
+        gizliyi sürüklemeyi reddetmesi ve overlay'in hayalet çizimi bunu okur. Gerçek widget görünürlüğü
+        (bölge/marka/logo/rozet/durum) hâlâ apply_ui_settings'in kendi setVisible çağrılarında uygulanır --
+        TEK istisna "presenter": ad metniyle çakışmaması için o widget'ı burada uygularız (yukarı bakın)."""
+        self._visible[key] = on
+        if key == "presenter":
+            self.name_label.setVisible(on and bool(self.name_label.text().strip()))
+        btn = self._eye_buttons.get(key)
+        if btn is not None:
+            btn.setChecked(on)
+        self.overlay.update()
 
     def frame_band(self) -> int:
         return theme.FRAME_BAND if self.frame_visible else 0
@@ -336,6 +387,7 @@ class WorkArea(QWidget):
                            stage.y() + self.brand.height() + 8)
         self.edit_bar.raise_()
         self.overlay.update()
+        self._sync_eye_buttons()
 
     def _place_item(self, key: str, widget: QWidget, stage: QRect, default: QPoint) -> None:
         """Kayıtlı bir geçersiz kılma (`self._item_pos[key]`, stage_rect'e göre kesirli) varsa onu
@@ -347,6 +399,67 @@ class WorkArea(QWidget):
         else:
             widget.move(default)
         widget.raise_()
+
+    # --- göz düğmeleri (yalnız düzen modunda) ---------------------------------------
+    def _make_eye_button(self, key: str) -> QPushButton:
+        btn = QPushButton("👁", self)
+        btn.setCheckable(True)
+        btn.setChecked(self._visible.get(key, True))
+        btn.setFixedSize(EYE_SIZE, EYE_SIZE)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setToolTip("Göster/gizle")
+        btn.setStyleSheet(
+            f"QPushButton {{ background: {theme.INK}; color: {theme.MUTED_DARK}; border: 1px solid {theme.ACCENT};"
+            f" border-radius: {EYE_SIZE // 2}px; font-size: 10px; padding: 0px; }}"
+            f"QPushButton:checked {{ background: {theme.ACCENT}; color: {theme.PANEL_SOFT}; }}")
+        btn.hide()          # yalnız set_edit_mode(True) iken görünür (bkz. _sync_eye_buttons)
+        btn.clicked.connect(lambda checked, k=key: self._toggle_visibility(k, checked))
+        return btn
+
+    def _toggle_visibility(self, key: str, on: bool) -> None:
+        """Bir göz düğmesine tıklanınca: WorkArea kendi bilgisini hemen günceller (buton düzen modunda
+        her zaman doğru görünsün) VE dışarıya (MainWindow) bildirir -- ayara yazmak ve diğer widget'ların
+        gerçek setVisible çağrılarını tetiklemek dışarının işi (bkz. set_item_visible docstring'i)."""
+        self.set_item_visible(key, on)
+        self.visibilityToggled.emit(key, on)
+
+    def _sync_eye_buttons(self) -> None:
+        """relayout()'un sonunda çağrılır: her bölge ve her öğe için köşesine bir göz düğmesi yerleştirir
+        (yoksa oluşturur), işaretli durumunu bilinen görünürlükten alır, yalnız düzen modunda gösterir."""
+        for zkey, zone in self._zones.items():
+            self._place_eye_button(_ZONE_VIS_KEY.get(zkey, zkey), zone.geometry(), is_zone=True)
+        for key, widget in self._items.items():
+            self._place_eye_button(key, widget.geometry(), is_zone=False)
+
+    def _place_eye_button(self, key: str, geo: QRect, is_zone: bool) -> None:
+        """Düğme normalde köşenin üst-sağında, bölgenin/öğenin GEOMETRİSİNİN TAMAMEN DIŞINDA durur (üst
+        kenarla çakışmaz) -- bir öğenin taşıma alanı hiç etkilenmesin diye kasıtlı; düğme gerçek bir Qt
+        çocuğu olduğundan tıklamayı _hit()'ten önce yakalar.
+
+        Bu "üstte, dışarıda" yerleşim `geo.top() < EYE_SIZE` iken WorkArea'nın KENDİ üst kenarının da
+        dışına taşar -- pencere `WorkArea`'ya sıfır kenar boşluğuyla bitişik olduğundan (main_window.py)
+        bu, düğmeyi tamamen erişilemez kılar (pencerenin dışında/başlık çubuğunda kalır). Bu, çerçeve
+        (frame_visible=False) kapalıyken ya da pencere tam/dardan-16:9 iken YAYGIN bir durumdur, uç durum
+        değil -- bkz. review bulgusu (1920x1080, 1280x720, 1600x900 hepsi `soru`/`brand`/`logo` için
+        negatif y üretiyordu).
+
+        Öğeler için düzeltme basit: y'yi 0'a kelepçelemek yeterli (öğelerin köşe tutamağı yok). Bölgeler
+        için AYNI kelepçe GRIP=18 < EYE_SIZE=20 olduğundan `_hit()`'in nw/ne köşe tutamağı önceliğini
+        (bkz. modül üstü not) yeniden bozar: düğme bölgenin içine, tutamağın ÜSTÜNE biner ve o köşeden
+        yeniden boyutlandırmayı kalıcı olarak imkansız kılardı. Bölgeler bu yüzden farklı bir kaçış
+        yolu kullanır: üstte yer yoksa düğme köşe tutamağının (GRIP + 1 px pay ile) HEMEN ALTINA, bölgenin
+        içine itilir -- x ekseni sağda kaldığı için yalnız "ne" ile çakışma riski vardı, bu da onu giderir."""
+        btn = self._eye_buttons.setdefault(key, self._make_eye_button(key))
+        x = geo.right() - EYE_SIZE
+        y = geo.top() - EYE_SIZE
+        if y < 0:
+            y = geo.top() + GRIP + 1 if is_zone else 0
+        x = max(0, min(x, self.width() - EYE_SIZE))
+        y = max(0, min(y, self.height() - EYE_SIZE))
+        btn.move(x, y)
+        btn.setChecked(self._visible.get(key, True))
+        btn.setVisible(self.edit_mode)
+        btn.raise_()
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -390,6 +503,8 @@ class WorkArea(QWidget):
         # da yaklaştırmak bu dengeyi yeniden bozabilir; o testler bunu köşe ve kenar için ayrı ayrı bekçiler.
         zone_fallback: tuple[str, str] | None = None
         for key in reversed(list(self._zones)):           # üstteki bölge önce; yalnız en üsttekine bakılır
+            if not self._visible.get(_ZONE_VIS_KEY.get(key, key), True):
+                continue                                   # gizli bölge yokmuş gibi davranılır, sürüklenmez
             geo = self._zones[key].geometry()
             if not geo.contains(pos):
                 continue
@@ -412,6 +527,8 @@ class WorkArea(QWidget):
         # dayanmaz, bu yüzden ileride biri değişip diğeri değişmezse bile görüneni yansıtmaya devam eder.
         stacking = self.children()
         for key in sorted(self._items, key=lambda k: stacking.index(self._items[k]), reverse=True):
+            if not self._visible.get(key, True):
+                continue                                    # gizli öğe yokmuş gibi davranılır, sürüklenmez
             if self._items[key].geometry().contains(pos):
                 return key, "move"
         return zone_fallback

@@ -504,3 +504,182 @@ def test_visibility_and_font_restored_on_start(qtbot, tmp_path, ini_settings, de
     assert win.work_area.brand.isHidden() and win.question_zone.hide_link.isHidden()
     assert win.question_zone.text_label.font().family() == "Caveat"
     assert win.hint_zone.cards[0].text_label.font().family() == "Caveat"
+
+
+# --- Görev 6: düzenle modunda göz düğmeleri + tam panel gizleme ------------------------------------------
+
+def test_question_zone_and_hint_zone_panels_can_be_hidden_and_restored(window):
+    window.settings.set_visible("hint_zone", False)
+    window.apply_ui_settings()
+    assert window.hint_zone.isHidden()
+    window.settings.set_visible("hint_zone", True)
+    window.apply_ui_settings()
+    assert not window.hint_zone.isHidden()
+
+    window.settings.set_visible("question_zone", False)
+    window.apply_ui_settings()
+    assert window.question_zone.isHidden()
+    window.settings.set_visible("question_zone", True)
+    window.apply_ui_settings()
+    assert not window.question_zone.isHidden()
+
+
+def test_presenter_visibility_and_name_do_not_stomp_each_other_through_window(window):
+    """Eski kod set_presenter_name("") geçerek gizliyordu -- bu ad METNİNİ de kalıcı olarak siliyordu.
+    Yeni kodda ad hiç dokunulmadan yalnız görünürlük kapanmalı: apply_ui_settings tekrar çağrıldığında
+    (ör. başka bir ayar değişince) ad hâlâ name_label.text()'te durmalı."""
+    s, wa = window.settings, window.work_area
+    s.presenter_name = "Barış Keser"
+    window.apply_ui_settings()
+    assert not wa.name_label.isHidden() and wa.name_label.text() == "Barış Keser"
+
+    s.set_visible("presenter", False)
+    window.apply_ui_settings()
+    assert wa.name_label.isHidden()
+    assert wa.name_label.text() == "Barış Keser"             # ESKİ kod burada metni "" yapardı
+
+    s.set_visible("presenter", True)
+    window.apply_ui_settings()
+    assert not wa.name_label.isHidden() and wa.name_label.text() == "Barış Keser"
+
+    s.presenter_name = ""                                      # açık görünürlük + boş ad -> yine gizli
+    window.apply_ui_settings()
+    assert wa.name_label.isHidden()
+
+
+def test_webcam_hidden_stops_camera_thread_and_shown_restarts_it(qtbot, tmp_path, ini_settings, fake_camera):
+    """Webcam paneli gizlenince CameraWorker iş parçacığı gerçekten durmalı (görünmeyen bir widget için
+    boşa chroma-key yapmasın); gösterilince yeniden başlamalı. Sahte (gerçekten kare üreten) kamera
+    kullanılıyor ki iş parçacığının fiilen çalışıp durduğu doğrulanabilsin."""
+    from matematigin_mantigi.core.models import PenSettings
+    from matematigin_mantigi.core.recorder import NullRecorder
+    from matematigin_mantigi.core.session_store import SessionStore
+    from matematigin_mantigi.ui.main_window import MainWindow
+    from matematigin_mantigi.ui.theme import FontFamilies
+    ini_settings.set_pen(PenSettings(reading_ms=0))
+    win = MainWindow(FontFamilies("Arial", "Arial", False), list(SAMPLE_QUESTIONS), ini_settings,
+                     NullRecorder(), SessionStore(tmp_path / "o"), lambda index: fake_camera, tmp_path / "d.json")
+    qtbot.addWidget(win)
+    qtbot.waitUntil(lambda: win.webcam_panel.has_camera, timeout=2000)   # __init__ zaten start() etti
+    assert win.webcam_panel.worker.isRunning()
+
+    win.settings.set_visible("webcam", False)
+    win.apply_ui_settings()
+    assert win.webcam_panel.isHidden()
+    qtbot.waitUntil(lambda: win.webcam_panel.worker.isFinished(), timeout=3000)   # iş parçacığı GERÇEKTEN durdu
+
+    win.settings.set_visible("webcam", True)
+    win.apply_ui_settings()
+    assert not win.webcam_panel.isHidden()
+    qtbot.waitUntil(lambda: win.webcam_panel.worker.isRunning(), timeout=2000)    # yeniden başladı
+
+
+def test_webcam_start_never_called_without_camera_source_factory(qtbot, tmp_path, ini_settings, monkeypatch):
+    """camera_source_factory None ise (main_window.py __init__'teki kalıp) apply_ui_settings de start()'ı
+    hiç çağırmamalı -- ne kuruluşta ne de görünürlük ileri geri değiştirilirken."""
+    from matematigin_mantigi.core.models import PenSettings
+    from matematigin_mantigi.core.recorder import NullRecorder
+    from matematigin_mantigi.core.session_store import SessionStore
+    from matematigin_mantigi.ui.main_window import MainWindow
+    from matematigin_mantigi.ui.theme import FontFamilies
+    from matematigin_mantigi.ui.webcam_panel import WebcamPanel
+    calls = []
+    monkeypatch.setattr(WebcamPanel, "start", lambda self: calls.append(True))
+    ini_settings.set_pen(PenSettings(reading_ms=0))
+    win = MainWindow(FontFamilies("Arial", "Arial", False), list(SAMPLE_QUESTIONS), ini_settings,
+                     NullRecorder(), SessionStore(tmp_path / "o"), None, tmp_path / "d.json")
+    qtbot.addWidget(win)
+    assert win.camera_source_factory is None and calls == []
+    win.settings.set_visible("webcam", False); win.apply_ui_settings()
+    assert win.webcam_panel.isHidden()                  # görünürlük hâlâ uygulanıyor (start olmasa da)
+    win.settings.set_visible("webcam", True); win.apply_ui_settings()
+    assert not win.webcam_panel.isHidden()
+    assert calls == []                                  # ama start() hiçbir aşamada çağrılmadı (factory yok)
+
+
+def test_eye_button_click_writes_setting_through_main_window_and_persists_on_restart(qtbot, tmp_path,
+                                                                                      ini_settings, dead_camera):
+    """Göz düğmesine tıklama WorkArea.visibilityToggled yayar; MainWindow._on_visibility_toggled ayara
+    yazar ve apply_ui_settings'i tetikler. Aynı ayar nesnesiyle kurulan İKİNCİ bir pencere (yeniden
+    başlatmayı taklit eder) durumu korumalı."""
+    from matematigin_mantigi.core.models import PenSettings
+    from matematigin_mantigi.core.recorder import NullRecorder
+    from matematigin_mantigi.core.session_store import SessionStore
+    from matematigin_mantigi.ui.main_window import MainWindow
+    from matematigin_mantigi.ui.theme import FontFamilies
+    ini_settings.set_pen(PenSettings(reading_ms=0))
+    win = MainWindow(FontFamilies("Arial", "Arial", False), list(SAMPLE_QUESTIONS), ini_settings,
+                     NullRecorder(), SessionStore(tmp_path / "o1"), lambda index: dead_camera, tmp_path / "d1.json")
+    qtbot.addWidget(win); win.show(); qtbot.waitExposed(win)
+    win.work_area.set_edit_mode(True)
+    btn = win.work_area._eye_buttons["brand"]
+    assert btn.isChecked() and win.settings.visible("brand") is True
+
+    qtbot.mouseClick(btn, Qt.MouseButton.LeftButton)
+    assert not btn.isChecked()
+    assert win.settings.visible("brand") is False           # MainWindow üzerinden ayara yazıldı
+    assert win.work_area.brand.isHidden()                   # apply_ui_settings gerçek widget'ı da gizledi
+
+    win2 = MainWindow(FontFamilies("Arial", "Arial", False), list(SAMPLE_QUESTIONS), ini_settings,
+                      NullRecorder(), SessionStore(tmp_path / "o2"), lambda index: dead_camera, tmp_path / "d2.json")
+    qtbot.addWidget(win2)
+    assert win2.settings.visible("brand") is False          # aynı ayar nesnesi: yeniden kurulunca da korunuyor
+    assert win2.work_area.brand.isHidden()
+
+
+def test_webcam_shutdown_uses_short_timeout_on_visibility_path_but_default_on_close(window, monkeypatch):
+    """IMPORTANT (review): apply_ui_settings'in görünürlük yolu artık rutin bir düzenleme eylemiyle (göz
+    düğmesi) her tetiklenebilir, bu yüzden kısa bir üst sınır (WEBCAM_HIDE_TIMEOUT_MS) geçmeli; closeEvent
+    pencere zaten kapanırken çalıştığından hâlâ eski varsayılanı (parametresiz -- 2000ms) kullanmalı.
+
+    Not: sahte kameramız yok (fixture `dead_camera` kullanır, açılışı hep başarısız olur, open_retries=15
+    ile 2sn aralıkla yeniden dener) -- shutdown'ı SAF bir sahte ile değiştirmek (çağrıyı kaydedip GERÇEK
+    uygulamayı hiç çalıştırmamak) closeEvent'in de artık iş parçacığını asla durdurmaması demek olurdu;
+    böyle bir pencere qtbot teardown'ında ~30sn'ye kadar arka planda yeniden denemeye devam eder ve bu,
+    aynı süreçte SONRA çalışan başka bir kamera testini tıkayabilir (bunu review sırasında elle doğruladım).
+    Bu yüzden sahte, çağrıyı kaydettikten SONRA gerçek shutdown'ı da çağırır -- iş parçacığı hep gerçekten durur."""
+    from matematigin_mantigi.ui import main_window as mw
+    calls = []
+    real_shutdown = window.webcam_panel.shutdown
+
+    def spy_shutdown(*a, **k):
+        calls.append(a)
+        return real_shutdown(*a, **k)
+    monkeypatch.setattr(window.webcam_panel, "shutdown", spy_shutdown)
+
+    window.settings.set_visible("webcam", False)
+    window.apply_ui_settings()
+    assert calls == [(mw.WEBCAM_HIDE_TIMEOUT_MS,)]
+
+    calls.clear()
+    window.close()
+    assert calls == [()]                      # closeEvent argümansız çağırır (kendi varsayılanı, 2000ms)
+
+
+def test_apply_ui_settings_skips_reload_when_font_and_logo_unchanged_but_reloads_on_change(window, monkeypatch,
+                                                                                            tmp_path):
+    """IMPORTANT (review): apply_ui_settings artık her göz düğmesi tıklamasında da çalışıyor. Yazı tipi
+    dosyası (QFontDatabase.addApplicationFont tekilleştirmez, her çağrı kalıcı bir kayıt biriktirir) ve
+    logo pixmap'i (QPixmap yükleme + ölçekleme) bu yüzden yalnız GERÇEKTEN değiştiklerinde yeniden
+    yüklenmeli -- ayarlar aynı kalırken tekrarlanan apply_ui_settings çağrılarında değil."""
+    from matematigin_mantigi.ui import main_window as mw
+    font_calls: list = []
+    logo_calls: list = []
+    monkeypatch.setattr(mw.theme, "load_font_file", lambda p: (font_calls.append(p), "FakeFamily")[1])
+    monkeypatch.setattr(window.work_area, "set_logo", lambda *a, **k: logo_calls.append(a))
+
+    font_path = str(tmp_path / "a.ttf")
+    logo_path = str(tmp_path / "logo.png")
+    window.settings.font_file = font_path
+    window.settings.logo_file = logo_path
+    window.apply_ui_settings()
+    window.apply_ui_settings()
+    window.apply_ui_settings()
+    assert font_calls == [font_path]                              # üç çağrıya rağmen yalnız bir kez
+    assert logo_calls == [(logo_path, window.settings.logo_size)]
+    assert window.fam.sans == "FakeFamily"                        # önbellek self.fam'ı hâlâ doğru üretiyor
+
+    window.settings.font_file = str(tmp_path / "b.ttf")           # gerçekten değişti: yeniden yüklenmeli
+    window.apply_ui_settings()
+    assert font_calls == [font_path, str(tmp_path / "b.ttf")]
+    assert len(logo_calls) == 1                                   # logo değişmedi: hâlâ yalnız bir kez

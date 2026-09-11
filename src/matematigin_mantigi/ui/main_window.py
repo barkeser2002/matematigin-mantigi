@@ -49,6 +49,11 @@ class _StopWorker(QThread):
         self.done.emit(path)
 
 
+WEBCAM_HIDE_TIMEOUT_MS = 400   # apply_ui_settings'in "webcam" görünürlüğü kapatma yolu: closeEvent'in
+                               # varsayılanından (2000ms) çok daha kısa -- bkz. apply_ui_settings ve
+                               # WebcamPanel.shutdown docstring'i.
+
+
 class MainWindow(QMainWindow):
     def __init__(self, fam: FontFamilies, questions: Sequence[Question], settings: AppSettings,
                  recorder: Recorder, session_store: SessionStore,
@@ -60,6 +65,12 @@ class MainWindow(QMainWindow):
         self.camera_source_factory = camera_source_factory
         self.base_fam = fam                       # paketle gelen aile; Ayarlar'daki dosya bunun üstüne biner
         self.fam, self.settings, self.recorder, self.session_store = fam, settings, recorder, session_store
+        # apply_ui_settings artık her göz düğmesi tıklamasında da çalıştığı için (Görev 6) burada
+        # önbelleğe alınmış son uygulanan yazı tipi dosyası/logo -- QFontDatabase.addApplicationFont ve
+        # logo pixmap'ini yeniden yüklemek yalnız gerçekten DEĞİŞTİKLERİNDE yapılır (bkz. apply_ui_settings).
+        self._applied_font_file: str | None = None
+        self._applied_font_family: str | None = None
+        self._applied_logo: tuple[str, int] | None = None
         self.layout_path = Path(layout_path)
         self.questions_path = Path(questions_path) if questions_path else None
         self.setWindowTitle("Matematiğin Mantığı")
@@ -92,8 +103,9 @@ class MainWindow(QMainWindow):
         self.toolbar.editor_button.setEnabled(self.questions_path is not None)
         if questions:
             self._on_question_changed(self.flow.index)
-        if camera_source_factory is not None:
-            self.webcam_panel.start()
+        # Webcam'in başlatılması artık apply_ui_settings()'in (yukarıda, _restore_settings'ten hemen sonra
+        # çağrıldı) "webcam" görünürlük anahtarına bağlı işi -- burada koşulsuz tekrar başlatmak, kapalı
+        # kaydedilmiş bir webcam'i yeniden başlatıp Görev 6'nın önlemeye çalıştığı boşa CPU'yu geri getirirdi.
 
     # --- wiring -------------------------------------------------------------------
     def _wire(self) -> None:
@@ -113,6 +125,7 @@ class MainWindow(QMainWindow):
         tb.layoutEditToggled.connect(self.work_area.set_edit_mode)
         self.work_area.editModeChanged.connect(tb.set_layout_edit)
         self.work_area.layoutChanged.connect(lambda lay: lm.save_layout(self.layout_path, lay))
+        self.work_area.visibilityToggled.connect(self._on_visibility_toggled)
         self.badge.ticked.connect(tb.set_recording_time)     # süre araç çubuğunda sayar (kayda girmez)
         self.badge.ticked.connect(self._check_recorder)
 
@@ -242,6 +255,12 @@ class MainWindow(QMainWindow):
     def _on_mask_mode(self, m) -> None:
         self.settings.hint_mask = m
 
+    def _on_visibility_toggled(self, key: str, on: bool) -> None:
+        """Düzen modundaki göz düğmesine tıklandığında (work_area.visibilityToggled): ayara yaz, sonra
+        tüm görünürlükleri tek eşleme noktasından (apply_ui_settings) yeniden uygula."""
+        self.settings.set_visible(key, on)
+        self.apply_ui_settings()
+
     def toggle_recording(self, on: bool) -> None:
         fps = self.settings.record_fps
         if on and not self.recorder.is_recording:
@@ -354,8 +373,14 @@ class MainWindow(QMainWindow):
     def apply_ui_settings(self) -> None:
         """Ayarlardaki yazı tipi, yazma hızı, otomatik perde tonu ve görünürlükleri arayüze uygular."""
         s = self.settings
-        family = theme.load_font_file(s.font_file) if s.font_file else None
-        self.fam = replace(self.base_fam, sans=family) if family else self.base_fam
+        # Yazı tipi dosyasını yalnız GERÇEKTEN değiştiyse yeniden yükle: apply_ui_settings artık her göz
+        # düğmesi tıklamasında da çalışıyor (Görev 6), ama theme.load_font_file her çağrıda
+        # QFontDatabase.addApplicationFont'u tekrar tekrar çağırır -- bu aynı dosya için TEKİLLEŞTİRMEZ,
+        # her çağrı süreç ömrü boyunca kalıcı yeni bir kayıt biriktirir (bkz. review notları).
+        if s.font_file != self._applied_font_file:
+            self._applied_font_file = s.font_file
+            self._applied_font_family = theme.load_font_file(s.font_file) if s.font_file else None
+        self.fam = replace(self.base_fam, sans=self._applied_font_family) if self._applied_font_family else self.base_fam
         self.question_zone.set_families(self.fam)
         self.hint_zone.set_families(self.fam)
         self.question_zone.set_reading_ms(s.pen().reading_ms)
@@ -363,19 +388,49 @@ class MainWindow(QMainWindow):
         self.webcam_panel.set_chroma_enabled(s.chroma_enabled)
         self.hint_zone.set_controls_visible(s.visible("hint_controls"))
         self.hint_zone.set_heading_visible(s.visible("hint_heading"))
+        self.hint_zone.setVisible(s.visible("hint_zone"))
+        self.work_area.set_item_visible("hint_zone", s.visible("hint_zone"))
         self.work_area.status_label.setVisible(s.visible("status"))
+        self.work_area.set_item_visible("status", s.visible("status"))
         self.webcam_panel.overlay_label.setVisible(s.visible("cam_label"))
         self.work_area.brand.setVisible(s.visible("brand"))
+        self.work_area.set_item_visible("brand", s.visible("brand"))
         self.question_zone.set_hide_link_enabled(s.visible("hide_link"))
         self.question_zone.set_number_visible(s.visible("question_number"))
+        self.question_zone.setVisible(s.visible("question_zone"))
+        self.work_area.set_item_visible("question_zone", s.visible("question_zone"))
         self.work_area.set_aspect_lock(s.aspect_lock)
         self.work_area.set_frame_visible(s.visible("frame"))
-        self.work_area.set_presenter_name(s.presenter_name if s.visible("presenter") else "")
-        self.work_area.set_logo(s.logo_file, s.logo_size)
+        # presenter: metin (set_presenter_name) ve görünürlük (set_item_visible) artık AYRI -- göz düğmesi
+        # ile Ayarlar'daki ad kutusu birbirini ezmesin diye (bkz. work_area.set_presenter_name docstring'i).
+        self.work_area.set_presenter_name(s.presenter_name)
+        self.work_area.set_item_visible("presenter", s.visible("presenter"))
+        # Logo pixmap'i de aynı nedenle (font gibi) yalnız dosya/boyut değiştiyse yeniden yüklenir --
+        # set_logo() QPixmap(path) + ölçekleme yapar, göz düğmesi tıklamalarında boşuna tekrarlanmasın.
+        logo_key = (s.logo_file, s.logo_size)
+        if logo_key != self._applied_logo:
+            self._applied_logo = logo_key
+            self.work_area.set_logo(s.logo_file, s.logo_size)
         self.work_area.logo_label.setVisible(s.visible("logo"))
+        self.work_area.set_item_visible("logo", s.visible("logo"))
         self.badge.show_on_board = s.visible("badge")
         if self.badge.active:
             self.badge.setVisible(self.badge.show_on_board)
+        self.work_area.set_item_visible("badge", s.visible("badge"))
+        # webcam: görünürlük + yaşam döngüsü. Kapatılınca CameraWorker durur (chroma-key artık görünmeyen
+        # bir widget için boşa kare işlemez); açılınca yalnız gerçek bir kamera kaynağı VARSA yeniden başlar
+        # (main_window.py __init__'teki "camera_source_factory is not None" kalıbıyla aynı koruma).
+        webcam_on = s.visible("webcam")
+        self.webcam_panel.setVisible(webcam_on)
+        self.work_area.set_item_visible("webcam", webcam_on)
+        if webcam_on:
+            if self.camera_source_factory is not None:
+                self.webcam_panel.start()
+        else:
+            # Kısa üst sınır: bu yol rutin bir düzenleme eylemiyle (göz düğmesi) her tetiklenebilir --
+            # closeEvent'teki varsayılan (2000ms) burada kamera sürücüsü takılırsa arayüzü iki saniye
+            # dondururdu. İş parçacığı normalde ~33ms'de durur; üst sınır yalnız arızaya karşı emniyet.
+            self.webcam_panel.shutdown(WEBCAM_HIDE_TIMEOUT_MS)
         for attr, val in (("fps", s.record_fps), ("out_height", s.record_height), ("audio_device", s.audio_device or None)):
             if hasattr(self.recorder, attr):
                 setattr(self.recorder, attr, val)
@@ -386,6 +441,8 @@ class MainWindow(QMainWindow):
         worker = getattr(self, "_stop_worker", None)
         if worker is not None and worker.isRunning():
             worker.wait(60000)                   # arka planda ses birleştirme sürüyorsa bitmesini bekle
+        # Varsayılan (2000ms) üst sınır: pencere zaten kapanıyor, birkaç saniyelik gecikme kabul edilebilir
+        # (apply_ui_settings'in görünürlük yolu bunun yerine kısa WEBCAM_HIDE_TIMEOUT_MS'yi kullanır).
         self.webcam_panel.shutdown()
         self.settings.sync()
         super().closeEvent(e)

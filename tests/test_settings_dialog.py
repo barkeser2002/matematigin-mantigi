@@ -105,6 +105,18 @@ def test_apply_emits_values(qtbot, ini_settings):
     assert sig.args[0].reading_ms == 70 and d.result() == d.DialogCode.Accepted.value
 
 
+def test_new_panel_keys_get_checkboxes_and_report_in_value(qtbot, ini_settings):
+    """Görev 6: question_zone/hint_zone/webcam VISIBILITY_KEYS'e eklendiği için görünürlük ızgarası
+    kendiliğinden bu üç onay kutusunu da üretmeli (settings_dialog.py'ye dokunulmadı)."""
+    d = SettingsDialog(ini_settings, FAM)
+    qtbot.addWidget(d)
+    for key in ("question_zone", "hint_zone", "webcam"):
+        assert key in d.visibility_checks and d.visibility_checks[key].isChecked()
+    d.visibility_checks["webcam"].setChecked(False)
+    v = d.value()
+    assert v.visible["webcam"] is False and v.visible["question_zone"] is True
+
+
 def test_dialog_scrolls_and_keeps_apply_visible_on_small_screen(qtbot, ini_settings):
     d = SettingsDialog(ini_settings, FAM); qtbot.addWidget(d)
     d.setMaximumHeight(420); d.resize(620, 420); d.show(); qtbot.waitExposed(d)

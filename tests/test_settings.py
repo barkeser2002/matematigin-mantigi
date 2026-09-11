@@ -2,7 +2,7 @@ from PyQt6.QtCore import QSettings
 
 from matematigin_mantigi.core.chroma_key import ChromaParams
 from matematigin_mantigi.core.models import HintMaskMode, Nib, PenSettings, Tool
-from matematigin_mantigi.core.settings import AppSettings
+from matematigin_mantigi.core.settings import VISIBILITY_KEYS, AppSettings
 
 
 def test_defaults(ini_settings):
@@ -69,3 +69,18 @@ def test_garbage_values_fall_back(tmp_path):
     q.setValue("tool", "hammer"); q.setValue("width", "abc"); q.setValue("hint_mask", 7); q.sync()
     s = AppSettings(q)
     assert s.tool == Tool.PEN and s.width == 4 and s.hint_mask == HintMaskMode.BLUR
+
+
+# --- Görev 6: tüm panelin (bölgenin) gizlenebilmesi -----------------------------------------------------
+
+def test_new_panel_visibility_keys_exist_and_default_true(ini_settings):
+    """question_zone/hint_zone/webcam VISIBILITY_KEYS'e Görev 6'da eklendi; badge dışındaki her anahtar
+    gibi varsayılanları True (VISIBILITY_DEFAULTS'ta bir istisnaları yok)."""
+    keys = {k for k, _ in VISIBILITY_KEYS}
+    assert {"question_zone", "hint_zone", "webcam"} <= keys
+    assert ini_settings.visible("question_zone") is True
+    assert ini_settings.visible("hint_zone") is True
+    assert ini_settings.visible("webcam") is True
+    # Not: dize round-trip'i zaten test_ui_settings_round_trip'te genel olarak (herhangi bir anahtar için)
+    # doğrulanıyor -- set_visible/visible VISIBILITY_KEYS üyeliğini kontrol etmiyor, bu yüzden ayrı bir
+    # round-trip testi burada Görev 6'ya özgü hiçbir şeyi ayırt etmezdi (uygulama geri alınsa da geçerdi).

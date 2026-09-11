@@ -21,6 +21,9 @@ VISIBILITY_KEYS: tuple[tuple[str, str], ...] = (
     ("presenter", "Sunucu adı (webcam üstünde)"),
     ("logo", "Logo (sol üst)"),
     ("badge", "Tahtadaki kayıt rozeti (KAYIT · 00:00; kayda girer)"),
+    ("question_zone", "Soru paneli"),
+    ("hint_zone", "Akıllı ipuçları paneli"),
+    ("webcam", "Webcam paneli"),
 )
 VISIBILITY_DEFAULTS = {"badge": False}
 

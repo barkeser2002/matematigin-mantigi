@@ -17,12 +17,6 @@ from matematigin_mantigi.ui.zone import Zone
 GRIP = 18   # sağ-alt köşede boyutlandırma tutamağı (px)
 
 
-def _even(n: int) -> int:
-    """Çift sayıya indir. RecordRect.physical() genişlik ve yüksekliğe bağımsız aynı işlemi uyguluyor;
-    sahne tek sayılı olursa bir eksende sessizce 1 piksel kaybedip oranı bozardı."""
-    return int(n) - (int(n) % 2)
-
-
 class _EditOverlay(QWidget):
     """Düzen modunda ızgara ve bölge sınırlarını en üstte çizer; fareye şeffaftır."""
 
@@ -79,8 +73,11 @@ class WorkArea(QWidget):
     layoutChanged = pyqtSignal(object)     # Layout dict
     editModeChanged = pyqtSignal(bool)
 
-    ASPECT = 16 / 9
-    MIN_STAGE = 2 * theme.FRAME_BAND + 16      # sahne bunun altına inerse inner_rect negatife düşer
+    ASPECT_W, ASPECT_H = 16, 9
+    ASPECT = ASPECT_W / ASPECT_H
+    # Sahne 32k x 18k adımlarıyla ölçülür: oran TAM 16:9 kalır ve iki kenar da çift olur.
+    STAGE_STEP_W, STAGE_STEP_H = 2 * ASPECT_W, 2 * ASPECT_H
+    MIN_STAGE_K = 4                            # 128x72; altında inner_rect bandın (2 * FRAME_BAND) altına düşer
 
     def __init__(self, fam: FontFamilies, parent=None):
         super().__init__(parent)
@@ -234,15 +231,19 @@ class WorkArea(QWidget):
 
     def stage_rect(self) -> QRect:
         """Tahtanın 16:9 sahnesi: pencerede ortalanır, artan yer bant olarak kalır.
-        aspect_lock kapalıysa tüm alan sahnedir (eski davranış)."""
+
+        Ölçü 32k x 18k adımıyla seçilir; sadece çifte indirmek yetmez, oran yine kayar (ör. 1830x1030
+        = 1.7767) ve ffmpeg `scale=-2:1440` bunu 2560 yerine 2558 piksel yapar. 32k x 18k'da oran tam
+        16:9, iki kenar da çift — RecordRect.physical() genişlikle yüksekliğe bağımsız _even()
+        uyguladığı için dpr 2'de de oran korunur.
+        aspect_lock kapalıysa (ya da pencere sahneyi taşıyamayacak kadar küçükse) tüm alan sahnedir."""
         if not self.aspect_lock:
             return self.rect()
         full_w, full_h = self.width(), self.height()
-        h = _even(min(full_h, round(full_w / self.ASPECT)))
-        w = _even(min(full_w, round(h * self.ASPECT)))          # genişlik yükseklikten türer: dpr 2'de de tam 16:9
-        # Çok küçük pencerede sahne bandın altına inip inner_rect'i negatife düşürmesin.
-        w = min(_even(full_w), max(w, self.MIN_STAGE))
-        h = min(_even(full_h), max(h, self.MIN_STAGE))
+        k = min(full_w // self.STAGE_STEP_W, full_h // self.STAGE_STEP_H)
+        if k < self.MIN_STAGE_K:                                # çok küçük pencere: eski davranışa dön,
+            return self.rect()                                  # yoksa inner_rect negatife düşerdi
+        w, h = self.STAGE_STEP_W * k, self.STAGE_STEP_H * k
         return QRect((full_w - w) // 2, (full_h - h) // 2, w, h)
 
     def inner_rect(self) -> QRect:
@@ -271,7 +272,7 @@ class WorkArea(QWidget):
         self.brand.adjustSize()
         self.brand.move(stage.x() + (stage.width() - self.brand.width()) // 2, stage.y())
         self.brand.raise_()
-        self.logo_label.move(inner.x() + 12, 2)
+        self.logo_label.move(inner.x() + 12, stage.y() + 2)      # sahnenin üst bandına asılı: kayda girer
         self.logo_label.raise_()
         webcam = self._zones.get("webcam")
         anchor = webcam.geometry() if webcam is not None else inner

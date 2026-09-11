@@ -79,9 +79,10 @@ def test_ink_layer_sits_above_zones_but_below_webcam(qtbot):
 def test_logo_monogram_and_file(qtbot, tmp_path):
     from PyQt6.QtGui import QImage
     wa, _ = make(qtbot)
-    inner = wa.inner_rect()
+    inner, stage = wa.inner_rect(), wa.stage_rect()
     assert not wa.logo_is_file and wa.logo_label.text() == "MM"
-    assert wa.logo_label.x() == inner.x() + 12 and wa.logo_label.y() == 2
+    assert wa.logo_label.x() == inner.x() + 12 and wa.logo_label.y() == stage.top() + 2
+    assert stage.contains(wa.logo_label.geometry())                    # logo sahnenin içinde: kayda girer
     assert wa.logo_label.height() == 48
     img = QImage(200, 100, QImage.Format.Format_RGB32); img.fill(Qt.GlobalColor.red)
     path = tmp_path / "logo.png"; img.save(str(path))
@@ -189,6 +190,32 @@ def test_stage_is_16_9_and_centred_for_any_window_ratio(qtbot):
         assert stage.top() == (height - stage.height()) // 2, stage
         assert wa.inner_rect() == stage.adjusted(B, B, -B, -B), stage
         assert wa.board.geometry() == wa.inner_rect()
+
+
+def scaled_width(phys_w: int, phys_h: int, out_height: int) -> int:
+    """ffmpeg `scale=-2:{out_height}`: genişlik orana göre en yakın çift sayıya yuvarlanır."""
+    return round(out_height * phys_w / phys_h / 2) * 2
+
+
+def test_stage_ratio_is_exact_and_records_at_2560x1440(qtbot):
+    """Sahne 16:9'a yaklaşık değil, TAM eşit; yoksa ffmpeg 2560x1440 yerine 2558x1440 üretir."""
+    from pathlib import Path
+    from matematigin_mantigi.core.recorder import ffmpeg_args, record_rect_for
+    wa, _ = make(qtbot)
+    for width, height in ((1832, 1080), (1920, 1080), (2560, 1440), (1466, 900), (900, 1200), (1280, 400)):
+        wa.resize(width, height)
+        stage = wa.stage_rect()
+        assert stage.width() * 9 == stage.height() * 16, (width, height, stage)   # tam 16:9, tolerans yok
+        assert stage.width() % 2 == 0 and stage.height() % 2 == 0, stage
+        for dpr in (1.0, 2.0):
+            phys = record_rect_for((0, 0, stage.width(), stage.height(), dpr)).physical()
+            assert phys.width * 9 == phys.height * 16, (stage, dpr)               # _even() oranı bozmuyor
+            assert scaled_width(phys.width, phys.height, 1440) == 2560, (stage, dpr)
+            assert scaled_width(phys.width, phys.height, 1080) == 1920, (stage, dpr)
+    stage = wa.stage_rect()
+    phys = record_rect_for((0, 0, stage.width(), stage.height(), 1.0)).physical()
+    args = ffmpeg_args("ffmpeg", phys.width, phys.height, 60, Path("k.mp4"), out_height=1440)
+    assert f"{phys.width}x{phys.height}" in args and "scale=-2:1440:flags=bilinear" in args
 
 
 def test_aspect_lock_off_restores_full_work_area(qtbot):

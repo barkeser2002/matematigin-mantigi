@@ -24,9 +24,23 @@ def make(qtbot):
     return wa, zones
 
 
+class DprArea(WorkArea):
+    """devicePixelRatioF()'ü testten sürer: Windows'ta 125/150/175% ölçek kesirli dpr üretir
+    (app.py: HighDpiScaleFactorRoundingPolicy.PassThrough)."""
+
+    dpr = 1.0
+
+    def devicePixelRatioF(self) -> float:
+        return self.dpr
+
+
 def cells(wa):
     inner = wa.inner_rect()
     return lm.cell_size(inner.width(), inner.height(), 14)
+
+
+def brightest(img, y, xs) -> int:
+    return max(img.pixelColor(x, y).value() for x in xs)
 
 
 def test_board_inside_frame_and_zones_use_defaults(qtbot):
@@ -53,6 +67,35 @@ def test_frame_paints_ink_band_and_can_be_hidden(qtbot):
     wa.set_frame_visible(False)
     assert wa.inner_rect() == stage and wa.board.geometry() == stage    # bant yok: tahta tüm sahne
     assert wa.grab().toImage().pixelColor(stage.left() + 3, y).name() == "#ffffff"
+
+
+def test_letterbox_stays_visible_when_frame_is_hidden(qtbot):
+    """Çerçeve kapalıyken de sahne dışı ölü bölge görünür kalmalı: orada çizilen mürekkep kayda girmez."""
+    wa, _ = make(qtbot)
+    wa.set_frame_visible(False)
+    stage = wa.stage_rect()
+    assert wa.aspect_lock and stage.top() > 4 and stage.left() > 0      # bant gerçekten var
+    img = wa.grab().toImage()
+    inside = img.pixelColor(stage.center().x(), stage.top() + 200)
+    band_top = img.pixelColor(stage.center().x(), stage.top() - 4)
+    band_left = img.pixelColor(stage.left() - 2, stage.center().y())
+    assert inside.name() == "#ffffff"
+    assert band_top != inside and band_left != inside                  # sınır belli
+    assert band_top.name() == theme.INK and band_left.name() == theme.INK
+    wa.set_aspect_lock(False)                                          # kilit kapalı: eski tek renk görüntü
+    assert wa.stage_rect() == wa.rect()
+    assert wa.grab().toImage().pixelColor(3, 300).name() == "#ffffff"
+
+
+def test_frame_dots_follow_the_stage(qtbot):
+    """Nokta dokusu sahnenin kenarında: widget'a çivili kalsaydı üst/alt sıralar kayıttan kırpılırdı."""
+    wa, _ = make(qtbot)
+    stage = wa.stage_rect()
+    img = wa.grab().toImage()
+    xs = range(stage.right() - 200, stage.right() - 10)                 # marka plakası ve logodan uzak
+    # Degrade aşağı doğru koyulaşır; daha aşağıdaki sıranın daha parlak olması ancak noktalarla mümkün.
+    assert brightest(img, stage.top() + 5, xs) > brightest(img, stage.top() - 4, xs)
+    assert brightest(img, stage.bottom() - 4, xs) > brightest(img, wa.height() - 5, xs)
 
 
 def test_title_plate_and_presenter_name_positions(qtbot):
@@ -198,20 +241,28 @@ def scaled_width(phys_w: int, phys_h: int, out_height: int) -> int:
 
 
 def test_stage_ratio_is_exact_and_records_at_2560x1440(qtbot):
-    """Sahne 16:9'a yaklaşık değil, TAM eşit; yoksa ffmpeg 2560x1440 yerine 2558x1440 üretir."""
+    """Sahne 16:9'a yaklaşık değil, TAM eşit; yoksa ffmpeg 2560x1440 yerine 2558x1440 üretir.
+    Kesirli dpr dahil (Windows 125/150/175%): RecordRect.physical() mantıksal ölçüyü dpr ile çarpıp
+    iki ekseni bağımsız çiftlediği için sahne dpr'nin paydasına da hizalanmalı."""
     from pathlib import Path
     from matematigin_mantigi.core.recorder import ffmpeg_args, record_rect_for
-    wa, _ = make(qtbot)
-    for width, height in ((1832, 1080), (1920, 1080), (2560, 1440), (1466, 900), (900, 1200), (1280, 400)):
-        wa.resize(width, height)
-        stage = wa.stage_rect()
-        assert stage.width() * 9 == stage.height() * 16, (width, height, stage)   # tam 16:9, tolerans yok
-        assert stage.width() % 2 == 0 and stage.height() % 2 == 0, stage
-        for dpr in (1.0, 2.0):
+    wa = DprArea(FAM)
+    qtbot.addWidget(wa)
+    for dpr in (1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5):        # Windows ölçek merdiveni
+        wa.dpr = dpr
+        for width, height in ((1832, 1080), (1920, 1080), (2560, 1440), (1466, 900), (900, 1200),
+                              (1280, 400), (1192, 720), (1278, 768)):
+            wa.resize(width, height)
+            stage = wa.stage_rect()
+            assert stage.width() * 9 == stage.height() * 16, (dpr, width, height, stage)  # tam 16:9
+            assert stage.width() % 2 == 0 and stage.height() % 2 == 0, (dpr, stage)
             phys = record_rect_for((0, 0, stage.width(), stage.height(), dpr)).physical()
-            assert phys.width * 9 == phys.height * 16, (stage, dpr)               # _even() oranı bozmuyor
-            assert scaled_width(phys.width, phys.height, 1440) == 2560, (stage, dpr)
-            assert scaled_width(phys.width, phys.height, 1080) == 1920, (stage, dpr)
+            assert phys.width * 9 == phys.height * 16, (dpr, stage, phys)      # _even() oranı bozmuyor
+            assert phys.width % 2 == 0 and phys.height % 2 == 0, (dpr, phys)
+            assert scaled_width(phys.width, phys.height, 1440) == 2560, (dpr, stage, phys)
+            assert scaled_width(phys.width, phys.height, 1080) == 1920, (dpr, stage, phys)
+    wa.dpr = 1.0
+    wa.resize(1832, 1080)
     stage = wa.stage_rect()
     phys = record_rect_for((0, 0, stage.width(), stage.height(), 1.0)).physical()
     args = ffmpeg_args("ffmpeg", phys.width, phys.height, 60, Path("k.mp4"), out_height=1440)

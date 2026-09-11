@@ -4,6 +4,8 @@ Düzen sınırları ve ızgara sadece düzen modunda görünür.
 """
 from __future__ import annotations
 
+from fractions import Fraction
+
 from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QLinearGradient, QMouseEvent, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
@@ -233,14 +235,18 @@ class WorkArea(QWidget):
         """Tahtanın 16:9 sahnesi: pencerede ortalanır, artan yer bant olarak kalır.
 
         Ölçü 32k x 18k adımıyla seçilir; sadece çifte indirmek yetmez, oran yine kayar (ör. 1830x1030
-        = 1.7767) ve ffmpeg `scale=-2:1440` bunu 2560 yerine 2558 piksel yapar. 32k x 18k'da oran tam
-        16:9, iki kenar da çift — RecordRect.physical() genişlikle yüksekliğe bağımsız _even()
-        uyguladığı için dpr 2'de de oran korunur.
+        = 1.7767) ve ffmpeg `scale=-2:1440` bunu 2560 yerine 2558 piksel yapar. Ayrıca k, ekran
+        ölçeğinin (dpr) paydasının katına indirilir: RecordRect.physical() mantıksal ölçüyü dpr ile
+        çarpıp genişlikle yüksekliğe BAĞIMSIZ _even() uyguluyor, Windows'ta 125/150/175% ölçek kesirli
+        dpr ürettiği için (app.py: PassThrough) hizalanmamış bir sahne orada yine 1 piksel kaybederdi.
+        Böylece dpr 1, 1.25, 1.5, 1.75, 2'de fiziksel ölçü tam sayı, çift ve oran tam 16:9 kalır.
         aspect_lock kapalıysa (ya da pencere sahneyi taşıyamayacak kadar küçükse) tüm alan sahnedir."""
         if not self.aspect_lock:
             return self.rect()
         full_w, full_h = self.width(), self.height()
         k = min(full_w // self.STAGE_STEP_W, full_h // self.STAGE_STEP_H)
+        q = Fraction(self.devicePixelRatioF()).limit_denominator(8).denominator
+        k -= k % q                                              # dpr = p/q iken 18k*dpr ve 32k*dpr çift kalsın
         if k < self.MIN_STAGE_K:                                # çok küçük pencere: eski davranışa dön,
             return self.rect()                                  # yoksa inner_rect negatife düşerdi
         w, h = self.STAGE_STEP_W * k, self.STAGE_STEP_H * k
@@ -367,7 +373,10 @@ class WorkArea(QWidget):
 
     def paintEvent(self, _e):
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor(theme.PANEL))
+        # Sahne dışındaki bant koyu kalır: çerçeve kapalıyken de kayda girmeyen ölü bölge belli olsun
+        # (oran kilidi kapalıyken sahne = tüm alan, yani eski tek renk görüntü).
+        p.fillRect(self.rect(), QColor(theme.INK))
+        p.fillRect(self.stage_rect(), QColor(theme.PANEL))
         if self.frame_visible:
             self._paint_frame(p)
         p.end()
@@ -377,16 +386,19 @@ class WorkArea(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         band = theme.FRAME_BAND
         inner = self.inner_rect()
+        stage = self.stage_rect()
         grad = QLinearGradient(0, 0, 0, self.height())
         grad.setColorAt(0.0, QColor("#2a2925")); grad.setColorAt(0.5, QColor(theme.INK)); grad.setColorAt(1.0, QColor("#0f0e0d"))
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(grad))
         p.drawRect(self.rect())                                           # bant
-        p.setBrush(QColor("#3a3834"))                                     # dış kenarda ince nokta dokusu
-        for x in range(6, self.width() - 4, 8):
-            p.drawEllipse(QPointF(x, 5), 1.0, 1.0); p.drawEllipse(QPointF(x, self.height() - 5), 1.0, 1.0)
-        for y in range(6, self.height() - 4, 8):
-            p.drawEllipse(QPointF(5, y), 1.0, 1.0); p.drawEllipse(QPointF(self.width() - 5, y), 1.0, 1.0)
+        p.setBrush(QColor("#3a3834"))                                     # sahne kenarında ince nokta dokusu
+        for x in range(stage.left() + 6, stage.right() - 3, 8):           # bant tabanlı olsaydı üst/alt
+            p.drawEllipse(QPointF(x, stage.top() + 5), 1.0, 1.0)          # sıralar kaydın dışında kalırdı
+            p.drawEllipse(QPointF(x, stage.bottom() - 4), 1.0, 1.0)
+        for y in range(stage.top() + 6, stage.bottom() - 3, 8):
+            p.drawEllipse(QPointF(stage.left() + 5, y), 1.0, 1.0)
+            p.drawEllipse(QPointF(stage.right() - 4, y), 1.0, 1.0)
         p.setBrush(QColor(theme.PANEL))
         p.drawRoundedRect(QRectF(inner), 12, 12)                          # yuvarlak iç köşeli tahta
         p.setBrush(Qt.BrushStyle.NoBrush)

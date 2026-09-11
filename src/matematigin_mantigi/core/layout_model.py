@@ -8,16 +8,20 @@ from pathlib import Path
 GRID_COLS = 12
 GRID_ROWS = 10
 MIN_SPAN = 2
+MIN_FREE_W = 80   # serbest boyutlandırmada asgari genişlik (px); work_area.py'deki sürükleme kırpmasıyla aynı taban
+MIN_FREE_H = 60   # serbest boyutlandırmada asgari yükseklik (px)
+_MIN_POSITIVE_SPAN = 1e-6   # clamp_free'nin alansız modunda yalnız sıfır/negatif span'e karşı koruma; bir
+                            # boyut tabanı DEĞİL (bkz. clamp_free docstring'i)
 ZONE_KEYS = ("soru", "ipucu", "webcam")
 PANEL_KEYS = ZONE_KEYS   # eski ad
 
 
 @dataclass(frozen=True)
 class PanelGeom:
-    col: int
-    row: int
-    col_span: int
-    row_span: int
+    col: float
+    row: float
+    col_span: float
+    row_span: float
 
 
 Layout = dict[str, PanelGeom]
@@ -34,6 +38,39 @@ def clamp(g: PanelGeom) -> PanelGeom:
     rs = max(MIN_SPAN, min(GRID_ROWS, g.row_span))
     col = max(0, min(GRID_COLS - cs, g.col))
     row = max(0, min(GRID_ROWS - rs, g.row))
+    return PanelGeom(col, row, cs, rs)
+
+
+def clamp_free(g: PanelGeom, area_w: float | None = None, area_h: float | None = None,
+                gap: float | None = None) -> PanelGeom:
+    """`clamp`'in yuvarlamayan, serbest boyutlandırma için ikizi.
+
+    area_w/area_h/gap'in HEPSİ verilirse (yalnız `free_rect`, sürüklemenin o anki GERÇEK alanıyla): asgari
+    span MIN_SPAN=2 hücre (ızgaranın 1/6'sı) değil, MIN_FREE_W x MIN_FREE_H piksel tabanından, bu alana göre
+    hücreye çevrilerek türetilir -- 80x60 px'lik bir bölge sürüklemenin kendisinde anlamlıdır, çünkü orada
+    gerçek pencere ölçüsü bilinir.
+
+    Herhangi biri (veya hepsi) None ise -- `from_json` ve `WorkArea.set_layout` gibi YÜKLEME yolunda, gerçek
+    pencere ölçüsü bilinmez -- piksel tabanı UYGULANMAZ: yalnız ızgara sınırları (0..GRID_COLS, 0..GRID_ROWS)
+    ve sıfır/negatif span'e karşı asgari bir koruma (_MIN_POSITIVE_SPAN, gerçek bir boyut tabanı değil)
+    kalır. Kalıcılık kaydedileni birebir geri vermeli: kesirli bir düzen tasarım gereği çözünürlükten
+    bağımsızdır, bu yüzden ayrıştırma anında (o anki pencerenin ölçüsüyle ya da rastgele bir referansla)
+    piksel tabanını yeniden türetmek hem yanlış hem gereksizdir -- taban yalnız onu YARATAN tek yer olan
+    sürüklemede, gerçek alan bilinirken uygulanır. (Önceki bir sürüm burada sabit bir 1920x1080 referansı
+    kullanıyordu; bu, referanstan büyük ekranlarda serbestçe küçültülmüş bir bölgeyi yüklemede sessizce
+    büyütüyordu -- bkz. review notları.)
+    """
+    if area_w is None or area_h is None or gap is None:
+        cs = max(_MIN_POSITIVE_SPAN, min(GRID_COLS, g.col_span))
+        rs = max(_MIN_POSITIVE_SPAN, min(GRID_ROWS, g.row_span))
+    else:
+        cw, ch = cell_size(area_w, area_h, gap)
+        min_cs = (MIN_FREE_W + gap) / (cw + gap)
+        min_rs = (MIN_FREE_H + gap) / (ch + gap)
+        cs = max(min_cs, min(GRID_COLS, g.col_span))
+        rs = max(min_rs, min(GRID_ROWS, g.row_span))
+    col = max(0.0, min(GRID_COLS - cs, g.col))
+    row = max(0.0, min(GRID_ROWS - rs, g.row))
     return PanelGeom(col, row, cs, rs)
 
 
@@ -61,6 +98,16 @@ def snap_rect(x: int, y: int, w: int, h: int, area_w: int, area_h: int, gap: int
     return clamp(PanelGeom(col, row, cs, rs))
 
 
+def free_rect(x: float, y: float, w: float, h: float, area_w: float, area_h: float, gap: float) -> PanelGeom:
+    """`snap_rect`'in yuvarlamayan ikizi: bırakılan yerdeki kesirli hücre konum/boyutunu aynen taşır."""
+    cw, ch = cell_size(area_w, area_h, gap)
+    col = x / (cw + gap)
+    row = y / (ch + gap)
+    col_span = (w + gap) / (cw + gap)
+    row_span = (h + gap) / (ch + gap)
+    return clamp_free(PanelGeom(col, row, col_span, row_span), area_w, area_h, gap)
+
+
 def to_json(layout: Layout) -> str:
     return json.dumps({k: asdict(v) for k, v in layout.items()}, indent=2, ensure_ascii=False)
 
@@ -79,10 +126,10 @@ def from_json(text: str) -> Layout:
         if not isinstance(item, dict):
             continue
         try:
-            g = PanelGeom(int(item["col"]), int(item["row"]), int(item["col_span"]), int(item["row_span"]))
+            g = PanelGeom(float(item["col"]), float(item["row"]), float(item["col_span"]), float(item["row_span"]))
         except (KeyError, TypeError, ValueError):
             continue
-        result[key] = clamp(g)
+        result[key] = clamp_free(g)
     return result
 
 

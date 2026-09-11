@@ -16,7 +16,15 @@ from matematigin_mantigi.ui.canvas import DrawingCanvas
 from matematigin_mantigi.ui.theme import FontFamilies
 from matematigin_mantigi.ui.zone import Zone
 
-GRIP = 18   # sağ-alt köşede boyutlandırma tutamağı (px)
+GRIP = 18   # kenar/köşe tutamağı kalınlığı (px)
+
+_EDGE_CURSORS = {
+    "move": Qt.CursorShape.SizeAllCursor,
+    "n": Qt.CursorShape.SizeVerCursor, "s": Qt.CursorShape.SizeVerCursor,
+    "e": Qt.CursorShape.SizeHorCursor, "w": Qt.CursorShape.SizeHorCursor,
+    "nw": Qt.CursorShape.SizeFDiagCursor, "se": Qt.CursorShape.SizeFDiagCursor,
+    "ne": Qt.CursorShape.SizeBDiagCursor, "sw": Qt.CursorShape.SizeBDiagCursor,
+}
 
 
 class _EditOverlay(QWidget):
@@ -37,7 +45,9 @@ class _EditOverlay(QWidget):
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(QRectF(inner).adjusted(1.5, 1.5, -1.5, -1.5))
         cw, ch = lm.cell_size(inner.width(), inner.height(), theme.GRID_GAP)
-        pen = QPen(QColor(theme.ACCENT)); pen.setStyle(Qt.PenStyle.DotLine); p.setPen(pen)
+        grid_color = QColor(theme.ACCENT)
+        grid_color.setAlpha(255 if getattr(area, "_snap_active", False) else 60)   # ızgara artık dekoratif
+        pen = QPen(grid_color); pen.setStyle(Qt.PenStyle.DotLine); p.setPen(pen)
         for c in range(1, lm.GRID_COLS):
             x = inner.x() + round(c * (cw + theme.GRID_GAP) - theme.GRID_GAP / 2)
             p.drawLine(x, inner.top(), x, inner.bottom())
@@ -89,7 +99,8 @@ class WorkArea(QWidget):
         self.edit_mode = False
         self.frame_visible = True
         self.aspect_lock = True
-        self._drag: tuple[str, str, QPoint, QRect] | None = None   # key, "move"|"resize", press pos, start geom
+        self._drag: tuple[str, str, QPoint, QRect] | None = None   # key, mode ("move" ya da kenar kodu), press pos, start geom
+        self._snap_active = False                           # Ctrl basılı mı: overlay ızgarayı buna göre belirginleştirir
         self.setMouseTracking(True)
 
         self.board = DrawingCanvas(self)
@@ -124,7 +135,7 @@ class WorkArea(QWidget):
         self.edit_bar.setStyleSheet(f"#editBar {{ background: {theme.INK}; border-radius: 8px; }}")
         self.edit_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         bar = QHBoxLayout(self.edit_bar); bar.setContentsMargins(14, 6, 10, 6); bar.setSpacing(10)
-        info = QLabel("DÜZEN MODU · bölgeyi sürükle, sağ-alt köşeden boyutlandır")
+        info = QLabel("DÜZEN MODU · bölgeyi sürükle, kenarlardan serbestçe boyutlandır · Ctrl: ızgaraya yapıştır")
         info.setFont(theme.font(fam, 10, 600, spacing_pct=108)); info.setStyleSheet(f"color: {theme.TOOLBAR_MUTED};")
         self.reset_button = QPushButton("Sıfırla"); self.reset_button.setObjectName("pill")
         self.done_button = QPushButton("Bitti"); self.done_button.setObjectName("accent")
@@ -162,7 +173,12 @@ class WorkArea(QWidget):
         return dict(self._layout)
 
     def set_layout(self, layout: lm.Layout) -> None:
-        self._layout = {k: lm.clamp(v) for k, v in layout.items() if k in lm.ZONE_KEYS}
+        # lm.clamp_free alansız çağrılır (self.inner_rect() ile DEĞİL): bu bir yükleme yolu (ör. MainWindow
+        # kurucusundaki load_layout() -> set_layout() zinciri), piksel tabanını burada yeniden türetmek yanlış
+        # olurdu -- kaydedilen kesirli düzen çözünürlükten bağımsızdır, o anki pencerenin (hatta doğru
+        # boyutlanmış olsa bile) ölçüsüne göre büyütülüp küçültülmemeli. Piksel tabanı yalnız onu YARATAN
+        # sürüklemede uygulanır (bkz. clamp_free docstring'i); burada yalnız ızgara sınırları kalır.
+        self._layout = {k: lm.clamp_free(v) for k, v in layout.items() if k in lm.ZONE_KEYS}
         for k in lm.ZONE_KEYS:
             self._layout.setdefault(k, lm.DEFAULT_LAYOUT[k])
         self.relayout()
@@ -327,8 +343,20 @@ class WorkArea(QWidget):
             geo = self._zones[key].geometry()
             if not geo.contains(pos):
                 continue
-            grip = QRect(geo.right() - GRIP, geo.bottom() - GRIP, GRIP + 1, GRIP + 1)
-            return key, ("resize" if grip.contains(pos) else "move")
+            near_l = pos.x() - geo.left() <= GRIP
+            near_r = geo.right() - pos.x() <= GRIP
+            near_t = pos.y() - geo.top() <= GRIP
+            near_b = geo.bottom() - pos.y() <= GRIP
+            if near_t and near_l: mode = "nw"
+            elif near_t and near_r: mode = "ne"
+            elif near_b and near_l: mode = "sw"
+            elif near_b and near_r: mode = "se"
+            elif near_t: mode = "n"
+            elif near_b: mode = "s"
+            elif near_l: mode = "w"
+            elif near_r: mode = "e"
+            else: mode = "move"
+            return key, mode
         return None
 
     def mousePressEvent(self, e: QMouseEvent):
@@ -345,16 +373,38 @@ class WorkArea(QWidget):
         if self._drag is None:
             if self.edit_mode:
                 hit = self._hit(pos)
-                self.setCursor(Qt.CursorShape.SizeFDiagCursor if hit and hit[1] == "resize"
-                               else Qt.CursorShape.SizeAllCursor if hit else Qt.CursorShape.ArrowCursor)
+                self.setCursor(_EDGE_CURSORS.get(hit[1], Qt.CursorShape.ArrowCursor) if hit
+                               else Qt.CursorShape.ArrowCursor)
             super().mouseMoveEvent(e); return
         key, mode, start, geo = self._drag
         d = pos - start
-        zone = self._zones[key]
+        self._snap_active = bool(e.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        x, y, w, h = geo.x(), geo.y(), geo.width(), geo.height()
         if mode == "move":
-            zone.move(geo.topLeft() + d)
+            x += d.x(); y += d.y()
         else:
-            zone.resize(max(80, geo.width() + d.x()), max(60, geo.height() + d.y()))
+            if "e" in mode:
+                w = geo.width() + d.x()
+            if "w" in mode:
+                w = geo.width() - d.x(); x = geo.x() + d.x()
+            if "s" in mode:
+                h = geo.height() + d.y()
+            if "n" in mode:
+                h = geo.height() - d.y(); y = geo.y() + d.y()
+            if w < lm.MIN_FREE_W:                            # asgari genişlik: karşı kenarı sabit tut
+                if "w" in mode:
+                    x -= lm.MIN_FREE_W - w
+                w = lm.MIN_FREE_W
+            if h < lm.MIN_FREE_H:
+                if "n" in mode:
+                    y -= lm.MIN_FREE_H - h
+                h = lm.MIN_FREE_H
+        inner = self.inner_rect()                            # canlı kırpma: tahtadan dışarı sürüklenemez
+        w = min(w, inner.width())
+        h = min(h, inner.height())
+        x = max(inner.x(), min(x, inner.x() + inner.width() - w))
+        y = max(inner.y(), min(y, inner.y() + inner.height() - h))
+        self._zones[key].setGeometry(x, y, w, h)
         self.overlay.update()
         e.accept()
 
@@ -363,10 +413,13 @@ class WorkArea(QWidget):
             super().mouseReleaseEvent(e); return
         key, _mode, _start, _geo = self._drag
         self._drag = None
+        self._snap_active = False
         inner = self.inner_rect()
         g = self._zones[key].geometry()
-        self._layout[key] = lm.snap_rect(g.x() - inner.x(), g.y() - inner.y(), g.width(), g.height(),
-                                         inner.width(), inner.height(), theme.GRID_GAP)
+        ctrl = bool(e.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        to_geom = lm.snap_rect if ctrl else lm.free_rect
+        self._layout[key] = to_geom(g.x() - inner.x(), g.y() - inner.y(), g.width(), g.height(),
+                                    inner.width(), inner.height(), theme.GRID_GAP)
         self.relayout()
         self.layoutChanged.emit(self.layout())
         e.accept()

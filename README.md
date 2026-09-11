@@ -38,7 +38,8 @@ Webcam: perde pikselleri saydam olur, kişi tahtanın ve çizimlerin üstüne bi
 açılıp kapanır (kameraya tıklamak değiştirmez). Yeşil perde kamera karesinin
 kenarlarından otomatik ölçülür (yeşilimsi ve doygunsa), böylece #00ff3c olmayan
 gerçek perdeler de temizlenir; kamera yokken sadece kısa bir durum yazısı görünür.
-"⧉ Düzen" (L) modunda bölgeler OBS gibi taşınır/boyutlandırılır, 12x10 ızgaraya yapışır, `duzen.json`'a kaydedilir.
+"⧉ Düzen" (L) modunda bölgeler OBS gibi serbestçe taşınır/boyutlandırılır (8 kenar/köşe tutamağı); Ctrl basılı
+tutulursa 12x10 ızgaraya yapışır. Sonuç `duzen.json`'a kaydedilir.
 Normal kullanımda çerçeve ve bölge çizgisi yoktur; sadece düzen modunda görünür.
 
 Ekran çerçevesi: tüm çalışma alanını saran 26 px koyu bant, üstüne çizilemez; "Matematiğin Mantığı" plakası üst

@@ -1,4 +1,4 @@
-from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtCore import QPoint, QRect, Qt
 
 from matematigin_mantigi.core import layout_model as lm
 from matematigin_mantigi.ui import theme
@@ -156,8 +156,11 @@ def test_edit_mode_drag_moves_and_snaps(qtbot):
     qtbot.mousePress(wa, Qt.MouseButton.LeftButton, pos=start)
     qtbot.mouseMove(wa, start + QPoint(-int(cw * 2), 0))
     qtbot.mouseMove(wa, start + QPoint(-int(cw * 2), 0))
+    # Ctrl: bırakış artık serbest (bkz. test_edit_mode_drag_free_by_default_does_not_snap) — ızgaraya
+    # yapışmak için Ctrl basılı tutulmalı.
     with qtbot.waitSignal(wa.layoutChanged) as sig:
-        qtbot.mouseRelease(wa, Qt.MouseButton.LeftButton, pos=start + QPoint(-int(cw * 2), 0))
+        qtbot.mouseRelease(wa, Qt.MouseButton.LeftButton, pos=start + QPoint(-int(cw * 2), 0),
+                           modifier=Qt.KeyboardModifier.ControlModifier)
     assert sig.args[0]["webcam"] == lm.PanelGeom(7, 7, 3, 3)
     assert wa.board.is_empty()                                        # düzen modunda çizim olmaz
 
@@ -174,8 +177,9 @@ def test_edit_mode_drag_through_real_event_path(qtbot):
     QTest.mousePress(win, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start)
     QTest.mouseMove(win, end)
     QTest.mouseMove(win, end + QPoint(1, 0))
+    # Ctrl: ızgaraya yapış (bırakış artık varsayılan olarak serbest).
     with qtbot.waitSignal(wa.layoutChanged) as sig:
-        QTest.mouseRelease(win, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, end + QPoint(1, 0))
+        QTest.mouseRelease(win, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ControlModifier, end + QPoint(1, 0))
     assert sig.args[0]["webcam"] == lm.PanelGeom(7, 7, 3, 3)
     assert wa.board.is_empty()                                        # tıklama tuvale çizim olarak gitmedi
 
@@ -187,9 +191,125 @@ def test_edit_mode_resize_from_corner(qtbot):
     cw, ch = cells(wa)
     qtbot.mousePress(wa, Qt.MouseButton.LeftButton, pos=corner)
     qtbot.mouseMove(wa, corner + QPoint(0, int(ch)))
+    # Ctrl: ızgaraya yapış (bırakış artık varsayılan olarak serbest).
     with qtbot.waitSignal(wa.layoutChanged) as sig:
-        qtbot.mouseRelease(wa, Qt.MouseButton.LeftButton, pos=corner + QPoint(0, int(ch)))
+        qtbot.mouseRelease(wa, Qt.MouseButton.LeftButton, pos=corner + QPoint(0, int(ch)),
+                           modifier=Qt.KeyboardModifier.ControlModifier)
     assert sig.args[0]["soru"] == lm.PanelGeom(0, 0, 6, 5)
+
+
+def test_edit_mode_drag_free_by_default_does_not_snap(qtbot):
+    """Serbest sürükleme (varsayılan, Ctrl basılı değil): hücre değeri tam sayıya yapışmaz, bölge tam
+    olarak bırakıldığı piksel konumunda/boyutunda kalır."""
+    wa, zones = make(qtbot)
+    wa.set_edit_mode(True)
+    start = zones["webcam"].geometry().center()
+    end = start + QPoint(-37, -5)                     # ızgara adımının katı olmayan bir kaydırma
+    qtbot.mousePress(wa, Qt.MouseButton.LeftButton, pos=start)
+    qtbot.mouseMove(wa, end)
+    dragged = QRect(zones["webcam"].geometry())
+    with qtbot.waitSignal(wa.layoutChanged) as sig:
+        qtbot.mouseRelease(wa, Qt.MouseButton.LeftButton, pos=end)
+    g = sig.args[0]["webcam"]
+    assert g.col != round(g.col) or g.row != round(g.row)            # yapışmadı: en az biri kesirli
+    assert zones["webcam"].geometry() == dragged                     # widget bırakıldığı yerde kaldı
+
+
+def test_edit_mode_drag_clamps_live_to_inner_rect(qtbot):
+    """Bölge tahtanın dışına sürüklenmeye çalışılsa da sürükleme sırasında inner_rect() içinde kalır
+    (canlı kırpma) — eskiden yalnız bırakışta clamp() kurtarıyordu."""
+    wa, zones = make(qtbot)
+    wa.set_edit_mode(True)
+    inner = wa.inner_rect()
+    start = zones["soru"].geometry().center()
+    end = QPoint(inner.x() - 500, inner.y() - 500)    # tahtanın çok dışı
+    qtbot.mousePress(wa, Qt.MouseButton.LeftButton, pos=start)
+    qtbot.mouseMove(wa, end)
+    assert inner.contains(zones["soru"].geometry())                  # sürüklenirken bile tahtanın içinde
+    with qtbot.waitSignal(wa.layoutChanged):
+        qtbot.mouseRelease(wa, Qt.MouseButton.LeftButton, pos=end)
+    assert inner.contains(zones["soru"].geometry())
+
+
+def test_edit_mode_resize_from_nw_corner_moves_and_resizes(qtbot):
+    """Kuzey-batı köşesinden boyutlandırma hem konumu hem boyutu değiştirir; karşı (güney-doğu) köşe
+    yerinde kalır."""
+    wa, zones = make(qtbot)
+    wa.set_edit_mode(True)
+    geo = zones["ipucu"].geometry()
+    start = geo.topLeft() + QPoint(4, 4)              # kuzey-batı tutamağı
+    d = QPoint(30, 20)
+    end = start + d
+    right, bottom = geo.right(), geo.bottom()
+    qtbot.mousePress(wa, Qt.MouseButton.LeftButton, pos=start)
+    qtbot.mouseMove(wa, end)
+    new_geo = zones["ipucu"].geometry()
+    assert new_geo.left() == geo.left() + d.x() and new_geo.top() == geo.top() + d.y()
+    assert new_geo.right() == right and new_geo.bottom() == bottom   # karşı köşe sabit kaldı
+    with qtbot.waitSignal(wa.layoutChanged):
+        qtbot.mouseRelease(wa, Qt.MouseButton.LeftButton, pos=end)
+
+
+def test_free_resize_below_two_cells_survives_save_and_load(qtbot, tmp_path):
+    """clamp_free'nin asgarisi 80x60 px'ten türer, MIN_SPAN=2 hücreden değil. Yükleme yolu (from_json,
+    WorkArea.set_layout) hâlâ clamp() kullansaydı, serbestçe 2 hücreden küçük boyutlandırılmış bir bölge
+    her yeniden başlatmada sessizce büyürdü -- bu da görevin amacını (serbest boyutlandırmanın kalıcı
+    olması) boşa çıkarırdı."""
+    wa, zones = make(qtbot)
+    wa.set_edit_mode(True)
+    geo = zones["webcam"].geometry()
+    start = geo.topLeft() + QPoint(4, 4)                          # kuzey-batı tutamağı
+    end = start + QPoint(geo.width() - 100, geo.height() - 70)    # ~100x70 px kalsın: >=80x60, <2 hücre
+    qtbot.mousePress(wa, Qt.MouseButton.LeftButton, pos=start)
+    qtbot.mouseMove(wa, end)
+    with qtbot.waitSignal(wa.layoutChanged) as sig:
+        qtbot.mouseRelease(wa, Qt.MouseButton.LeftButton, pos=end)
+    saved = sig.args[0]["webcam"]
+    assert saved.col_span < lm.MIN_SPAN and saved.row_span < lm.MIN_SPAN     # gerçekten 2 hücreden küçük
+
+    p = tmp_path / "duzen.json"
+    lm.save_layout(p, wa.layout())
+    loaded = lm.load_layout(p)
+    assert loaded["webcam"] == saved                              # from_json büyütmedi
+
+    wa.set_layout(loaded)                                         # MainWindow kurucusundaki gerçek yol
+    assert wa.layout()["webcam"] == saved                         # set_layout de büyütmedi
+
+
+def test_free_resize_round_trips_across_very_different_window_sizes(qtbot, tmp_path):
+    """Kesirli bir düzen çözünürlükten bağımsız olmalı. Büyük bir pencerede (2560x1440, tam ekran gibi)
+    80x60 px sürükleme asgarisine küçültülen bir bölge, kaydedilip ÇOK farklı ölçüde bir pencerede (1280x720)
+    yüklendiğinde o pencerenin kendi (çok daha kaba) piksel tabanına göre büyütülmemeli -- ve tersi de
+    geçerli. (`test_free_resize_below_two_cells_survives_save_and_load` tek pencere boyutunda -- 1832x1080 --
+    çalıştığından, önceki sabit 1920x1080 referans-alan hatasını yakalamıyordu: o boyuttaki değer zaten
+    referans tabanının üstündeydi.)"""
+    wa, _ = make(qtbot)
+
+    wa.resize(2560, 1440)                                           # büyük "tam ekran" pencere
+    inner_big = wa.inner_rect()
+    saved_big = lm.free_rect(0, 0, lm.MIN_FREE_W, lm.MIN_FREE_H,
+                              inner_big.width(), inner_big.height(), theme.GRID_GAP)
+    assert saved_big.col_span < 0.55 and saved_big.row_span < 0.55   # eski (yanlış) 1920x1080 referans tabanından bile küçük
+
+    p_big = tmp_path / "buyuk.json"
+    lm.save_layout(p_big, dict(wa.layout(), webcam=saved_big))
+
+    wa.resize(1280, 720)                                            # ÇOK farklı, küçük bir pencere
+    wa.set_layout(lm.load_layout(p_big))
+    assert wa.layout()["webcam"] == saved_big                       # küçük pencerenin kaba tabanına büyümedi
+
+    # ters yön: aynı 80x60 px, küçük pencerede çok daha büyük bir hücre payına karşılık gelir.
+    inner_small = wa.inner_rect()
+    saved_small = lm.free_rect(0, 0, lm.MIN_FREE_W, lm.MIN_FREE_H,
+                                inner_small.width(), inner_small.height(), theme.GRID_GAP)
+    assert saved_small.col_span > saved_big.col_span and saved_small.row_span > saved_big.row_span
+
+    p_small = tmp_path / "kucuk.json"
+    lm.save_layout(p_small, dict(wa.layout(), webcam=saved_small))
+
+    wa.resize(2560, 1440)                                           # büyük pencereye dön
+    wa.set_layout(lm.load_layout(p_small))
+    assert wa.layout()["webcam"] == saved_small                     # büyük pencerenin ince tabanına küçülmedi
 
 
 def test_no_drag_outside_edit_mode(qtbot):

@@ -17,6 +17,37 @@ def test_clamp_keeps_inside_grid_and_min_span():
     assert lm.clamp(lm.PanelGeom(8, 2, 6, 3)) == lm.PanelGeom(6, 2, 6, 3)
 
 
+def test_clamp_free_allows_smaller_span_than_clamp_but_stays_in_area():
+    w, h, gap = 1200, 1000, 14
+    tiny = lm.clamp_free(lm.PanelGeom(0, 0, 0.1, 0.1), w, h, gap)
+    assert 0 < tiny.col_span < lm.MIN_SPAN and 0 < tiny.row_span < lm.MIN_SPAN   # clamp() bunu 2'ye yuvarlardı
+    assert tiny.col >= 0 and tiny.row >= 0
+    cw, ch = lm.cell_size(w, h, gap)
+    px_w = tiny.col_span * (cw + gap) - gap                    # gerçek piksel taban genişliği
+    px_h = tiny.row_span * (ch + gap) - gap
+    assert px_w >= lm.MIN_FREE_W - 1e-6 and px_h >= lm.MIN_FREE_H - 1e-6   # 80x60 px taban korunuyor
+    out = lm.clamp_free(lm.PanelGeom(20, 20, 5, 5), w, h, gap)
+    assert out.col + out.col_span <= lm.GRID_COLS and out.row + out.row_span <= lm.GRID_ROWS
+    assert out.col >= 0 and out.row >= 0                        # alanı terk etmiyor
+
+
+def test_clamp_free_without_area_never_touches_span():
+    """area_w/area_h/gap verilmezse (from_json, WorkArea.set_layout -- yükleme yolu) clamp_free piksel
+    tabanını UYGULAMAZ: kaydedilmiş kesirli bir span, ne kadar küçük olursa olsun aynen korunur. Piksel
+    tabanı yalnız onu yaratan sürüklemede (gerçek alan bilinirken, free_rect üzerinden) uygulanır --
+    kalıcılık kaydedileni birebir geri vermeli, hangi pencerede yüklenirse yüklensin."""
+    assert lm.clamp_free(lm.PanelGeom(0, 0, 0.01, 0.02)) == lm.PanelGeom(0, 0, 0.01, 0.02)
+    assert lm.clamp_free(lm.PanelGeom(2, 1, 0.3, 0.25)) == lm.PanelGeom(2, 1, 0.3, 0.25)
+    assert lm.clamp_free(lm.PanelGeom(9, 7, 0.447, 0.528)) == lm.PanelGeom(9, 7, 0.447, 0.528)  # 2560x1440'ta gerçek taban
+    # yalnız sıfır/negatif span'e karşı bir koruma var -- bu, bir boyut TABANI değil
+    guarded = lm.clamp_free(lm.PanelGeom(0, 0, 0, -5))
+    assert guarded.col_span > 0 and guarded.row_span > 0
+    # ızgara sınırları hâlâ geçerli (clamp ile aynı üst sınır/alan kuralı)
+    out = lm.clamp_free(lm.PanelGeom(20, 20, 5, 5))
+    assert out.col + out.col_span <= lm.GRID_COLS and out.row + out.row_span <= lm.GRID_ROWS
+    assert out.col >= 0 and out.row >= 0
+
+
 def test_pixel_rect_and_snap_round_trip():
     w, h, gap = 1200, 1000, 14
     for key, g in lm.DEFAULT_LAYOUT.items():
@@ -42,6 +73,17 @@ def test_snap_moves_to_nearest_cell():
     assert g == lm.PanelGeom(0, 3, 3, 2)
 
 
+def test_free_rect_returns_fractional_unlike_snap_rect():
+    w, h, gap = 1200, 1000, 14
+    cw, ch = lm.cell_size(w, h, gap)
+    x, y = int(cw * 1.4), int(ch * 2.6)
+    pw, ph = int(cw * 3.3 - gap), int(ch * 2.2 - gap)
+    free = lm.free_rect(x, y, pw, ph, w, h, gap)
+    snapped = lm.snap_rect(x, y, pw, ph, w, h, gap)
+    assert any(v != round(v) for v in (free.col, free.row, free.col_span, free.row_span))
+    assert all(isinstance(v, int) for v in (snapped.col, snapped.row, snapped.col_span, snapped.row_span))
+
+
 def test_json_round_trip_and_bad_input():
     text = lm.to_json(lm.DEFAULT_LAYOUT)
     assert json.loads(text)["webcam"] == {"col": 9, "row": 7, "col_span": 3, "row_span": 3}
@@ -53,9 +95,34 @@ def test_json_round_trip_and_bad_input():
     assert "x" not in partial and "cizim" not in partial          # eski anahtar yok sayılır
 
 
+def test_to_json_from_json_round_trips_fractional_values():
+    custom: lm.Layout = {
+        "soru": lm.PanelGeom(0.5, 1.25, 6.5, 4.75),
+        "ipucu": lm.PanelGeom(6.5, 1.25, 5.5, 4.75),
+        "webcam": lm.PanelGeom(8.75, 6.5, 3.25, 3.5),
+    }
+    text = lm.to_json(custom)
+    assert lm.from_json(text) == custom                    # kesirli değerler aynen geri gelir
+
+
 def test_load_save_layout(tmp_path):
     p = tmp_path / "duzen.json"
     assert lm.load_layout(p) == lm.DEFAULT_LAYOUT          # missing file -> defaults
     custom = dict(lm.DEFAULT_LAYOUT, webcam=lm.PanelGeom(0, 8, 2, 2))
     lm.save_layout(p, custom)
     assert lm.load_layout(p) == custom
+
+
+def test_load_layout_reads_legacy_integer_file_unchanged(tmp_path):
+    """Görev 4 öncesi (serbest boyutlandırmadan önce) yazılmış tamsayı hücreli bir duzen.json bugün de
+    aynı düzeni vermeli — geriye uyumluluk."""
+    p = tmp_path / "duzen.json"
+    p.write_text(json.dumps({
+        "soru": {"col": 2, "row": 1, "col_span": 5, "row_span": 4},
+        "ipucu": {"col": 7, "row": 1, "col_span": 5, "row_span": 4},
+        "webcam": {"col": 0, "row": 8, "col_span": 2, "row_span": 2},
+    }), encoding="utf-8")
+    layout = lm.load_layout(p)
+    assert layout["soru"] == lm.PanelGeom(2, 1, 5, 4)
+    assert layout["ipucu"] == lm.PanelGeom(7, 1, 5, 4)
+    assert layout["webcam"] == lm.PanelGeom(0, 8, 2, 2)

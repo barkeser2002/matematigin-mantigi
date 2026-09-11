@@ -377,11 +377,18 @@ class WorkArea(QWidget):
     def _hit(self, pos: QPoint) -> tuple[str, str] | None:
         # Öğeler her zaman bölgelerin üstünde çizilir (relayout()'un raise_ sırası) -- ör. rozetin
         # varsayılan konumu ipucu'yla, marka plakası da soru/ipucu'nun üst kenarıyla görsel olarak çakışır.
-        # Ama bölgenin kendi tutamağı (kenar/köşe) yine de HER ZAMAN kazanmalı -- yoksa marka plakasının
-        # altında soru/ipucu'yu üst kenarından yeniden boyutlandırmak imkansız olurdu. Bu yüzden: önce
-        # üstteki bölgenin tutamak isabeti (varsa) hemen döner; değilse (bölgenin İÇİ) önce öğelere bakılır,
-        # bir öğe isabet etmezse en baştaki bölgenin "taşı" isabetine geri dönülür.
-        zone_move: tuple[str, str] | None = None
+        # Bölgenin KÖŞE tutamakları (nw/ne/sw/se) yine de HER ZAMAN kazanır -- yoksa marka plakasının
+        # altında soru/ipucu'yu köşeden yeniden boyutlandırmak imkansız olurdu (bkz.
+        # test_edit_mode_resize_from_nw_corner_moves_and_resizes). TEK KENAR tutamakları (n/s/e/w) ise
+        # köşelerden FARKLI davranır ve öğelere öncelik VERMEZ: bunlar "taşı" isabetiyle aynı fallback'e
+        # düşer, üstteki bir öğe varsa o kazanır. Kasıtlı bir dengeleme -- köşeler küçük (GRIP=18px'lik
+        # kare), ama kenar bir bölgenin tüm çevresini saran uzun bir şerit; kenarlara da koşulsuz öncelik
+        # verilseydi rozet/logo gibi küçük öğelerin alanının BÜYÜK KISMI tıklanamaz hâle gelirdi (review'da
+        # ölçülen: rozette isabetlerin ~%79'u, logo'da ~%42'si, marka plakasında ~%34'ü bir bölgenin kenar
+        # tutamağına gidiyordu, öğenin kendisine değil -- bkz. test_hit_test_center_of_logo_and_badge_...).
+        # UYARI: GRIP'i büyütmek ya da bir öğenin varsayılan/sürüklenmiş konumunu bir bölge kenarına daha
+        # da yaklaştırmak bu dengeyi yeniden bozabilir; o testler bunu köşe ve kenar için ayrı ayrı bekçiler.
+        zone_fallback: tuple[str, str] | None = None
         for key in reversed(list(self._zones)):           # üstteki bölge önce; yalnız en üsttekine bakılır
             geo = self._zones[key].geometry()
             if not geo.contains(pos):
@@ -390,20 +397,24 @@ class WorkArea(QWidget):
             near_r = geo.right() - pos.x() <= GRIP
             near_t = pos.y() - geo.top() <= GRIP
             near_b = geo.bottom() - pos.y() <= GRIP
-            if near_t and near_l: return key, "nw"
+            if near_t and near_l: return key, "nw"          # köşe: koşulsuz kazanır
             if near_t and near_r: return key, "ne"
             if near_b and near_l: return key, "sw"
             if near_b and near_r: return key, "se"
-            if near_t: return key, "n"
-            if near_b: return key, "s"
-            if near_l: return key, "w"
-            if near_r: return key, "e"
-            zone_move = (key, "move")
+            if near_t: zone_fallback = (key, "n")            # tek kenar: öğe üstteyse o kazanır
+            elif near_b: zone_fallback = (key, "s")
+            elif near_l: zone_fallback = (key, "w")
+            elif near_r: zone_fallback = (key, "e")
+            else: zone_fallback = (key, "move")
             break
-        for key in reversed(list(self._items)):            # öğeler yalnız taşınır, tutamak aranmaz
+        # Öğe isabet sırası GERÇEK Qt yığınından (self.children(), raise_() tarafından güncel tutulur)
+        # türetilir -- self._items'ın kuruluş sırasıyla _place_item çağrı sırasını elle senkron tutmaya
+        # dayanmaz, bu yüzden ileride biri değişip diğeri değişmezse bile görüneni yansıtmaya devam eder.
+        stacking = self.children()
+        for key in sorted(self._items, key=lambda k: stacking.index(self._items[k]), reverse=True):
             if self._items[key].geometry().contains(pos):
                 return key, "move"
-        return zone_move
+        return zone_fallback
 
     def _widget(self, key: str) -> QWidget:
         """`key` bir bölge mi öğe mi -- `_drag` tarafından tutulan geometri hangi çocuğa uygulanacak."""

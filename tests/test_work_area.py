@@ -530,3 +530,43 @@ def test_legacy_duzen_json_without_item_keys_keeps_items_at_default_positions(qt
     for k, w in widgets.items():
         assert (w.x(), w.y()) == defaults[k], k
     assert not (set(lm.ITEM_KEYS) & set(wa.layout()))     # dosyada öğe yoktu -> hiç override kaydı yok
+
+
+# --- Görev 5 düzeltme turu: isabet testi önceliği, taşan bölge tutamağı köşeyle sınırlı --------------
+
+def test_hit_test_center_of_logo_and_badge_returns_the_item_not_a_zone(qtbot):
+    """CRITICAL düzeltme: bir bölgenin TEK KENAR tutamağı (köşe değil) artık öğelere koşulsuz öncelikli
+    değil. Rozetin merkezi ipucu'nun üst kenar tutamağına, logo'nun merkezi de soru'nun üst kenar
+    tutamağına isabet eder (GRIP=18px) -- düzeltmeden önce ikisi de kendi öğesi değil, bölgenin kenar
+    tutamağı olarak çözümlenirdi (rozette isabetlerin ~%79'u, logo'da ~%42'si -- review bulgusu)."""
+    wa, _ = make(qtbot)
+    assert wa._hit(wa.logo_label.geometry().center()) == ("logo", "move")
+    assert wa._hit(wa.badge_slot.geometry().center()) == ("badge", "move")
+
+
+def test_hit_test_topmost_item_wins_when_items_overlap(qtbot):
+    """IMPORTANT 1: öğeler kendi aralarında çakışırsa görsel olarak ÜSTTEKİ (gerçek Qt yığın sırası,
+    raise_() ile güncellenir) kazanmalı. logo, brand'den SONRA raise_() edilir (bkz. relayout()'taki
+    _place_item çağrı sırası) -- yani logo marka plakasının üstüne sürüklenirse isabet testi logo'yu
+    döndürmeli, brand'i değil. Bu, self._items sözlük sırasıyla _place_item çağrı sırasının elle senkron
+    tutulmasına değil, self.children()'dan (raise_()'in bizzat güncellediği) türetilen gerçek isabet
+    sırasına dayanır -- ikisi ileride ayrı ayrı değiştirilse bile bu test görüneni yansıtmaya devam eder."""
+    wa, _ = make(qtbot)
+    stage = wa.stage_rect()
+    target = wa.brand.geometry().center()                       # brand'in tam ortası
+    top_left = target - QPoint(wa.logo_label.width() // 2, wa.logo_label.height() // 2)
+    frac = lm.item_pos_from_pixel(top_left.x() - stage.x(), top_left.y() - stage.y(),
+                                  stage.width(), stage.height())
+    wa.set_layout(dict(wa.layout(), logo=frac))
+    assert wa.logo_label.geometry().contains(target) and wa.brand.geometry().contains(target)  # çakışıyor
+    assert wa._hit(target) == ("logo", "move")                  # üstteki (logo) kazanır, brand değil
+
+
+def test_reset_layout_also_clears_item_overrides(qtbot):
+    """IMPORTANT 2: reset_layout() ("Sıfırla") bölgelerle simetrik olarak öğe geçersiz kılmalarını da
+    temizler (set_layout TAM DEĞİŞTİRİR, birleştirmez) -- korunması istenen, ama pinlenmemiş davranış."""
+    wa, _ = make(qtbot)
+    wa.set_layout(dict(wa.layout(), brand=lm.ItemPos(0.2, 0.05)))
+    assert "brand" in wa.layout()
+    wa.reset_layout()
+    assert "brand" not in wa.layout()

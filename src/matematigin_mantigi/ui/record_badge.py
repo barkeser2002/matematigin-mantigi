@@ -20,6 +20,7 @@ class RecordBadge(QWidget):
         self.setObjectName("recordBadge")
         self.setStyleSheet(f"#recordBadge {{ background: {theme.INK}; border-radius: 12px; }}")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)   # düz QWidget stil zeminini ancak böyle boyar
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)  # tıklanabilir işlevi yok, altındaki bölgeyi yemesin
         row = QHBoxLayout(self); row.setContentsMargins(12, 4, 14, 4); row.setSpacing(8)
         self.dot = QLabel(); self.dot.setFixedSize(10, 10)
         self.dot.setStyleSheet(f"background: {theme.REC_DOT}; border-radius: 5px;")

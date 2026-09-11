@@ -62,8 +62,8 @@ class Zone(QWidget):
         self._forward_mouse(e)
 
     def tabletEvent(self, e: QTabletEvent) -> None:
-        if self.board is None:
-            e.ignore()
+        if self.board is None or not self._click_through:
+            e.ignore()      # 'Tıkla' modunda kalem olayı yutulmaz; Qt fare olayı üretir, kart tıklanır
             return
         ne = QTabletEvent(e.type(), e.pointingDevice(), self._to_board(e.position()), e.globalPosition(),
                           e.pressure(), e.xTilt(), e.yTilt(), e.tangentialPressure(), e.rotation(), e.z(),

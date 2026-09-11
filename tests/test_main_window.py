@@ -106,6 +106,42 @@ def test_pen_draws_over_hint_card_and_click_tool_reveals(window, qtbot):
     assert card.revealed and window.canvas.is_empty()                       # tıkla: kart açıldı, çizim yok
 
 
+def test_click_tool_tablet_press_over_hint_card_is_not_swallowed(window, qtbot):
+    """XP-Pen bug: Tıkla modunda kalemle karta dokununca Zone.tabletEvent olayı yutmamalı.
+    Not: Qt'nin gerçek cihazda kabul edilmemiş kalem olayını fare tıklamasına çevirmesi (senkron
+    QApplication.sendEvent ile üretilen, spontane olmayan olaylarda) offscreen test platformunda
+    tetiklenmiyor (doğrulandı); bu yüzden aynı konuma gönderilen gerçek fare tıklamasıyla asıl
+    kullanıcı sonucunu (kart açılır) da doğruluyoruz."""
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtTest import QTest
+    from test_canvas import tablet
+    qtbot.mouseClick(window.toolbar.tool_buttons[Tool.CLICK], Qt.MouseButton.LeftButton)
+    card = window.hint_zone.cards[0]
+    zpos = card.mapTo(window.hint_zone, card.rect().center())
+    assert not tablet(window.hint_zone, QEvent.Type.TabletPress, zpos.x(), zpos.y(), 0.8)
+    assert not tablet(window.hint_zone, QEvent.Type.TabletRelease, zpos.x(), zpos.y(), 0.0)
+    assert window.canvas.is_empty()                                          # kalem olayı tahtaya çizim olarak gitmedi
+    win = window.windowHandle()
+    wpos = card.mapTo(window, card.rect().center())
+    QTest.mouseClick(win, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, wpos)
+    assert card.revealed and window.canvas.is_empty()                       # gerçek cihazda kalem de kartı açar
+
+
+def test_pen_tool_tablet_draws_over_hint_card_and_does_not_reveal(window, qtbot):
+    from PyQt6.QtCore import QEvent
+    from test_canvas import tablet
+    card = window.hint_zone.cards[0]
+    zpos = card.mapTo(window.hint_zone, card.rect().center())
+    assert tablet(window.hint_zone, QEvent.Type.TabletPress, zpos.x(), zpos.y(), 0.8)
+    assert tablet(window.hint_zone, QEvent.Type.TabletMove, zpos.x() + 15, zpos.y() + 8, 0.8)
+    assert tablet(window.hint_zone, QEvent.Type.TabletRelease, zpos.x() + 15, zpos.y() + 8, 0.0)
+    assert not window.canvas.is_empty() and not card.revealed
+
+
+def test_record_badge_is_transparent_to_mouse(window):
+    assert window.badge.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+
 def test_shape_button_cycles_and_draws(window, qtbot):
     from matematigin_mantigi.core.models import Shape
     btn = window.toolbar.tool_buttons[Tool.SHAPE]

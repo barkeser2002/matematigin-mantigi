@@ -314,6 +314,8 @@ class DrawingCanvas(QWidget):
 
     # --- tablet path -----------------------------------------------------------
     def tabletEvent(self, e: QTabletEvent) -> None:
+        if self.tool == Tool.CLICK:
+            e.ignore(); return
         t = e.type()
         eraser_tip = e.pointerType() == QPointingDevice.PointerType.Eraser
         if t == QEvent.Type.TabletPress:

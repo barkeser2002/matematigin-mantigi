@@ -160,6 +160,9 @@ class QuestionEditorDialog(QDialog):
 
     # --- liste/form eşitleme ------------------------------------------------------
     def _format_label(self, raw_id: str, konu: str, soru: str, row: int) -> str:
+        # Baştaki/sondaki boşluklar burada temizlenir, çağıranlara bağlı kalınmaz: aksi halde
+        # temizlenmemiş bir veri kaynağı _label ile _sync_label'ı sessizce ayrıştırabilir.
+        raw_id = raw_id.strip(); konu = konu.strip(); soru = soru.strip()
         ident = _display_id(raw_id, row)
         detail = konu or (soru[:32] if soru else "(boş soru)")
         return f"{ident} · {detail}"
@@ -178,8 +181,8 @@ class QuestionEditorDialog(QDialog):
     def _sync_label(self, *_) -> None:
         i = self._current
         if 0 <= i < self.list_widget.count():
-            label = self._format_label(self.id_edit.text().strip(), self.konu_edit.text().strip(),
-                                        self.soru_edit.toPlainText().strip(), i)
+            label = self._format_label(self.id_edit.text(), self.konu_edit.text(),
+                                        self.soru_edit.toPlainText(), i)
             self.list_widget.item(i).setText(label)
 
     def _on_row_changed(self, row: int) -> None:

@@ -92,6 +92,8 @@ def test_saved_signal_fires_with_edited_list(qtbot, tmp_path):
     ("S07", 6, "S07"),
     ("", 2, "S03"),
     ("X9", 0, "X09"),
+    ("S123", 0, "S123"),      # 3+ haneli id aynen kalır, kısaltılmaz/yeniden doldurulmaz
+    ("SORU-A", 4, "S05"),     # tamamen sayısız/uyumsuz id -> satır sırasına göre üretilir
 ])
 def test_display_id_table(raw, row, expected):
     assert _display_id(raw, row) == expected
@@ -127,6 +129,30 @@ def test_sync_label_matches_reload_label_format(qtbot, tmp_path):
     reloaded_q = d._question_from_form()
     reload_label = d._label(reloaded_q, 0)
     assert live_label == reload_label
+
+
+def test_format_label_strips_whitespace_regardless_of_source(qtbot, tmp_path):
+    """_format_label boşluğu kendi içinde temizlemeli; aksi halde henüz temizlenmemiş bir veri
+    kaynağından (ör. yeni bir içe aktarıcı) gelen boşluklu id/konu/soru, _label (liste yüklenirken)
+    ile _sync_label (alan düzenlenirken canlı) arasında farklı biçimler üretir — brief'in uyardığı
+    tam senaryo ("satır düzenlenince etiket biçimi değişir").
+
+    Boşluklu soru 2. satırda (index 1) tutuluyor: yapıcı yalnız 0. satırı seçip formu doldurduğu
+    için (bu da soru_edit.textChanged üzerinden _sync_label'ı dolaylı tetikler), 1. satırın etiketi
+    _reload_list -> _label'ın ürettiği hâliyle dokunulmadan kalır; sonra o satıra "geçilmiş" gibi
+    formu doldurup _sync_label'ın ürettiğiyle karşılaştırıyoruz."""
+    clean = Question("S1", "Denklemler", 7, "orijinal soru", (), "", ())
+    messy = Question("  S5  ", "  Cebir  ", None, "  2x = 8 ise x kaçtır?  ", (), "", ())
+    d, _ = _dialog(qtbot, tmp_path, questions=[clean, messy])
+    reload_label = d.list_widget.item(1).text()          # _reload_list -> _label(messy, 1), henüz dokunulmadı
+
+    d._current = 1
+    d.id_edit.setText(messy.id)
+    d.konu_edit.setText(messy.konu)
+    d.soru_edit.setPlainText(messy.soru)                  # textChanged -> _sync_label otomatik tetiklenir
+    live_label = d.list_widget.item(1).text()
+
+    assert reload_label == live_label == "S05 · Cebir"
 
 
 def test_new_id_is_zero_padded_and_avoids_collisions(qtbot, tmp_path):

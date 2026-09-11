@@ -168,9 +168,12 @@ class WorkArea(QWidget):
         self.edit_mode = on
         for zone in self._zones.values():
             zone.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, on)
-        # Tahta ve rozet de şeffaf olmalı; yoksa tıklama en üstteki çocuğa (tuvale) gider, buraya ulaşmaz.
+        # Tahta da şeffaf olmalı; yoksa tıklama en üstteki çocuğa (tuvale) gider, buraya ulaşmaz.
         self.board.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, on)
-        self.badge_slot.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, on)
+        # Rozetin tıklanabilir işlevi hiç yok; düzen modundan bağımsız hep fareye şeffaf kalmalı
+        # (RecordBadge kurucusu zaten bunu ayarlıyor — burada `on`'a bağlarsak düzen moduna her
+        # girip çıkışta True->False->... diye üzerine yazıp orijinal hatayı geri getiriyorduk).
+        self.badge_slot.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.overlay.setVisible(on)
         self.edit_bar.setVisible(on)
         self.setCursor(Qt.CursorShape.ArrowCursor)

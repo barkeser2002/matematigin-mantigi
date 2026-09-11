@@ -138,7 +138,32 @@ def test_pen_tool_tablet_draws_over_hint_card_and_does_not_reveal(window, qtbot)
     assert not window.canvas.is_empty() and not card.revealed
 
 
+def test_click_tool_tablet_press_on_empty_board_is_not_swallowed(window, qtbot):
+    """DrawingCanvas.tabletEvent kendi başına da (bir Zone üzerinden değil, tahtanın boş bir
+    yerine doğrudan dokunulduğunda) Tool.CLICK iken olayı kabul etmemeli."""
+    from PyQt6.QtCore import QEvent
+    from test_canvas import tablet
+    qtbot.mouseClick(window.toolbar.tool_buttons[Tool.CLICK], Qt.MouseButton.LeftButton)
+    x, y = 60, window.canvas.height() - 60                # herhangi bir bölgenin altında olmayan boş köşe
+    assert not tablet(window.canvas, QEvent.Type.TabletPress, x, y, 0.8)
+    assert not tablet(window.canvas, QEvent.Type.TabletRelease, x, y, 0.0)
+    assert window.canvas.is_empty()
+
+
 def test_record_badge_is_transparent_to_mouse(window):
+    assert window.badge.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+
+def test_record_badge_stays_transparent_after_edit_mode_round_trip(window, qtbot):
+    """WorkArea.set_edit_mode eskiden badge_slot'un WA_TransparentForMouseEvents bayrağını `on`'a
+    bağlıyordu; düzen moduna girip çıkınca (Düzen düğmesi / L kısayolu / Bitti) bu, rozetin kurucuda
+    kalıcı olarak ayarlanan şeffaflığını False'a döndürüp orijinal hatayı geri getiriyordu."""
+    assert window.badge.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    qtbot.mouseClick(window.toolbar.layout_button, Qt.MouseButton.LeftButton)
+    assert window.work_area.edit_mode
+    assert window.badge.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    window.work_area.done_button.click()
+    assert not window.work_area.edit_mode
     assert window.badge.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
 

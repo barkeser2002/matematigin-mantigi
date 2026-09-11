@@ -31,30 +31,35 @@ def cells(wa):
 
 def test_board_inside_frame_and_zones_use_defaults(qtbot):
     wa, zones = make(qtbot)
-    inner = wa.inner_rect()
-    assert inner == wa.rect().adjusted(B, B, -B, -B)
+    stage, inner = wa.stage_rect(), wa.inner_rect()
+    assert abs(stage.width() / stage.height() - 16 / 9) < 0.01          # sahne 16:9
+    assert stage != wa.rect() and wa.rect().contains(stage)             # kenarlarda bant kaldı
+    assert inner == stage.adjusted(B, B, -B, -B)                        # bant sahnenin içine iner
     assert wa.board.geometry() == inner                                # çerçeve bandına çizilemez
     soru, ipucu, webcam = (zones[k].geometry() for k in ("soru", "ipucu", "webcam"))
-    assert soru.left() == B and soru.top() == B
-    assert ipucu.right() == wa.width() - 1 - B
-    assert webcam.right() == wa.width() - 1 - B and webcam.bottom() == wa.height() - 1 - B
+    assert soru.left() == stage.left() + B and soru.top() == stage.top() + B
+    assert ipucu.right() == stage.right() - B
+    assert webcam.right() == stage.right() - B and webcam.bottom() == stage.bottom() - B
     assert abs(soru.width() / ipucu.width() - 1) < 0.02
 
 
 def test_frame_paints_ink_band_and_can_be_hidden(qtbot):
     wa, _ = make(qtbot)
+    stage = wa.stage_rect()
+    y = stage.center().y()
     img = wa.grab().toImage()
-    assert img.pixelColor(12, 300).value() < 70                       # çerçeve bandı koyu (degrade)
-    assert img.pixelColor(B + 40, 300).name() == "#ffffff"           # tahta beyaz, çizgi yok
+    assert img.pixelColor(stage.left() + 12, y).value() < 70            # çerçeve bandı koyu (degrade)
+    assert img.pixelColor(stage.left() + B + 40, y).name() == "#ffffff"  # tahta beyaz, çizgi yok
     wa.set_frame_visible(False)
-    assert wa.inner_rect() == wa.rect() and wa.board.geometry() == wa.rect()
-    assert wa.grab().toImage().pixelColor(3, 300).name() == "#ffffff"
+    assert wa.inner_rect() == stage and wa.board.geometry() == stage    # bant yok: tahta tüm sahne
+    assert wa.grab().toImage().pixelColor(stage.left() + 3, y).name() == "#ffffff"
 
 
 def test_title_plate_and_presenter_name_positions(qtbot):
     wa, zones = make(qtbot)
-    assert wa.brand.text() == "Matematiğin Mantığı" and wa.brand.y() == 0
-    assert abs(wa.brand.x() + wa.brand.width() // 2 - wa.width() // 2) <= 1
+    stage = wa.stage_rect()
+    assert wa.brand.text() == "Matematiğin Mantığı" and wa.brand.y() == stage.top()
+    assert abs(wa.brand.x() + wa.brand.width() // 2 - stage.center().x()) <= 1
     cam = zones["webcam"].geometry()
     assert wa.name_label.text() == "Koray Varol"
     assert wa.name_label.geometry().bottom() < cam.top()               # webcam'in üstünde
@@ -161,10 +166,41 @@ def test_reset_layout_emits_default(qtbot):
     assert sig.args[0] == lm.DEFAULT_LAYOUT
 
 
-def test_recording_rect_covers_whole_work_area(qtbot):
+def test_recording_rect_matches_16_9_stage(qtbot):
     wa, _ = make(qtbot)
+    stage = wa.stage_rect()
     x, y, w, h, dpr = wa.recording_rect()
-    assert (w, h) == (wa.width(), wa.height()) and dpr >= 1.0         # çerçeve de kayda girer
+    assert (w, h) == (stage.width(), stage.height()) and dpr >= 1.0    # kayıt sahneye eşit (çerçeve dahil)
+    assert abs(w / h - 16 / 9) < 0.01 and w % 2 == 0 and h % 2 == 0    # ffmpeg -s WxH tam 16:9
+    top_left = wa.mapToGlobal(stage.topLeft())
+    assert (x, y) == (top_left.x(), top_left.y())                      # bantlar kayda girmez
+    assert (stage.left(), stage.top()) == ((wa.width() - w) // 2, (wa.height() - h) // 2)
+
+
+def test_stage_is_16_9_and_centred_for_any_window_ratio(qtbot):
+    wa, _ = make(qtbot)
+    for width, height in ((1832, 1080), (900, 1200), (1000, 1000), (1280, 400)):
+        wa.resize(width, height)
+        stage = wa.stage_rect()
+        assert abs(stage.width() / stage.height() - 16 / 9) < 0.01, (width, height, stage)
+        assert stage.width() % 2 == 0 and stage.height() % 2 == 0, stage      # tek sayı oranı bozar
+        assert stage.width() <= width and stage.height() <= height, stage
+        assert stage.left() == (width - stage.width()) // 2, stage            # ortalı
+        assert stage.top() == (height - stage.height()) // 2, stage
+        assert wa.inner_rect() == stage.adjusted(B, B, -B, -B), stage
+        assert wa.board.geometry() == wa.inner_rect()
+
+
+def test_aspect_lock_off_restores_full_work_area(qtbot):
+    wa, _ = make(qtbot)
+    wa.set_aspect_lock(False)
+    assert wa.stage_rect() == wa.rect()                                # eski sözleşme: sahne = tüm alan
+    assert wa.inner_rect() == wa.rect().adjusted(B, B, -B, -B)
+    x, y, w, h, _ = wa.recording_rect()
+    assert (w, h) == (wa.width(), wa.height())
+    assert (x, y) == (wa.mapToGlobal(QPoint(0, 0)).x(), wa.mapToGlobal(QPoint(0, 0)).y())
+    wa.set_aspect_lock(True)
+    assert wa.stage_rect() != wa.rect() and abs(wa.stage_rect().width() / wa.stage_rect().height() - 16 / 9) < 0.01
 
 
 def test_edit_overlay_only_in_edit_mode(qtbot):

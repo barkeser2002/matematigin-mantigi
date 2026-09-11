@@ -27,6 +27,7 @@ class SettingsValues:
     record_fps: int = 60
     record_height: int = 1440
     audio_device: str = ""
+    aspect_lock: bool = True
     visible: dict[str, bool] = field(default_factory=dict)
 
 
@@ -100,6 +101,15 @@ class SettingsDialog(QDialog):
         row.addWidget(size_lab); row.addWidget(self.logo_size_slider, 1); row.addWidget(self.logo_size_value)
         lcol.addLayout(row)
         col.addWidget(logo_card)
+
+        board_card, bcol = _card("Tahta", fam)
+        self.aspect_lock_check = QCheckBox("Tahtayı 16:9 oranında tut (kenarlarda bant)")
+        self.aspect_lock_check.setChecked(settings.aspect_lock)
+        bcol.addWidget(self.aspect_lock_check)
+        board_note = QLabel("Açıkken tahta pencerede ortalanır ve kayıt tam 16:9 olur; kapalıyken tüm pencereyi kaplar.")
+        board_note.setWordWrap(True); board_note.setFont(theme.font(fam, 10, 400)); board_note.setStyleSheet(f"color: {theme.MUTED};")
+        bcol.addWidget(board_note)
+        col.addWidget(board_card)
 
         rec_card, rcol = _card("Kayıt (mss + ffmpeg, MP4)", fam)
         row = QHBoxLayout()
@@ -234,6 +244,7 @@ class SettingsDialog(QDialog):
                               record_height=int(self.res_combo.currentData() or 0),
                               audio_device=("" if self.audio_combo.currentText().strip() == "(ses yok)"
                                             else self.audio_combo.currentText().strip()),
+                              aspect_lock=self.aspect_lock_check.isChecked(),
                               visible={k: cb.isChecked() for k, cb in self.visibility_checks.items()})
 
     def _apply(self) -> None:

@@ -119,6 +119,11 @@ class AppSettings:
     def logo_size(self, px: int) -> None: self._q.setValue("ui/logo_size", int(px))
 
     @property
+    def aspect_lock(self) -> bool: return self._bool("ui/aspect_lock", True)
+    @aspect_lock.setter
+    def aspect_lock(self, on: bool) -> None: self._q.setValue("ui/aspect_lock", bool(on))
+
+    @property
     def record_fps(self) -> int: return 30 if self._int("record/fps", 60) == 30 else 60
     @record_fps.setter
     def record_fps(self, fps: int) -> None: self._q.setValue("record/fps", int(fps))

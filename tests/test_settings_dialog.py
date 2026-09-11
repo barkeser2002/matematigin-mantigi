@@ -85,6 +85,17 @@ def test_record_and_logo_size_fields(qtbot, ini_settings, monkeypatch):
     assert d.logo_size_value.text() == "96 px"
 
 
+def test_aspect_lock_field(qtbot, ini_settings):
+    d = SettingsDialog(ini_settings, FAM)
+    qtbot.addWidget(d)
+    assert d.aspect_lock_check.isChecked() and d.value().aspect_lock is True     # varsayılan açık
+    d.aspect_lock_check.setChecked(False)
+    assert d.value().aspect_lock is False
+    ini_settings.aspect_lock = False
+    d2 = SettingsDialog(ini_settings, FAM); qtbot.addWidget(d2)
+    assert not d2.aspect_lock_check.isChecked() and d2.value().aspect_lock is False   # kayıtlı ayardan gelir
+
+
 def test_apply_emits_values(qtbot, ini_settings):
     d = SettingsDialog(ini_settings, FAM)
     qtbot.addWidget(d)

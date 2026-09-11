@@ -17,6 +17,12 @@ from matematigin_mantigi.ui.zone import Zone
 GRIP = 18   # sağ-alt köşede boyutlandırma tutamağı (px)
 
 
+def _even(n: int) -> int:
+    """Çift sayıya indir. RecordRect.physical() genişlik ve yüksekliğe bağımsız aynı işlemi uyguluyor;
+    sahne tek sayılı olursa bir eksende sessizce 1 piksel kaybedip oranı bozardı."""
+    return int(n) - (int(n) % 2)
+
+
 class _EditOverlay(QWidget):
     """Düzen modunda ızgara ve bölge sınırlarını en üstte çizer; fareye şeffaftır."""
 
@@ -73,6 +79,9 @@ class WorkArea(QWidget):
     layoutChanged = pyqtSignal(object)     # Layout dict
     editModeChanged = pyqtSignal(bool)
 
+    ASPECT = 16 / 9
+    MIN_STAGE = 2 * theme.FRAME_BAND + 16      # sahne bunun altına inerse inner_rect negatife düşer
+
     def __init__(self, fam: FontFamilies, parent=None):
         super().__init__(parent)
         self.fam = fam
@@ -80,6 +89,7 @@ class WorkArea(QWidget):
         self._layout: lm.Layout = dict(lm.DEFAULT_LAYOUT)
         self.edit_mode = False
         self.frame_visible = True
+        self.aspect_lock = True
         self._drag: tuple[str, str, QPoint, QRect] | None = None   # key, "move"|"resize", press pos, start geom
         self.setMouseTracking(True)
 
@@ -185,6 +195,11 @@ class WorkArea(QWidget):
         self.relayout()
         self.update()
 
+    def set_aspect_lock(self, on: bool) -> None:
+        self.aspect_lock = on
+        self.relayout()
+        self.update()
+
     LOGO_SIZE = 48      # varsayılan; üst banda asılı, plaka gibi
 
     def set_logo(self, path: str, size: int | None = None) -> None:
@@ -217,13 +232,28 @@ class WorkArea(QWidget):
     def frame_band(self) -> int:
         return theme.FRAME_BAND if self.frame_visible else 0
 
+    def stage_rect(self) -> QRect:
+        """Tahtanın 16:9 sahnesi: pencerede ortalanır, artan yer bant olarak kalır.
+        aspect_lock kapalıysa tüm alan sahnedir (eski davranış)."""
+        if not self.aspect_lock:
+            return self.rect()
+        full_w, full_h = self.width(), self.height()
+        h = _even(min(full_h, round(full_w / self.ASPECT)))
+        w = _even(min(full_w, round(h * self.ASPECT)))          # genişlik yükseklikten türer: dpr 2'de de tam 16:9
+        # Çok küçük pencerede sahne bandın altına inip inner_rect'i negatife düşürmesin.
+        w = min(_even(full_w), max(w, self.MIN_STAGE))
+        h = min(_even(full_h), max(h, self.MIN_STAGE))
+        return QRect((full_w - w) // 2, (full_h - h) // 2, w, h)
+
     def inner_rect(self) -> QRect:
-        """Çizilebilir alan: çerçeve bandının içi."""
+        """Çizilebilir alan: sahnedeki çerçeve bandının içi."""
         b = self.frame_band()
         t, r, btm, l = theme.WORK_PADDING
-        return QRect(l + b, t + b, self.width() - l - r - 2 * b, self.height() - t - btm - 2 * b)
+        s = self.stage_rect()
+        return QRect(s.x() + l + b, s.y() + t + b, s.width() - l - r - 2 * b, s.height() - t - btm - 2 * b)
 
     def relayout(self) -> None:
+        stage = self.stage_rect()
         inner = self.inner_rect()
         self.board.setGeometry(inner)
         self.board.lower()
@@ -239,7 +269,7 @@ class WorkArea(QWidget):
         self.status_label.move(inner.x() + 12, inner.bottom() - self.status_label.height() - 6)
         self.status_label.raise_()
         self.brand.adjustSize()
-        self.brand.move((self.width() - self.brand.width()) // 2, 0)
+        self.brand.move(stage.x() + (stage.width() - self.brand.width()) // 2, stage.y())
         self.brand.raise_()
         self.logo_label.move(inner.x() + 12, 2)
         self.logo_label.raise_()
@@ -254,7 +284,8 @@ class WorkArea(QWidget):
         self.overlay.setGeometry(self.rect())
         self.overlay.raise_()
         self.edit_bar.adjustSize()
-        self.edit_bar.move((self.width() - self.edit_bar.width()) // 2, self.brand.height() + 8)
+        self.edit_bar.move(stage.x() + (stage.width() - self.edit_bar.width()) // 2,
+                           stage.y() + self.brand.height() + 8)
         self.edit_bar.raise_()
         self.overlay.update()
 
@@ -263,8 +294,10 @@ class WorkArea(QWidget):
         self.relayout()
 
     def recording_rect(self) -> tuple[int, int, int, int, float]:
-        g = self.mapToGlobal(QPoint(0, 0))
-        return g.x(), g.y(), self.width(), self.height(), float(self.devicePixelRatioF())
+        """Kayda giren dikdörtgen: 16:9 sahnenin tamamı (kenar bantları kayda girmez)."""
+        s = self.stage_rect()
+        g = self.mapToGlobal(s.topLeft())
+        return g.x(), g.y(), s.width(), s.height(), float(self.devicePixelRatioF())
 
     def set_status(self, text: str) -> None:
         self.status_label.setText(text)

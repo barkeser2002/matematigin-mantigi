@@ -341,6 +341,7 @@ class MainWindow(QMainWindow):
         s.logo_file = v.logo_file
         s.logo_size = v.logo_size
         s.record_fps, s.record_height, s.audio_device = v.record_fps, v.record_height, v.audio_device
+        s.aspect_lock = v.aspect_lock
         if v.camera_index != s.camera_index:
             s.camera_index = v.camera_index
             if self.camera_source_factory is not None:
@@ -367,6 +368,7 @@ class MainWindow(QMainWindow):
         self.work_area.brand.setVisible(s.visible("brand"))
         self.question_zone.set_hide_link_enabled(s.visible("hide_link"))
         self.question_zone.set_number_visible(s.visible("question_number"))
+        self.work_area.set_aspect_lock(s.aspect_lock)
         self.work_area.set_frame_visible(s.visible("frame"))
         self.work_area.set_presenter_name(s.presenter_name if s.visible("presenter") else "")
         self.work_area.set_logo(s.logo_file, s.logo_size)

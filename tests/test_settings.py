@@ -46,9 +46,14 @@ def test_record_and_logo_settings(tmp_path):
     s = AppSettings(QSettings(path, QSettings.Format.IniFormat))
     assert (s.record_fps, s.record_height, s.audio_device, s.logo_size) == (60, 1440, "", 48)
     assert s.visible("badge") is False and s.visible("logo") is True      # rozet varsayılan kapalı
-    s.record_fps = 30; s.record_height = 0; s.audio_device = "Mikrofon (USB)"; s.logo_size = 300; s.sync()
+    assert s.aspect_lock is True                                          # tahta varsayılan 16:9
+    s.record_fps = 30; s.record_height = 0; s.audio_device = "Mikrofon (USB)"; s.logo_size = 300
+    s.aspect_lock = False; s.sync()
     t = AppSettings(QSettings(path, QSettings.Format.IniFormat))
     assert (t.record_fps, t.record_height, t.audio_device, t.logo_size) == (30, 0, "Mikrofon (USB)", 200)
+    assert t.aspect_lock is False
+    t.aspect_lock = True; t.sync()
+    assert AppSettings(QSettings(path, QSettings.Format.IniFormat)).aspect_lock is True
 
 
 def test_stale_per_word_reading_speed_resets_to_default(tmp_path):

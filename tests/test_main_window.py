@@ -8,8 +8,12 @@ from matematigin_mantigi.core.models import SAMPLE_QUESTIONS, HintMaskMode, Ques
 def test_window_shell(window):
     assert window.windowTitle() == "Matematiğin Mantığı"
     assert window.toolbar.width() == 88
-    x, y, w, h, _ = window.work_area.recording_rect()
-    assert w == window.width() - 88 and h == window.height()
+    wa = window.work_area
+    stage = wa.stage_rect()
+    x, y, w, h, _ = wa.recording_rect()
+    assert wa.width() == window.width() - 88 and wa.height() == window.height()       # araç çubuğu dışta
+    assert (w, h) == (stage.width(), stage.height()) and abs(w / h - 16 / 9) < 0.01   # kayıt 16:9 sahne
+    assert (stage.left(), stage.top()) == ((wa.width() - w) // 2, (wa.height() - h) // 2)   # ortalı
     assert window.canvas is window.work_area.board and window.canvas.geometry() == window.work_area.inner_rect()
     assert window.work_area.name_label.text() == "Koray Varol" and window.work_area.frame_visible
     assert window.question_zone.number_label.text() == "1."
@@ -220,7 +224,9 @@ def test_recording_stub_and_badge(window, qtbot):
     qtbot.mouseClick(window.toolbar.record_button, Qt.MouseButton.LeftButton)
     assert window.recorder.is_recording and window.badge.active
     assert window.badge.isHidden()                                     # rozet varsayılan kapalı: kayda girmesin
-    assert window.recorder.last_rect.width == window.work_area.width() and window.recorder.fps == 60
+    stage = window.work_area.stage_rect()                              # kayda giren dikdörtgen: 16:9 sahne
+    assert (window.recorder.last_rect.width, window.recorder.last_rect.height) == (stage.width(), stage.height())
+    assert abs(stage.width() / stage.height() - 16 / 9) < 0.01 and window.recorder.fps == 60
     assert window.toolbar.record_label.text() == "DURDUR · 00:00"
     window.badge.tick(); window.badge.tick()
     assert window.badge.text().startswith("KAYIT · 00:02 · ") and window.toolbar.record_label.text() == "DURDUR · 00:02"
@@ -429,6 +435,23 @@ def test_pen_settings_round_trip_through_window(window, qtbot, monkeypatch):
     assert window.settings.pen() == PenSettings(smoothing=80, reading_ms=0)     # hız korunur (fixture: 0)
 
 
+def test_settings_dialog_toggles_aspect_lock(window, qtbot, monkeypatch):
+    from matematigin_mantigi.ui import settings_dialog as sd
+    wa = window.work_area
+    assert window.settings.aspect_lock is True and wa.stage_rect() != wa.rect()
+
+    def fake_exec(self):
+        self.aspect_lock_check.setChecked(False)
+        self._apply()
+        return 1
+    monkeypatch.setattr(sd.SettingsDialog, "exec", fake_exec)
+    qtbot.mouseClick(window.toolbar.settings_button, Qt.MouseButton.LeftButton)
+    assert window.settings.aspect_lock is False and wa.aspect_lock is False
+    assert wa.stage_rect() == wa.rect()                                # bant yok: tahta tüm alanı kaplar
+    x, y, w, h, _ = wa.recording_rect()
+    assert (w, h) == (wa.width(), wa.height())
+
+
 def test_settings_dialog_applies_speed_visibility_and_auto_key(window, qtbot, monkeypatch):
     from matematigin_mantigi.ui import settings_dialog as sd
 
@@ -450,7 +473,9 @@ def test_settings_dialog_applies_speed_visibility_and_auto_key(window, qtbot, mo
     s = window.settings
     assert s.chroma_enabled is False and window.webcam_panel.chroma_enabled is False
     assert s.presenter_name == "Barış Keser" and window.work_area.name_label.text() == "Barış Keser"
-    assert not window.work_area.frame_visible and window.canvas.geometry() == window.work_area.rect()
+    stage = window.work_area.stage_rect()                              # çerçeve kapalı: tahta = sahne
+    assert not window.work_area.frame_visible and window.canvas.geometry() == stage
+    assert stage != window.work_area.rect() and abs(stage.width() / stage.height() - 16 / 9) < 0.01
     assert s.pen().reading_ms == 90 and window.question_zone.reading_ms == 90
     assert s.auto_key is False and s.visible("status") is False
     assert window.work_area.status_label.isHidden() and window.webcam_panel.overlay_label.isHidden()

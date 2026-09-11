@@ -44,3 +44,13 @@ def test_stylesheet_mentions_page_background(qapp):
     css = theme.build_stylesheet(theme.FontFamilies("Arial", "Arial", False))
     assert theme.PAGE in css
     assert "font-family" not in css      # stil sayfası fontu setFont ile verilen Caveat'i ezer; app.setFont kullanılır
+
+
+def test_stylesheet_covers_list_and_input_widgets(qapp):
+    """Koyu mod karşıtı palet: liste/açılır menü/çok satırlı kutular arka plan+yazı rengi almalı,
+    yoksa sistem koyu modda Qt'nin koyu QPalette.Base'i koyu yazının üstüne biner (siyah-üstü-siyah)."""
+    css = theme.build_stylesheet(theme.FontFamilies("Arial", "Arial", False))
+    assert "QAbstractItemView" in css
+    assert "QPlainTextEdit" in css
+    assert "QComboBox" in css
+    assert "font-family" not in css

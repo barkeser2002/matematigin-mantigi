@@ -70,6 +70,8 @@ def main(argv: list[str] | None = None) -> int:
     qInstallMessageHandler(_qt_message_filter)
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(argv)
+    if hasattr(app.styleHints(), "setColorScheme"):      # Qt >= 6.8
+        app.styleHints().setColorScheme(Qt.ColorScheme.Light)   # tema açık renkli; sistem koyu modu paleti ezmesin
     app.setApplicationName("Matematiğin Mantığı")
     fam = theme.load_fonts(paths.FONTS_DIR)
     app.setFont(theme.font(fam, 13))            # varsayılan aile; stil sayfası font-family kullanmaz

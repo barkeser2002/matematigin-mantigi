@@ -1,10 +1,11 @@
+import pytest
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QImage
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
-from matematigin_mantigi.core.models import SAMPLE_QUESTIONS
+from matematigin_mantigi.core.models import Question, SAMPLE_QUESTIONS
 from matematigin_mantigi.core.question_loader import load_questions, save_question_image
-from matematigin_mantigi.ui.question_editor import QuestionEditorDialog
+from matematigin_mantigi.ui.question_editor import QuestionEditorDialog, _display_id
 from matematigin_mantigi.ui.theme import FontFamilies
 
 FAM = FontFamilies("Arial", "Arial", False)
@@ -21,7 +22,7 @@ def _dialog(qtbot, tmp_path, questions=None):
 def test_list_populates_and_selection_fills_form(qtbot, tmp_path):
     d, _ = _dialog(qtbot, tmp_path)
     assert d.list_widget.count() == 3
-    assert d.list_widget.item(0).text() == "S1 · Denklemler"
+    assert d.list_widget.item(0).text() == "S01 · Denklemler"
     assert d.id_edit.text() == "S1" and d.konu_edit.text() == "Denklemler"
     assert d.soru_edit.toPlainText() == SAMPLE_QUESTIONS[0].soru
     assert [e.text() for e in d.option_edits] == ["3", "4", "5", "6"]
@@ -52,7 +53,7 @@ def test_add_and_delete_rows(qtbot, tmp_path):
     d.list_widget.setCurrentRow(1)
     d.del_button.click()
     assert d.list_widget.count() == 3 and len(d.questions) == 3
-    assert [q.id for q in d.questions] == ["S1", "S3", "S4"]
+    assert [q.id for q in d.questions] == ["S1", "S3", "S04"]
 
 
 def test_empty_soru_blocks_save(qtbot, tmp_path, monkeypatch):
@@ -84,6 +85,55 @@ def test_saved_signal_fires_with_edited_list(qtbot, tmp_path):
     with qtbot.waitSignal(d.saved) as sig:
         d.save_button.click()
     assert isinstance(sig.args[0], list) and [q.id for q in sig.args[0]] == ["S1", "S2", "S3"]
+
+
+@pytest.mark.parametrize("raw, row, expected", [
+    ("S1", 0, "S01"),
+    ("S07", 6, "S07"),
+    ("", 2, "S03"),
+    ("X9", 0, "X09"),
+])
+def test_display_id_table(raw, row, expected):
+    assert _display_id(raw, row) == expected
+
+
+def test_label_shows_konu_when_present(qtbot, tmp_path):
+    d, _ = _dialog(qtbot, tmp_path)
+    assert d.list_widget.item(0).text() == "S01 · Denklemler"
+
+
+def test_label_falls_back_to_soru_start_when_konu_empty(qtbot, tmp_path):
+    q = Question("S1", "", 7, "Bu sorunun konusu boş bırakıldı ama metni uzun", (), "", ())
+    d, _ = _dialog(qtbot, tmp_path, questions=[q])
+    label = d.list_widget.item(0).text()
+    assert label == "S01 · " + q.soru[:32]
+    assert label != "S01"                 # çıplak id'ye çökmemeli
+
+
+def test_label_shows_placeholder_when_konu_and_soru_empty(qtbot, tmp_path):
+    q = Question("S1", "", None, "", (), "", ())
+    d, _ = _dialog(qtbot, tmp_path, questions=[q])
+    assert d.list_widget.item(0).text() == "S01 · (boş soru)"
+
+
+def test_sync_label_matches_reload_label_format(qtbot, tmp_path):
+    """Satır düzenlenirken (_sync_label) ve liste yeniden yüklenirken (_reload_list, _label
+    üzerinden) üretilen etiketler bire bir aynı olmalı; farklıysa alan düzenlenince biçim değişir."""
+    d, _ = _dialog(qtbot, tmp_path)
+    d.list_widget.setCurrentRow(0)
+    d.konu_edit.setText("")
+    d.konu_edit.textEdited.emit("")
+    live_label = d.list_widget.item(0).text()
+    reloaded_q = d._question_from_form()
+    reload_label = d._label(reloaded_q, 0)
+    assert live_label == reload_label
+
+
+def test_new_id_is_zero_padded_and_avoids_collisions(qtbot, tmp_path):
+    d, _ = _dialog(qtbot, tmp_path)
+    assert d._new_id() == "S04"
+    d.questions.append(Question("S04", "", None, "x", (), "", ()))
+    assert d._new_id() == "S05"
 
 
 def test_save_question_image_disambiguates(tmp_path):

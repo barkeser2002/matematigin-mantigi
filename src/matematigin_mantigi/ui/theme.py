@@ -121,6 +121,20 @@ def build_stylesheet(fam: FontFamilies) -> str:
     QPushButton#link {{ background: transparent; border: none; color: {MUTED}; text-decoration: underline; }}
     QLineEdit {{ background: {PANEL_SOFT}; border: 1px solid {LINE}; border-radius: 6px; padding: 5px 8px; }}
     QLineEdit:read-only {{ color: {MUTED}; }}
+    QListWidget, QListView, QTreeView, QTableView {{ background: {PANEL}; color: {INK};
+                                                     border: 1px solid {LINE}; border-radius: 6px;
+                                                     outline: none; }}
+    QAbstractItemView {{ background: {PANEL}; color: {INK};
+                         selection-background-color: {CHIP}; selection-color: {INK}; }}
+    QListWidget::item {{ padding: 5px 8px; border-radius: 4px; color: {INK}; }}
+    QListWidget::item:hover {{ background: {ROW_FOCUS}; }}
+    QListWidget::item:selected {{ background: {CHIP}; color: {INK}; }}
+    QListWidget::item:selected:active {{ background: {ACCENT}; color: white; }}
+    QPlainTextEdit, QTextEdit {{ background: {PANEL_SOFT}; color: {INK};
+                                 border: 1px solid {LINE}; border-radius: 6px; padding: 4px 6px; }}
+    QComboBox {{ background: {PANEL_SOFT}; color: {INK}; border: 1px solid {LINE};
+                 border-radius: 6px; padding: 3px 8px; }}
+    QComboBox QAbstractItemView {{ background: {PANEL}; color: {INK}; }}
     QSlider::groove:horizontal {{ height: 4px; background: {LINE}; border-radius: 2px; }}
     QSlider::handle:horizontal {{ width: 14px; margin: -6px 0; background: {INK}; border-radius: 7px; }}
     """

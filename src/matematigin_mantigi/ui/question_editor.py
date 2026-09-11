@@ -1,6 +1,7 @@
 """✎ Soru editörü: soruları görsel olarak oluştur/düzenle/sil, görsel seç, Excel'e kaydet."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Sequence
 
@@ -14,6 +15,18 @@ from matematigin_mantigi.core.models import OPTION_LETTERS, Question
 from matematigin_mantigi.core.question_loader import save_question_image, write_questions
 from matematigin_mantigi.ui import theme
 from matematigin_mantigi.ui.theme import FontFamilies
+
+
+def _display_id(raw: str, row: int) -> str:
+    """Listede gösterilecek kimlik: S07 gibi iki+ haneli kalıpları korur, S1 -> S01 gibi
+    tek haneli sayıları iki haneye tamamlar, hiç sayı yoksa satır sırasına göre S01, S02… üretir."""
+    if re.fullmatch(r"[A-Za-z]*\d{2,}", raw):
+        return raw
+    m = re.fullmatch(r"([A-Za-z]*)(\d+)", raw)
+    if m:
+        pre, num = m.groups()
+        return f"{pre}{int(num):02d}"
+    return f"S{row + 1:02d}"
 
 
 def _card(title: str, fam: FontFamilies) -> tuple[QFrame, QVBoxLayout]:
@@ -146,24 +159,28 @@ class QuestionEditorDialog(QDialog):
         self.resize(max(self.minimumWidth(), 820), min(720, avail - 60))
 
     # --- liste/form eşitleme ------------------------------------------------------
-    def _label(self, q: Question) -> str:
-        head = " · ".join(p for p in (q.id, q.konu) if p)
-        return head or (q.soru[:32] if q.soru else "(boş soru)")
+    def _format_label(self, raw_id: str, konu: str, soru: str, row: int) -> str:
+        ident = _display_id(raw_id, row)
+        detail = konu or (soru[:32] if soru else "(boş soru)")
+        return f"{ident} · {detail}"
+
+    def _label(self, q: Question, row: int) -> str:
+        return self._format_label(q.id, q.konu, q.soru, row)
 
     def _reload_list(self) -> None:
         prev = self._suppress
         self._suppress = True
         self.list_widget.clear()
-        for q in self.questions:
-            self.list_widget.addItem(self._label(q))
+        for row, q in enumerate(self.questions):
+            self.list_widget.addItem(self._label(q, row))
         self._suppress = prev
 
     def _sync_label(self, *_) -> None:
         i = self._current
         if 0 <= i < self.list_widget.count():
-            head = " · ".join(p for p in (self.id_edit.text().strip(), self.konu_edit.text().strip()) if p)
-            soru = self.soru_edit.toPlainText().strip()
-            self.list_widget.item(i).setText(head or (soru[:32] if soru else "(boş soru)"))
+            label = self._format_label(self.id_edit.text().strip(), self.konu_edit.text().strip(),
+                                        self.soru_edit.toPlainText().strip(), i)
+            self.list_widget.item(i).setText(label)
 
     def _on_row_changed(self, row: int) -> None:
         if not self._suppress and self._current != row:
@@ -253,9 +270,9 @@ class QuestionEditorDialog(QDialog):
     def _new_id(self) -> str:
         used = {q.id for q in self.questions}
         n = len(self.questions) + 1
-        while f"S{n}" in used:
+        while f"S{n:02d}" in used:
             n += 1
-        return f"S{n}"
+        return f"S{n:02d}"
 
     def _add(self) -> None:
         self._commit_current()

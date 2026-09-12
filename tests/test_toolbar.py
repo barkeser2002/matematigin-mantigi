@@ -201,13 +201,40 @@ def test_swatch_button_paint_adapts_to_smaller_diameter(qtbot):
 
 
 def test_glyph_button_hides_label_ink_when_show_label_false(qtbot):
-    """MINI kademede etiket tamamen çizilmemeli (yalnız gizli/taşan değil, hiç boyanmamalı)."""
-    btn = GlyphButton("✎", "Kalem")
+    """MINI kademede etiket tamamen çizilmemeli: yalnız gizli değil, hiç boyanmamalı.
+
+    Review düzeltmesi (1. tur): önceki sürüm yalnız sabit y=24 satırını örnekliyordu. paintEvent'in
+    kendi etiket dikdörtgeni ifadesiyle (QRectF(0, h*(28/48), w, h/3)) o satır h=28'de gerçek
+    mürekkep bandının DIŞINDA bir ölü bölgeydi; show_label'ı tamamen yok sayan bir mutasyonla bile
+    test yeşil kalıyordu (mutasyon testiyle doğrulandı, bkz. task-9-report.md "Görev 9 review
+    düzeltmesi").
+
+    Review düzeltmesi (2. tur, ilk düzeltmenin kendi hatası): "bandı tara, üstten birkaç piksel
+    sızıntı payı bırak" yaklaşımı da yeterli değildi. show_label=False dalı glifi TÜM kutuda
+    ortalıyor, bu yüzden glifin kendi (meşru) mürekkebi o banda TAŞAR -- ama taşma miktarı AKTİF
+    FONTA bağlı: `tests/test_toolbar.py` tek başına çalışınca bir fallback fontla ölçülen pay
+    (2px) yetiyordu, ama `test_theme.py::test_load_bundled_fonts` gerçek "Work Sans"/"Caveat"
+    fontlarını `QApplication`'a (süreç ömrü boyunca kalıcı) kaydettikten SONRA tam pakette
+    çalışınca farklı bir font kullanılıyor, taşma farklı satırlara kayıyor ve DOĞRU uygulamaya
+    karşı bile kırmızı çıkıyordu -- izole çalıştırmada yeşil, tam pakette kırmızı, klasik bir
+    font/test-sırası bağımlılığı (bkz. commit mesajı).
+
+    Kalıcı düzeltme: testi FONTTAN TAMAMEN BAĞIMSIZ kıl. Glif olarak mürekkep bırakmayan bir
+    boşluk (" ") kullanılıyor -- hangi font aktif olursa olsun boşluğun görünür mürekkedi yok, bu
+    yüzden show_label=False'ta glif dalı da hiçbir iz bırakmıyor. Böylece köşe yuvarlamasının
+    (radius=6, x<6/x>50'de) karışmayacağı x aralığında TÜM yükseklik taranabilir: mutasyonla
+    etiket zorla çizilirse "KALEM" mürekkedi -- hangi font aktifse aktif olsun -- mutlaka
+    yakalanır, ama boşluk glifinin kendisi asla yanlış pozitif üretmez."""
+    btn = GlyphButton(" ", "Kalem")
     qtbot.addWidget(btn)
     btn.show()
     qtbot.waitExposed(btn)
-    btn.set_metrics(28, 16, False)
+    h = 28
+    btn.set_metrics(h, 16, False)
     img = btn.grab().toImage()
-    assert img.height() == 28
-    bottom_row = [img.pixelColor(x, 24).name() for x in range(4, 52, 4)]
-    assert all(c == theme.TOOLBAR_BTN for c in bottom_row)    # etiket satırında hiç mürekkep yok
+    assert img.height() == h
+
+    bg = theme.TOOLBAR_BTN
+    offenders = [(x, y) for y in range(h) for x in range(8, 49)         # x: köşe yuvarlaması dışı
+                 if img.pixelColor(x, y).name() != bg]
+    assert offenders == []                    # ne boşluk glifinden ne etiketten hiç mürekkep yok

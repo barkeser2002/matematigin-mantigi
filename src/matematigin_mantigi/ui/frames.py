@@ -96,23 +96,42 @@ def paint_classic(p: QPainter, ctx: FrameContext) -> None:
 # yüksekliğiyle BÖLME yapılmaz; bölmeler yalnız ctx.band (her zaman > 0, paint_hud'a girmeden önce
 # denetlenir) ve sabit sayılarladır (bkz. paint_hud'un baştaki koruması).
 
+def _hud_rail_anchor_y(stage: QRect, band: int, top: bool) -> int:
+    """Üst/alt rayın kademe ÖNCESİ dayandığı y: paint_hud VE testler (bkz. _hud_rail_geometry) AYNI
+    sabiti kullansın diye _hud_rail'den ayrı bir fonksiyonda tutulur -- elle kopyalanmasın."""
+    return stage.top() + round(band * 0.42) if top else stage.bottom() - round(band * 0.42)
+
+
+def _hud_rail_geometry(stage: QRect, band: int, y: int, sign: int) -> tuple[float, float, float, float]:
+    """_hud_rail'in çizdiği kademe/ikinci-çizgi/nokta dizisinin SAYISAL geometrisi (hiçbir şey çizmez).
+    Boyacı (_hud_rail) VE testler AYNI formülü kullansın diye ayrıldı (review bulgusu): bir piksel probu
+    yalnız rayın kendisinin ulaşabileceği bir koordinatı (özellikle kademeli çizginin y'si, y2) hedeflemek
+    istiyorsa bunu elle kopyalamak yerine buradan almalı -- yoksa _hud_rail devre dışı bırakıldığında (ya
+    da geometrisi değiştiğinde) test farkı fark etmeyebilir (bkz. task-8-report.md, "IMPORTANT 2" bulgusu).
+    Döndürür: (notch, y2, by, span) -- y2: kademeli çizginin/ortadaki nokta+halkanın y'si; by: ikinci
+    (parlak mavi) çizginin y'si; span: dolu noktaların yayıldığı x aralığı (ortası tam stage.center().x())."""
+    step = max(4, band // 3)
+    notch = min(max(band * 2, 30), max(1, stage.width() // 3))
+    y2 = y + sign * step
+    by = y2 - sign * max(3, band // 8)
+    span = (stage.right() - notch * 1.1) - (stage.left() + notch * 1.1)
+    return notch, y2, by, span
+
+
 def _hud_rail(p: QPainter, stage: QRect, band: int, y: int, sign: int) -> None:
     """Üst/alt ray: ince lacivert yatay çizgi, iki uçta kademeli kırılma; hemen üstünde/altında daha kısa
     parlak mavi ikinci çizgi; üzerinde birkaç dolu daire ve bir halka. sign=+1 üst ray (çentik aşağı iner,
-    ikinci çizgi üstte), sign=-1 alt ray (üstün dikey aynası: çentik yukarı, ikinci çizgi altta)."""
+    ikinci çizgi üstte), sign=-1 alt ray (üstün dikey aynası: çentik yukarı, ikinci çizgi altta).
+    Geometri _hud_rail_geometry'den gelir (testlerle paylaşılan TEK kaynak, bkz. orada)."""
     mid, blue = QColor(theme.HUD_MID), QColor(theme.HUD_BLUE)
-    step = max(4, band // 3)
-    notch = min(max(band * 2, 30), max(1, stage.width() // 3))
+    notch, y2, by, span = _hud_rail_geometry(stage, band, y, sign)
     x0, x1 = stage.left(), stage.right()
-    y2 = y + sign * step
     p.setPen(QPen(mid, max(1.0, band / 18)))
     p.drawLine(QPointF(x0 + notch * 0.5, y), QPointF(x0 + notch, y2))
     p.drawLine(QPointF(x0 + notch, y2), QPointF(x1 - notch, y2))
     p.drawLine(QPointF(x1 - notch, y2), QPointF(x1 - notch * 0.5, y))
-    by = y2 - sign * max(3, band // 8)
     p.setPen(QPen(blue, max(1.0, band / 26)))
     p.drawLine(QPointF(x0 + notch * 1.3, by), QPointF(x1 - notch * 1.3, by))
-    span = (x1 - notch * 1.1) - (x0 + notch * 1.1)
     p.setPen(Qt.PenStyle.NoPen); p.setBrush(mid)
     for frac in (0.2, 0.4, 0.6, 0.8):
         p.drawEllipse(QPointF(x0 + notch * 1.1 + span * frac, y2), 2.4, 2.4)
@@ -236,8 +255,8 @@ def paint_hud(p: QPainter, ctx: FrameContext) -> None:
     if stage.width() <= 0 or stage.height() <= 0 or band <= 0:
         return
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    _hud_rail(p, stage, band, stage.top() + round(band * 0.42), +1)
-    _hud_rail(p, stage, band, stage.bottom() - round(band * 0.42), -1)
+    _hud_rail(p, stage, band, _hud_rail_anchor_y(stage, band, top=True), +1)
+    _hud_rail(p, stage, band, _hud_rail_anchor_y(stage, band, top=False), -1)
     _hud_label_band(p, stage, band, ctx.fam, ctx.presenter, top=True)
     _hud_label_band(p, stage, band, ctx.fam, ctx.brand, top=False)
     _hud_left_ruler(p, stage, band)

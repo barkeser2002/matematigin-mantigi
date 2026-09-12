@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import QWidget
 
 from matematigin_mantigi.core import layout_model as lm
 from matematigin_mantigi.core.models import FrameStyle
-from matematigin_mantigi.ui import theme
+from matematigin_mantigi.ui import frames, theme
 from matematigin_mantigi.ui.theme import FontFamilies
 from matematigin_mantigi.ui.work_area import WorkArea
 from matematigin_mantigi.ui.zone import Zone
@@ -817,19 +817,23 @@ def test_classic_frame_style_ignores_the_frame_titles_key(qtbot):
 
 def test_hud_frame_paints_white_board_center_and_navy_band(qtbot):
     """Gerçek WorkArea.grab() ile: HUD seçiliyken tahtanın (inner) ortası beyaz kalmalı (çerçeve tahtanın
-    içine taşmıyor) ve sahnenin üst/alt kenarında lacivert bir piksel bulunmalı (çerçeve fiilen çizilmiş)."""
+    içine taşmıyor) ve rayın kendi koordinatında (bkz. frames._hud_rail_geometry) lacivert bir piksel
+    bulunmalı (çerçeve fiilen çizilmiş).
+
+    Review bulgusu: eski sürüm bütün bir satırı tarıyordu -- köşe köşebentleri aynı satırlara denk
+    geldiği için _hud_rail tamamen devre dışı bırakılsa bile geçiyordu (bkz. tests/test_frames.py'deki
+    kardeş testin docstring'i, orada mutasyon testiyle doğrulandı; burada WorkArea/wa.grab() üstünden
+    aynı düzeltme uçtan uca tekrarlanıyor)."""
     wa, _ = make(qtbot)
     wa.set_frame_style(FrameStyle.HUD)
-    inner, stage = wa.inner_rect(), wa.stage_rect()
+    inner, stage, band = wa.inner_rect(), wa.stage_rect(), wa.frame_band()
     img = wa.grab().toImage()
     assert img.pixelColor(inner.center().x(), inner.center().y()).name() == theme.PANEL
 
-    navy = {theme.HUD_INK.lower(), theme.HUD_MID.lower(), theme.HUD_BLUE.lower()}
-    hit = any(img.pixelColor(x, stage.top() + 4).name().lower() in navy
-             for x in range(stage.left(), stage.right(), 5))
-    hit = hit or any(img.pixelColor(x, stage.bottom() - 4).name().lower() in navy
-                     for x in range(stage.left(), stage.right(), 5))
-    assert hit
+    anchor = frames._hud_rail_anchor_y(stage, band, top=True)
+    _notch, y2, _by, _span = frames._hud_rail_geometry(stage, band, anchor, +1)
+    cx, cy = stage.center().x(), round(y2)
+    assert img.pixelColor(cx, cy).name().lower() == "#1b3f7a"          # HUD_MID'in LİTERAL hex'i (bilerek)
 
 
 def test_hud_frame_style_survives_tiny_and_aspect_unlocked_window_sizes(qtbot):
@@ -844,6 +848,28 @@ def test_hud_frame_style_survives_tiny_and_aspect_unlocked_window_sizes(qtbot):
     wa.set_aspect_lock(False)
     wa.resize(1, 1)                       # aşırı küçük + oran kilidi kapalı
     wa.grab()                             # çökmemeli
+
+
+def test_inner_rect_stays_positive_for_both_styles_across_small_window_sizes(qtbot):
+    """Review bulgusu: MIN_STAGE_K=4 yalnız theme.FRAME_BAND (26px, Klasik) için kalibre edilmişti ve
+    frame_band()'den bağımsız SABİT kalıyordu -- HUD'un daha kalın bandıyla (52px) AYNI eşik kullanılınca
+    "modest" pencerelerde (ör. 200x120: Klasik'in sorunsuz kaldığı yerde HUD inner'ı 88x4'e, biraz daha
+    küçük pencerelerde negatife düşüyordu). Düzeltme: _min_stage_k() eşiği o an etkin banda göre ölçekler
+    (bkz. work_area.py, _min_stage_k docstring'i).
+
+    Burada iki şey doğrulanıyor: (1) Klasik'in davranışı AYNI kalıyor (_min_stage_k, band<=FRAME_BAND'de
+    MIN_STAGE_K'nin birebir aynısını verir -- matematiksel garanti, bkz. docstring), (2) HUD artık
+    ulaşılabilir pencerelerde de pozitif kalıyor. 150x80/160x90 gibi boyutlar BİLEREK burada YOK: o
+    pencereler HUD'un 52+52=104px bant bütçesinden fiziksel olarak daha kısa (yükseklik < 104) -- hiçbir
+    eşik onları kurtaramaz, bkz. _min_stage_k'nin UYARI paragrafı."""
+    wa, _ = make(qtbot)
+    sizes = [(150, 150), (180, 150), (220, 160), (260, 180), (300, 200), (360, 220), (450, 280), (600, 350)]
+    for style in (FrameStyle.CLASSIC, FrameStyle.HUD):
+        wa.set_frame_style(style)
+        for w, h in sizes:
+            wa.resize(w, h)
+            inner = wa.inner_rect()
+            assert inner.width() > 0 and inner.height() > 0, (style, w, h, inner)
 
 
 def test_frame_style_setting_flows_from_settings_values_style(qtbot):

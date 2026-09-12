@@ -128,7 +128,8 @@ class WorkArea(QWidget):
     ASPECT = ASPECT_W / ASPECT_H
     # Sahne 32k x 18k adımlarıyla ölçülür: oran TAM 16:9 kalır ve iki kenar da çift olur.
     STAGE_STEP_W, STAGE_STEP_H = 2 * ASPECT_W, 2 * ASPECT_H
-    MIN_STAGE_K = 4                            # 128x72; altında inner_rect bandın (2 * FRAME_BAND) altına düşer
+    MIN_STAGE_K = 4                            # 128x72; theme.FRAME_BAND (Klasik) için kalibre edilmiş taban --
+                                                # başka bir bant için _min_stage_k() ölçekler, bkz. orada
 
     def __init__(self, fam: FontFamilies, parent=None):
         super().__init__(parent)
@@ -390,6 +391,28 @@ class WorkArea(QWidget):
     def frame_band(self) -> int:
         return FRAME_SPECS[self.frame_style].band if self.frame_visible else 0
 
+    def _min_stage_k(self) -> int:
+        """stage_rect()'in 'çok küçük pencere' eşiği (review bulgusu, Görev 8 sonrası): MIN_STAGE_K=4 yalnız
+        theme.FRAME_BAND (Klasik'in bandı, 26px) için kalibre edilmişti -- HUD gibi daha kalın bantlı
+        (52px) bir stil seçiliyken AYNI sabit kullanılırsa true-branch'in ürettiği sahne HUD'un bandını
+        iki kere barındıramayacak kadar küçük kalabiliyor, inner_rect() negatife düşüyordu (ör. 200x120
+        pencerede HUD inner'ı 88x4'e, sonra biraz daha küçük pencerelerde negatife düşüyordu).
+
+        Eşik, o an etkin banda ORANLA ölçeklenir: band <= theme.FRAME_BAND iken (Klasik VE çerçeve
+        kapalıyken, frame_band()==0 dahil) MATEMATİKSEL OLARAK MIN_STAGE_K'nin BİREBİR AYNISINI verir --
+        bu iki durum bugüne kadar test edilen HER ŞEY, davranışları hiç değişmez (regresyon riski yok).
+        Yalnız band FRAME_BAND'den kalınsa (bugün yalnız HUD) eşik `ceil(MIN_STAGE_K * band / FRAME_BAND)`
+        ile büyütülür -- yani Klasik'in k=4'te bıraktığı inner/band ORANI korunur.
+
+        UYARI: pencerenin kendisi 2*band'den küçükse (ör. HUD'ta 104px'in altında bir yükseklik) bu eşik
+        hiçbir şeyi kurtaramaz -- self.rect() geri dönüşü bile o boyutta kalır, inner yine negatif çıkar.
+        Bu FİZİKSEL bir sınır (bandı iki kere barındıracak yer yok), eşik ayarıyla çözülemez; tasarımın
+        garantisi yalnız ÇÖKMEMEK (bkz. frames.paint_hud'un stage/band koruması), pozitif inner değil."""
+        band = self.frame_band()
+        if band <= theme.FRAME_BAND:
+            return self.MIN_STAGE_K
+        return -(-(self.MIN_STAGE_K * band) // theme.FRAME_BAND)     # ceil(MIN_STAGE_K * band / FRAME_BAND)
+
     def stage_rect(self) -> QRect:
         """Tahtanın 16:9 sahnesi: pencerede ortalanır, artan yer bant olarak kalır.
 
@@ -406,7 +429,7 @@ class WorkArea(QWidget):
         k = min(full_w // self.STAGE_STEP_W, full_h // self.STAGE_STEP_H)
         q = Fraction(self.devicePixelRatioF()).limit_denominator(8).denominator
         k -= k % q                                              # dpr = p/q iken 18k*dpr ve 32k*dpr çift kalsın
-        if k < self.MIN_STAGE_K:                                # çok küçük pencere: eski davranışa dön,
+        if k < self._min_stage_k():                             # çok küçük pencere: eski davranışa dön,
             return self.rect()                                  # yoksa inner_rect negatife düşerdi
         w, h = self.STAGE_STEP_W * k, self.STAGE_STEP_H * k
         return QRect((full_w - w) // 2, (full_h - h) // 2, w, h)

@@ -1,5 +1,7 @@
+import pytest
 from PyQt6.QtCore import Qt
 
+from matematigin_mantigi import paths
 from matematigin_mantigi.core.models import PALETTE, Tool
 from matematigin_mantigi.ui import theme
 from matematigin_mantigi.ui.theme import FontFamilies
@@ -203,38 +205,51 @@ def test_swatch_button_paint_adapts_to_smaller_diameter(qtbot):
 def test_glyph_button_hides_label_ink_when_show_label_false(qtbot):
     """MINI kademede etiket tamamen çizilmemeli: yalnız gizli değil, hiç boyanmamalı.
 
-    Review düzeltmesi (1. tur): önceki sürüm yalnız sabit y=24 satırını örnekliyordu. paintEvent'in
-    kendi etiket dikdörtgeni ifadesiyle (QRectF(0, h*(28/48), w, h/3)) o satır h=28'de gerçek
-    mürekkep bandının DIŞINDA bir ölü bölgeydi; show_label'ı tamamen yok sayan bir mutasyonla bile
-    test yeşil kalıyordu (mutasyon testiyle doğrulandı, bkz. task-9-report.md "Görev 9 review
-    düzeltmesi").
+    Review düzeltmesi (1. tur): önceki sürüm yalnız sabit y=24 satırını örnekliyordu -- paintEvent'in
+    kendi etiket dikdörtgeni ifadesiyle o satır gerçek mürekkep bandının DIŞINDA bir ölü bölgeydi;
+    show_label'ı tamamen yok sayan bir mutasyonla bile test yeşil kalıyordu.
 
-    Review düzeltmesi (2. tur, ilk düzeltmenin kendi hatası): "bandı tara, üstten birkaç piksel
-    sızıntı payı bırak" yaklaşımı da yeterli değildi. show_label=False dalı glifi TÜM kutuda
-    ortalıyor, bu yüzden glifin kendi (meşru) mürekkebi o banda TAŞAR -- ama taşma miktarı AKTİF
-    FONTA bağlı: `tests/test_toolbar.py` tek başına çalışınca bir fallback fontla ölçülen pay
-    (2px) yetiyordu, ama `test_theme.py::test_load_bundled_fonts` gerçek "Work Sans"/"Caveat"
-    fontlarını `QApplication`'a (süreç ömrü boyunca kalıcı) kaydettikten SONRA tam pakette
-    çalışınca farklı bir font kullanılıyor, taşma farklı satırlara kayıyor ve DOĞRU uygulamaya
-    karşı bile kırmızı çıkıyordu -- izole çalıştırmada yeşil, tam pakette kırmızı, klasik bir
-    font/test-sırası bağımlılığı (bkz. commit mesajı).
+    Review düzeltmesi (2. tur): bandı tara + boşluk (" ") glifi kullan yaklaşımı da yeterli değildi.
+    Sebep beklediğimden farklıydı: bu PyQt6 kurulumunda offscreen QPA platformu SIFIR font ailesiyle
+    başlıyor (`QFontDatabase.families() == []`) TA Kİ bir test gerçek bir font kaydedene dek -- fontsuz
+    durumda Qt HERHANGİ bir glif için (boşluk dahil!) bir ".notdef" yer tutucu KUTUSU çiziyor. Böylece
+    test, hangi TEST DOSYASI önce çalıştığına göre iki yönde de kırılabiliyordu: `test_theme.py`
+    zaten çalışmışsa (gerçek font kayıtlı) boşluk gerçekten mürekkepsizdi ve test geçiyordu; yalnız
+    `test_toolbar.py` çalıştırılınca (hiç font kayıtlı değil) boşluğun KENDİSİ 44 pikselli bir
+    dikdörtgen iz bırakıyor ve DOĞRU koda karşı bile kırmızı çıkıyordu (ölçülen: satır 6-17,
+    sütun 20-31 -- tam paket 331 passed, yalnız bu dosya 1 failed/15 passed, iki çalıştırmada da
+    aynı 44 piksel).
 
-    Kalıcı düzeltme: testi FONTTAN TAMAMEN BAĞIMSIZ kıl. Glif olarak mürekkep bırakmayan bir
-    boşluk (" ") kullanılıyor -- hangi font aktif olursa olsun boşluğun görünür mürekkedi yok, bu
-    yüzden show_label=False'ta glif dalı da hiçbir iz bırakmıyor. Böylece köşe yuvarlamasının
-    (radius=6, x<6/x>50'de) karışmayacağı x aralığında TÜM yükseklik taranabilir: mutasyonla
-    etiket zorla çizilirse "KALEM" mürekkedi -- hangi font aktifse aktif olsun -- mutlaka
-    yakalanır, ama boşluk glifinin kendisi asla yanlış pozitif üretmez."""
-    btn = GlyphButton(" ", "Kalem")
+    Kalıcı düzeltme: testin KENDİSİ `theme.load_fonts` ile gerçek fontu kaydediyor (uygulamanın
+    zaten kullandığı yardımcı, idempotent -- iki kez çağrılması zararsız), böylece hangi sırada
+    çalıştığından bağımsız hâle geliyor (bundled font hiç yoksa `test_load_bundled_fonts` ile aynı
+    gerekçeyle atlanıyor). Ayrıca test artık İKİ YÖNÜ de aynı bantta doğruluyor: show_label=False
+    bantta SIFIR mürekkep, show_label=True AYNI bantta SIFIRDAN FAZLA mürekkep -- yalnız "yok"u
+    iddia eden bir test yanlış nedenle geçebilir (ör. ölçüm hep sıfır dönüyorsa); "var"ı da
+    doğrulamak ölçüm aparatının gerçekten çalıştığını (doğru bant, doğru font, doğru piksel
+    karşılaştırması) kanıtlıyor."""
+    if not list(paths.FONTS_DIR.glob("*.ttf")):
+        pytest.skip("bundled fonts not downloaded")
+    theme.load_fonts(paths.FONTS_DIR)          # QFontDatabase'i doldurur -- testi sıradan bağımsız kılar
+
+    btn = GlyphButton(" ", "Kalem")             # boşluk: kayıtlı gerçek fontta mürekkepsiz
     qtbot.addWidget(btn)
     btn.show()
     qtbot.waitExposed(btn)
     h = 28
-    btn.set_metrics(h, 16, False)
-    img = btn.grab().toImage()
-    assert img.height() == h
-
     bg = theme.TOOLBAR_BTN
-    offenders = [(x, y) for y in range(h) for x in range(8, 49)         # x: köşe yuvarlaması dışı
-                 if img.pixelColor(x, y).name() != bg]
-    assert offenders == []                    # ne boşluk glifinden ne etiketten hiç mürekkep yok
+
+    label_y0 = h * (28 / 48)                    # GlyphButton.paintEvent ile BİREBİR aynı ifade
+    label_h = h / 3
+    y0, y1 = int(label_y0), int(label_y0 + label_h) + 1
+    assert y1 > y0
+
+    def band_ink_count(show_label: bool) -> int:
+        btn.set_metrics(h, 16, show_label)
+        img = btn.grab().toImage()
+        assert img.height() == h
+        return sum(1 for y in range(y0, y1) for x in range(8, 49)      # x: köşe yuvarlaması dışı
+                   if img.pixelColor(x, y).name() != bg)
+
+    assert band_ink_count(False) == 0           # etiket kapalı: bantta hiç mürekkep yok
+    assert band_ink_count(True) > 0             # etiket açık: AYNI bantta mürekkep var -- ölçüm çalışıyor

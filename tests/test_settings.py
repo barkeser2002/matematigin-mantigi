@@ -71,6 +71,22 @@ def test_garbage_values_fall_back(tmp_path):
     assert s.tool == Tool.PEN and s.width == 4 and s.hint_mask == HintMaskMode.BLUR
 
 
+# --- Görev 7: düzenle modunda yazı boyutu kaydırıcısı ---------------------------------------------------
+
+def test_font_scale_default_clipped_and_round_trips(tmp_path):
+    path = str(tmp_path / "fs.ini")
+    s = AppSettings(QSettings(path, QSettings.Format.IniFormat))
+    assert s.font_scale == 1.0                        # varsayılan
+    s.font_scale = 3.0
+    assert s.font_scale == 1.6                         # üst sınırın (logo_size kalıbıyla aynı) üstü kırpılır
+    s.font_scale = 0.1
+    assert s.font_scale == 0.7                         # alt sınırın altı kırpılır
+    s.font_scale = 1.25
+    s.sync()
+    t = AppSettings(QSettings(path, QSettings.Format.IniFormat))
+    assert t.font_scale == 1.25                        # aralık içindeyken yazılıp okunuyor
+
+
 # --- Görev 6: tüm panelin (bölgenin) gizlenebilmesi -----------------------------------------------------
 
 def test_new_panel_visibility_keys_exist_and_default_true(ini_settings):

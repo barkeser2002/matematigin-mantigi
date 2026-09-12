@@ -184,9 +184,10 @@ class HintZone(Zone):
         self.rule.setVisible(on)
 
     def set_families(self, fam: FontFamilies) -> None:
-        """Yazı tipini değiştirir (Ayarlar > yazı tipi dosyası)."""
+        """Yazı tipini (ve tahta yazı ölçeğini, Görev 7) değiştirir (Ayarlar > yazı tipi dosyası)."""
         self.fam = fam
         self.title_label.setFont(theme.font(fam, 20, 700, spacing_pct=104))
+        self.counter_label.setFont(theme.font(fam, 10, 600))     # eskiden burada güncellenmiyordu (kusur)
         for c in self.cards:
             c.text_label.setFont(theme.font(fam, 16, 500))
 

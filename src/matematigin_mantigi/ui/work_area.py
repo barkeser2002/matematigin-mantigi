@@ -8,7 +8,7 @@ from fractions import Fraction
 
 from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QLinearGradient, QMouseEvent, QPainter, QPen, QPixmap
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSlider, QWidget
 
 from matematigin_mantigi.core import layout_model as lm
 from matematigin_mantigi.ui import theme
@@ -120,6 +120,7 @@ class WorkArea(QWidget):
     layoutChanged = pyqtSignal(object)     # Layout dict
     editModeChanged = pyqtSignal(bool)
     visibilityToggled = pyqtSignal(str, bool)   # anahtar (VISIBILITY_KEYS ile aynı dize), yeni durum
+    fontScaleChanged = pyqtSignal(float)         # düzen çubuğundaki yazı boyutu kaydırıcısı, 0.7 - 1.6
 
     ASPECT_W, ASPECT_H = 16, 9
     ASPECT = ASPECT_W / ASPECT_H
@@ -181,11 +182,23 @@ class WorkArea(QWidget):
         bar = QHBoxLayout(self.edit_bar); bar.setContentsMargins(14, 6, 10, 6); bar.setSpacing(10)
         info = QLabel("DÜZEN MODU · bölgeyi sürükle, kenarlardan serbestçe boyutlandır · Ctrl: ızgaraya yapıştır")
         info.setFont(theme.font(fam, 10, 600, spacing_pct=108)); info.setStyleSheet(f"color: {theme.TOOLBAR_MUTED};")
+        # Yazı boyutu kaydırıcısı (Görev 7): WorkArea AppSettings görmediği için kalıcı değeri kendi
+        # BAŞINA bilmez -- yalnız fontScaleChanged yayar, MainWindow ayara yazıp apply_ui_settings ->
+        # set_font_scale ile mevcut değeri geri bildirir (visibilityToggled/set_item_visible ile aynı kalıp).
+        self.font_scale_label = QLabel("Yazı %100")
+        self.font_scale_label.setFont(theme.font(fam, 10, 600, spacing_pct=108))
+        self.font_scale_label.setStyleSheet(f"color: {theme.TOOLBAR_MUTED};")
+        self.font_scale_slider = QSlider(Qt.Orientation.Horizontal)
+        self.font_scale_slider.setRange(70, 160)      # %70 - %160; FontFamilies.scale = değer / 100
+        self.font_scale_slider.setValue(100)
+        self.font_scale_slider.setFixedWidth(110)
+        self.font_scale_slider.valueChanged.connect(self._on_font_scale_slider)
         self.reset_button = QPushButton("Sıfırla"); self.reset_button.setObjectName("pill")
         self.done_button = QPushButton("Bitti"); self.done_button.setObjectName("accent")
         self.reset_button.clicked.connect(self.reset_layout)
         self.done_button.clicked.connect(lambda: self.set_edit_mode(False))
-        bar.addWidget(info); bar.addWidget(self.reset_button); bar.addWidget(self.done_button)
+        bar.addWidget(info); bar.addWidget(self.font_scale_label); bar.addWidget(self.font_scale_slider)
+        bar.addWidget(self.reset_button); bar.addWidget(self.done_button)
         self.edit_bar.hide()
 
         self.overlay = _EditOverlay(self)
@@ -285,6 +298,33 @@ class WorkArea(QWidget):
             self.logo_label.setStyleSheet(f"color: {theme.PANEL_SOFT}; background: {theme.INK};"
                                           f" border: 2px solid {theme.HINT_CARD_BORDER}; border-radius: {size // 2}px;")
         self.relayout()
+
+    def set_families(self, fam: FontFamilies) -> None:
+        """WorkArea'nın kendi etiketlerinin (durum satırı, marka plakası, sunucu adı) yazı tipini/ölçeğini
+        günceller -- Ayarlar'daki yazı tipi dosyası VE düzen çubuğundaki yazı boyutu kaydırıcısı (Görev 7)
+        buradan geçer. `self.fam` BİLEREK dokunulmaz kalır: `set_logo`'daki "MM" monogramı kendi
+        `logo_size` kaydırıcısına sahip, tahta yazı ölçeğinin kapsamı dışında (bkz. set_logo)."""
+        self.status_label.setFont(theme.font(fam, 10, 500))
+        self.brand.setFont(theme.hand_font(fam, 30, 700))
+        self.name_label.setFont(theme.hand_font(fam, 28, 700))
+        self.relayout()
+
+    def set_font_scale(self, v: float) -> None:
+        """Ayarlardaki kalıcı değeri (settings.font_scale) kaydırıcıya yansıtır; apply_ui_settings her
+        çağrıda bunu da çağırır (set_item_visible ile aynı "dışarıdan bildirilen durum" kalıbı).
+        Sinyali TEKRAR YAYMAZ (blockSignals) -- yoksa MainWindow <-> WorkArea arasında sonsuz döngü
+        olurdu (fontScaleChanged -> settings.font_scale -> apply_ui_settings -> set_font_scale -> ...)."""
+        val = round(v * 100)
+        self.font_scale_slider.blockSignals(True)
+        self.font_scale_slider.setValue(val)
+        self.font_scale_slider.blockSignals(False)
+        self.font_scale_label.setText(f"Yazı %{val}")
+
+    def _on_font_scale_slider(self, val: int) -> None:
+        """Kullanıcı kaydırıcıyı sürükledikçe: etiket hemen güncellenir, MainWindow'a (fontScaleChanged)
+        bildirilir -- ayara yazmak ve apply_ui_settings ile tahtaya uygulamak dışarının işi."""
+        self.font_scale_label.setText(f"Yazı %{val}")
+        self.fontScaleChanged.emit(val / 100)
 
     def set_presenter_name(self, text: str) -> None:
         """Yalnız METNİ taşır; GÖRÜNÜRLÜĞÜ artık tek başına belirlemez (bkz. set_item_visible("presenter", ..)) --

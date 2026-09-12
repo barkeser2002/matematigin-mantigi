@@ -718,3 +718,46 @@ def test_presenter_visibility_survives_a_later_set_presenter_name_call(qtbot):
     wa.set_item_visible("presenter", False)
     wa.set_presenter_name("Barış Keser")
     assert wa.name_label.isHidden()
+
+
+# --- Görev 7: düzenle modunda yazı boyutu kaydırıcısı ---------------------------------------------------
+
+def test_font_scale_slider_exists_with_expected_range_and_default(qtbot):
+    wa, _ = make(qtbot)
+    assert wa.font_scale_slider.minimum() == 70 and wa.font_scale_slider.maximum() == 160
+    assert wa.font_scale_slider.value() == 100
+    assert wa.font_scale_label.text() == "Yazı %100"
+
+
+def test_moving_font_scale_slider_emits_signal_and_updates_label(qtbot):
+    wa, _ = make(qtbot)
+    with qtbot.waitSignal(wa.fontScaleChanged) as sig:
+        wa.font_scale_slider.setValue(150)
+    assert sig.args == [1.5]
+    assert wa.font_scale_label.text() == "Yazı %150"
+
+
+def test_set_font_scale_updates_slider_without_reemitting_signal(qtbot):
+    """set_font_scale, apply_ui_settings'in HER çağrıda kalıcı değeri geri bildirdiği yol -- MainWindow
+    <-> WorkArea arasında sonsuz döngü olmasın diye (fontScaleChanged -> settings.font_scale ->
+    apply_ui_settings -> set_font_scale -> ...) sinyali YENİDEN YAYMAMALI."""
+    wa, _ = make(qtbot)
+    fired = []
+    wa.fontScaleChanged.connect(lambda v: fired.append(v))
+    wa.set_font_scale(1.25)
+    assert wa.font_scale_slider.value() == 125
+    assert wa.font_scale_label.text() == "Yazı %125"
+    assert fired == []
+
+
+def test_work_area_set_families_scales_its_own_labels_but_not_logo_monogram(qtbot):
+    """WorkArea.set_families (Görev 7) durum satırı/marka plakası/sunucu adını ölçekli aileyle günceller;
+    logo monogramı ("MM") KENDİ logo_size kaydırıcısına sahip, tahta yazı ölçeğinin kapsamı DIŞINDA kalmalı
+    (bkz. brief envanteri: '-- ölçek dışında')."""
+    wa, _ = make(qtbot)
+    base_logo_px = wa.logo_label.font().pixelSize()
+    wa.set_families(FontFamilies("Arial", "Arial", False, scale=1.5))
+    assert wa.status_label.font().pixelSize() == round(10 * 1.5)
+    assert wa.brand.font().pixelSize() == round(30 * 1.5)
+    assert wa.name_label.font().pixelSize() == round(28 * 1.5)
+    assert wa.logo_label.font().pixelSize() == base_logo_px            # dokunulmadı, ölçek dışında kaldı

@@ -58,6 +58,7 @@ class FontFamilies:
     sans: str
     hand: str
     loaded: bool
+    scale: float = 1.0    # tahta yazı boyutu çarpanı (Görev 7); SONDA -- pozisyonel eski çağrılar bozulmasın
 
 
 def load_fonts(fonts_dir: Path) -> FontFamilies:
@@ -91,7 +92,7 @@ def load_font_file(path: str | Path) -> str | None:
 
 def font(fam: FontFamilies, px: int, weight: int = 400, spacing_pct: int | None = None) -> QFont:
     f = QFont(fam.sans)
-    f.setPixelSize(px)
+    f.setPixelSize(max(1, round(px * fam.scale)))
     f.setWeight(QFont.Weight(weight))
     if spacing_pct is not None:
         f.setLetterSpacing(QFont.SpacingType.PercentageSpacing, spacing_pct)
@@ -100,7 +101,7 @@ def font(fam: FontFamilies, px: int, weight: int = 400, spacing_pct: int | None 
 
 def hand_font(fam: FontFamilies, px: int, weight: int = 500) -> QFont:
     f = QFont(fam.hand)
-    f.setPixelSize(px)
+    f.setPixelSize(max(1, round(px * fam.scale)))
     f.setWeight(QFont.Weight(weight))
     return f
 

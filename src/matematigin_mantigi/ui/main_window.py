@@ -126,6 +126,7 @@ class MainWindow(QMainWindow):
         self.work_area.editModeChanged.connect(tb.set_layout_edit)
         self.work_area.layoutChanged.connect(lambda lay: lm.save_layout(self.layout_path, lay))
         self.work_area.visibilityToggled.connect(self._on_visibility_toggled)
+        self.work_area.fontScaleChanged.connect(self._on_font_scale_changed)
         self.badge.ticked.connect(tb.set_recording_time)     # süre araç çubuğunda sayar (kayda girmez)
         self.badge.ticked.connect(self._check_recorder)
 
@@ -261,6 +262,13 @@ class MainWindow(QMainWindow):
         self.settings.set_visible(key, on)
         self.apply_ui_settings()
 
+    def _on_font_scale_changed(self, v: float) -> None:
+        """Düzen çubuğundaki yazı boyutu kaydırıcısı (work_area.fontScaleChanged): ayara yaz, sonra
+        tahtayı tek eşleme noktasından (apply_ui_settings) yeniden uygula -- _on_visibility_toggled
+        ile aynı kalıp (Görev 7)."""
+        self.settings.font_scale = v
+        self.apply_ui_settings()
+
     def toggle_recording(self, on: bool) -> None:
         fps = self.settings.record_fps
         if on and not self.recorder.is_recording:
@@ -381,8 +389,24 @@ class MainWindow(QMainWindow):
             self._applied_font_file = s.font_file
             self._applied_font_family = theme.load_font_file(s.font_file) if s.font_file else None
         self.fam = replace(self.base_fam, sans=self._applied_font_family) if self._applied_font_family else self.base_fam
-        self.question_zone.set_families(self.fam)
-        self.hint_zone.set_families(self.fam)
+        # Tahta yazı boyutu kaydırıcısı (Görev 7): yalnız TAHTA (work_area + bölgeler + webcam + rozet)
+        # ölçekli aileyi görür. self.fam kendisi ÖLÇEKSİZ kalır -- diyaloglar (open_pen_settings,
+        # open_settings, open_editor) ve araç çubuğu (self.toolbar, __init__'te self.fam ile kurulur ve
+        # bir daha güncellenmez) büyümesin diye.
+        board_fam = replace(self.fam, scale=s.font_scale)
+        self.question_zone.set_families(board_fam)
+        self.hint_zone.set_families(board_fam)
+        self.webcam_panel.set_families(board_fam)
+        # Rozet, work_area.set_families'TEN ÖNCE boyutlanmalı (review): set_families kendi relayout()'unu
+        # HER çağrıda koşulsuz çalıştırır (set_aspect_lock/set_frame_visible/set_presenter_name gibi
+        # BAŞKA çağrıların relayout()'una yaslanmadan) -- bu yüzden rozetin doğru (taşmayan, sağa hizalı)
+        # konumu BURADAN, tesadüfen değil yapısal olarak garanti edilir. Sıra tersine çevrilirse (rozet
+        # set_families'TEN SONRA boyutlansa) o anki relayout() rozetin ESKİ genişliğini görür ve rozet
+        # yalnızca aşağıdaki üç çağrının (hepsi bugün koşulsuz) tesadüfen sonradan gelen relayout()'una
+        # kalırdı -- bkz. test_badge_stays_right_anchored_after_font_scale_change_with_real_content.
+        self.badge.set_families(board_fam)
+        self.work_area.set_families(board_fam)
+        self.work_area.set_font_scale(s.font_scale)
         self.question_zone.set_reading_ms(s.pen().reading_ms)
         self.webcam_panel.set_auto_key(s.auto_key)
         self.webcam_panel.set_chroma_enabled(s.chroma_enabled)

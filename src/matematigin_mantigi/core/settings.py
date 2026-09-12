@@ -103,6 +103,11 @@ class AppSettings:
     def font_file(self, path: str) -> None: self._q.setValue("ui/font_file", path or "")
 
     @property
+    def font_scale(self) -> float: return max(0.7, min(1.6, self._float("ui/font_scale", 1.0)))
+    @font_scale.setter
+    def font_scale(self, v: float) -> None: self._q.setValue("ui/font_scale", float(v))
+
+    @property
     def logo_file(self) -> str: return self._str("ui/logo_file", "")
     @logo_file.setter
     def logo_file(self, path: str) -> None: self._q.setValue("ui/logo_file", path or "")

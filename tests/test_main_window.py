@@ -683,3 +683,98 @@ def test_apply_ui_settings_skips_reload_when_font_and_logo_unchanged_but_reloads
     window.apply_ui_settings()
     assert font_calls == [font_path, str(tmp_path / "b.ttf")]
     assert len(logo_calls) == 1                                   # logo değişmedi: hâlâ yalnız bir kez
+
+
+# --- Görev 7: düzenle modunda yazı boyutu kaydırıcısı ---------------------------------------------------
+
+def test_font_scale_grows_board_text_but_not_toolbar_or_dialogs(window):
+    """settings.font_scale + apply_ui_settings tahtadaki yazıları (ipucu başlığı, soru metni/seçenekleri,
+    work_area'nın kendi etiketleri, webcam overlay'i, kayıt rozeti) büyütmeli -- ama araç çubuğu VE
+    diyaloglara giden self.fam ölçeksiz kalmalı (bkz. görev 7 brief'i: 'ölçeklenmeyecek (tahta dışı)')."""
+    win = window
+    base_title_px = win.hint_zone.title_label.font().pixelSize()
+    base_option_px = win.question_zone.option_labels[0].font().pixelSize()
+    base_status_px = win.work_area.status_label.font().pixelSize()
+    base_overlay_px = win.webcam_panel.overlay_label.font().pixelSize()
+    base_toolbar_px = win.toolbar.progress_label.font().pixelSize()
+
+    win.settings.font_scale = 1.5
+    win.apply_ui_settings()
+
+    assert win.hint_zone.title_label.font().pixelSize() == round(base_title_px * 1.5)
+    assert win.question_zone.text_label.font().pixelSize() == round(30 * 1.5)
+    assert win.question_zone.option_labels[0].font().pixelSize() == round(base_option_px * 1.5)
+    assert win.work_area.status_label.font().pixelSize() == round(base_status_px * 1.5)
+    assert win.webcam_panel.overlay_label.font().pixelSize() == round(base_overlay_px * 1.5)
+    assert win.badge.label.font().pixelSize() == round(11 * 1.5)
+
+    assert win.toolbar.progress_label.font().pixelSize() == base_toolbar_px    # araç çubuğu büyümedi
+    assert win.fam.scale == 1.0                                               # diyaloglara giden aile ölçeksiz
+
+
+def test_font_scale_slider_writes_setting_and_persists_on_restart(qtbot, tmp_path, ini_settings, dead_camera):
+    """Kaydırıcı fontScaleChanged yayar; MainWindow._on_font_scale_changed ayara yazar (apply_ui_settings
+    ile tahtaya uygular). Aynı ayar nesnesiyle kurulan İKİNCİ bir pencere (yeniden başlatmayı taklit eder)
+    hem kaydırıcının konumunu hem tahtadaki boyutu korumalı (bkz. eye-button eşdeğeri: Görev 6'nın
+    test_eye_button_click_writes_setting_through_main_window_and_persists_on_restart'ı)."""
+    from matematigin_mantigi.core.models import PenSettings
+    from matematigin_mantigi.core.recorder import NullRecorder
+    from matematigin_mantigi.core.session_store import SessionStore
+    from matematigin_mantigi.ui.main_window import MainWindow
+    from matematigin_mantigi.ui.theme import FontFamilies
+    ini_settings.set_pen(PenSettings(reading_ms=0))
+    win = MainWindow(FontFamilies("Arial", "Arial", False), list(SAMPLE_QUESTIONS), ini_settings,
+                     NullRecorder(), SessionStore(tmp_path / "o1"), lambda index: dead_camera, tmp_path / "d1.json")
+    qtbot.addWidget(win); win.show(); qtbot.waitExposed(win)
+
+    win.work_area.font_scale_slider.setValue(130)
+    assert win.settings.font_scale == 1.3                          # MainWindow üzerinden ayara yazıldı
+    assert win.hint_zone.title_label.font().pixelSize() == round(20 * 1.3)
+
+    win2 = MainWindow(FontFamilies("Arial", "Arial", False), list(SAMPLE_QUESTIONS), ini_settings,
+                      NullRecorder(), SessionStore(tmp_path / "o2"), lambda index: dead_camera, tmp_path / "d2.json")
+    qtbot.addWidget(win2)
+    assert win2.settings.font_scale == 1.3
+    assert win2.work_area.font_scale_slider.value() == 130          # kaydırıcı da yeniden kurulunca korunuyor
+    assert win2.hint_zone.title_label.font().pixelSize() == round(20 * 1.3)
+
+
+def test_badge_stays_right_anchored_after_font_scale_change_with_real_content(window, monkeypatch):
+    """IMPORTANT (review): badge.set_families() (main_window.py) rozeti adjustSize() ile büyütür ama
+    KENDİSİ yeniden konumlamaz. Bu bugün doğru sonuç verir ama TESADÜFEN: apply_ui_settings'in rozeti
+    büyüttükten SONRA çağırdığı set_aspect_lock/set_frame_visible/set_presenter_name (üçü de koşulsuz,
+    üçü de kendi relayout()'unu çalıştırır) rozeti kazara doğru yere taşır. Gerçek garanti artık
+    apply_ui_settings'in rozeti work_area.set_families'TEN ÖNCE boyutlaması: set_families kendi
+    relayout()'unu HER ZAMAN koşulsuz çağırır, üç "kaza"ya ihtiyaç duymaz.
+
+    Bu üçünü kasıtlı olarak SUSTURUYORUZ (relayout() çağrısını at, durumu yine güncelle) ki test bugünkü
+    tesadüfi kurtarıcılara değil, YAPISAL garantiye bağlı kalsın -- ileride biri bu üçüne Görev 6/7'nin
+    font_file/logo önbelleği gibi bir "değiştiyse çalış" koruması eklerse (bkz. review'ın bıraktığı not:
+    bu üçü rozeti SAVUNAN tesadüfi ağlar), koruma eklenince bu üçü artık relayout() çağırmaz hâle gelir --
+    tam olarak bu testin SUSTURDUĞU şey -- ve rozet konumu yine YAPISAL garantiye (set_families sırası)
+    bağlı kalmaya devam etmeli. Kırmızı-yeşil doğrulaması (susturma + sıra kasıtlı tersine çevrilerek,
+    bkz. task-7-report.md "Fix report") review'ın kendi ölçümüyle birebir örtüşen bir sonuç üretti:
+    genişlik 441 -> 693 px, boşluk 12 -> -240 (252 px taşma).
+
+    Rozete GERÇEK İÇERİK vermek şart: boş etiketin adjustSize()'ı ölçekle neredeyse hiç değişmez, sorunu
+    gizler."""
+    win = window
+    win.badge.set_format(1920, 1080, 60)      # gerçek içerik: "KAYIT · 00:00 · 1920×1080 · 60 fps"
+    win.work_area.relayout()                  # toggle_recording'in set_format sonrası yaptığı gibi
+
+    # Üç tesadüfi ağı, durumu yine uygulayarak ama relayout()'suz bırak -- yalnız set_families'in KENDİ
+    # relayout()'u rozeti kurtarabilsin.
+    monkeypatch.setattr(win.work_area, "set_aspect_lock", lambda on: setattr(win.work_area, "aspect_lock", on))
+    monkeypatch.setattr(win.work_area, "set_frame_visible", lambda on: setattr(win.work_area, "frame_visible", on))
+    monkeypatch.setattr(win.work_area, "set_presenter_name", lambda text: None)
+
+    inner = win.work_area.inner_rect()
+    before_w = win.work_area.badge_slot.width()
+    assert win.work_area.badge_slot.x() == inner.right() - before_w - 12    # başlangıçta sağa hizalı
+
+    win.settings.font_scale = 1.6
+    win.apply_ui_settings()
+
+    after_w = win.work_area.badge_slot.width()
+    assert after_w > before_w                                              # rozet gerçekten büyüdü
+    assert win.work_area.badge_slot.x() == inner.right() - after_w - 12    # ve hâlâ sağa hizalı (taşmadı)

@@ -6,7 +6,7 @@ import html
 from pathlib import Path
 
 from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QMouseEvent, QPixmap
+from PyQt6.QtGui import QFont, QMouseEvent, QPixmap
 from PyQt6.QtWidgets import QGraphicsBlurEffect, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from matematigin_mantigi.core.models import OPTION_LETTERS, Question
@@ -87,13 +87,19 @@ class QuestionZone(Zone):
         self.reading_ms = max(0, int(ms))
 
     def set_families(self, fam: FontFamilies) -> None:
-        """Yazı tipini değiştirir (Ayarlar > yazı tipi dosyası)."""
+        """Yazı tipini (ve tahta yazı ölçeğini, Görev 7) değiştirir (Ayarlar > yazı tipi dosyası)."""
         self.fam = fam
         self.number_label.setFont(theme.font(fam, 34, 700))
         self.text_label.setFont(theme.font(fam, 30, 700))
         self.hide_link.setFont(theme.font(fam, 11, 500))
         for lab in self.option_labels:
-            lab.setFont(theme.font(fam, 24, 400))
+            lab.setFont(self._option_font())
+
+    def _option_font(self) -> QFont:
+        """A) B) C) D) etiketlerinin fontu -- set_families VE _build_options (yeni soruya geçince seçenek
+        etiketleri yeniden kurulur) AYNI tek yerden okusun diye (eskiden ikisi de 24/400'ü kendi başına
+        tekrarlıyordu; biri değişip diğeri unutulursa sessizce ayrışabilirdi)."""
+        return theme.font(self.fam, 24, 400)
 
     def set_number_visible(self, on: bool) -> None:
         self.number_label.setVisible(on)
@@ -187,7 +193,7 @@ class QuestionZone(Zone):
         cols = 4 if max(len(o) for o in options) <= 10 else 2
         for i, (letter, text) in enumerate(zip(OPTION_LETTERS, options)):
             lab = QLabel(f"{letter}) {text}")
-            lab.setFont(theme.font(self.fam, 24, 400))
+            lab.setFont(self._option_font())
             lab.setStyleSheet("background: transparent;")
             self.options_grid.addWidget(lab, i // cols, i % cols, Qt.AlignmentFlag.AlignLeft)
             self.option_labels.append(lab)

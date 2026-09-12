@@ -54,3 +54,26 @@ def test_stylesheet_covers_list_and_input_widgets(qapp):
     assert "QPlainTextEdit" in css
     assert "QComboBox" in css
     assert "font-family" not in css
+
+
+# --- Görev 7: düzenle modunda yazı boyutu kaydırıcısı ---------------------------------------------------
+
+def test_font_families_positional_three_args_default_scale():
+    """scale alanı FontFamilies'e EN SONA eklendi -- testlerdeki (ve app.py'deki) eski üç pozisyonel
+    argümanlı FontFamilies("Arial", "Arial", False) çağrıları hâlâ çalışmalı, scale varsayılanı 1.0
+    olmalı (bkz. görev 7 brief'i, 'Sona koymak şart')."""
+    fam = theme.FontFamilies("Arial", "Arial", False)
+    assert fam.scale == 1.0
+    assert (fam.sans, fam.hand, fam.loaded) == ("Arial", "Arial", False)
+
+
+def test_font_helpers_apply_scale(qapp):
+    """theme.font / theme.hand_font artık piksel boyutunu fam.scale ile çarpıyor: scale=1.0 bugünkü
+    değerle birebir aynı kalmalı (regresyon), scale=2.0 boyutu iki katına çıkarmalı."""
+    fam = theme.FontFamilies("Arial", "Arial", False)
+    assert theme.font(fam, 14, 600).pixelSize() == 14
+    assert theme.hand_font(fam, 38, 700).pixelSize() == 38
+
+    fam2 = theme.FontFamilies("Arial", "Arial", False, scale=2.0)
+    assert theme.font(fam2, 14, 600).pixelSize() == 28
+    assert theme.hand_font(fam2, 38, 700).pixelSize() == 76

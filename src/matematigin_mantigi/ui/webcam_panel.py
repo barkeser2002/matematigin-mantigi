@@ -73,6 +73,7 @@ class WebcamPanel(Zone):
         self.view = CameraView(self)
         self.body.addWidget(self.view, 1)
 
+        self.fam = fam
         self.overlay_label = QLabel(self.view)
         self.overlay_label.setFont(theme.font(fam, 9, 600))
         self.overlay_label.setStyleSheet(f"color: {theme.PANEL_SOFT}; background: rgba(28,27,25,170);"
@@ -223,6 +224,11 @@ class WebcamPanel(Zone):
     def set_auto_key(self, on: bool) -> None:
         self._auto_key = on
         self.worker.set_auto_key(on)
+
+    def set_families(self, fam: FontFamilies) -> None:
+        """Yazı tipini (ve tahta yazı ölçeğini, Görev 7) değiştirir (Ayarlar > yazı tipi dosyası)."""
+        self.fam = fam
+        self.overlay_label.setFont(theme.font(fam, 9, 600))
 
     def _toggle(self) -> None:
         self.set_chroma_enabled(not self.chroma_enabled)

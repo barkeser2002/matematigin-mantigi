@@ -195,3 +195,36 @@ def test_hint_controls_heading_and_font_switches(qtbot):
     assert h.title_label.isHidden() and h.rule.isHidden()
     h.set_families(FontFamilies("Courier New", "Arial", False))
     assert h.cards[0].text_label.font().family() == "Courier New"
+
+
+# --- Görev 7: düzenle modunda yazı boyutu kaydırıcısı ---------------------------------------------------
+
+def test_hint_counter_label_font_updates_with_set_families(qtbot):
+    """Kusur düzeltmesi: counter_label ("0 / 0") eskiden yalnız kurucuda font alıyordu, set_families'te
+    hiç güncellenmiyordu (bkz. hint_zone.py görev 7 brief envanteri) -- artık aile DEĞİŞİNCE (dolayısıyla
+    tahta yazı ölçeği değişince) o da güncellenmeli."""
+    h = hzone(qtbot)
+    assert h.counter_label.font().family() == "Arial"          # FAM'ın başlangıç ailesi
+    h.set_families(FontFamilies("Courier New", "Arial", False, scale=1.5))
+    assert h.counter_label.font().family() == "Courier New"
+    assert h.counter_label.font().pixelSize() == round(10 * 1.5)
+
+
+def test_new_option_label_created_after_set_families_uses_current_family(qtbot):
+    """DÜZELTME DEĞİL, DRY KORUMASI (review'da doğrulandı): option_labels yeni soruya geçilince
+    _build_options ile YENİDEN KURULUR -- ama bu zaten self.fam'ı (set_families'in en başta güncellediği)
+    okur, o yüzden _option_font() konsolidasyonundan ÖNCE de doğru aileyi/ölçeği alıyordu; _build_options'ı
+    eski satır içi `theme.font(self.fam, 24, 400)` çağrısına geri alınca bu test hâlâ geçiyor (empirik
+    olarak doğrulandı). _option_font() yalnız 24/400'ün İKİ yerde tekrarlanmasını (dolayısıyla ileride
+    biri değişip diğerinin unutulma riskini) ortadan kaldırıyor -- bu test o TEK kaynağın hâlâ doğru
+    değeri ürettiğini kilitliyor, geçmişte var olmayan bir kusuru değil."""
+    from matematigin_mantigi.core.models import SAMPLE_QUESTIONS
+    z = qzone(qtbot)
+    z.set_question(Q0, 1)
+    z.set_families(FontFamilies("Courier New", "Arial", False, scale=1.5))
+    assert z.option_labels[0].font().family() == "Courier New"
+    assert z.option_labels[0].font().pixelSize() == round(24 * 1.5)
+
+    z.set_question(SAMPLE_QUESTIONS[1], 2)                      # option_labels burada yeniden kurulur
+    assert z.option_labels[0].font().family() == "Courier New"
+    assert z.option_labels[0].font().pixelSize() == round(24 * 1.5)

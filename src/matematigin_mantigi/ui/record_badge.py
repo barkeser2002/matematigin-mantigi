@@ -12,6 +12,7 @@ class RecordBadge(QWidget):
 
     def __init__(self, fam: FontFamilies, parent=None):
         super().__init__(parent)
+        self.fam = fam
         self.seconds = 0
         self.active = False
         self.show_on_board = True     # False: rozet tahtada görünmez (kayda girmesin), zamanlayıcı yine çalışır
@@ -34,6 +35,12 @@ class RecordBadge(QWidget):
     def set_format(self, width: int, height: int, fps: int) -> None:
         self._fmt, self._fps = f"{width}×{height}", fps
         self._refresh()
+
+    def set_families(self, fam: FontFamilies) -> None:
+        """Yazı tipini (ve tahta yazı ölçeğini, Görev 7) değiştirir (Ayarlar > yazı tipi dosyası)."""
+        self.fam = fam
+        self.label.setFont(theme.font(fam, 11, 600, spacing_pct=106))
+        self.adjustSize()
 
     def text(self) -> str:
         return f"KAYIT · {self.seconds // 60:02d}:{self.seconds % 60:02d} · {self._fmt} · {self._fps} fps"

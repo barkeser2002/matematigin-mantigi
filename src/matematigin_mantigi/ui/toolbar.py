@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton,
-                             QSizePolicy, QVBoxLayout, QWidget)
+                             QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
 from matematigin_mantigi.core.models import PALETTE, TOOL_META, WIDTHS, Tool
 from matematigin_mantigi.ui import theme
@@ -15,8 +17,68 @@ _BTN_CSS = (f"QPushButton {{ background: {theme.TOOLBAR_BTN}; color: {theme.TOOL
             f"QPushButton:disabled {{ color: {theme.TOOLBAR_DIM}; }}")
 
 
+@dataclass(frozen=True)
+class _TierSpec:
+    """Bir yükseklik kademesinin tüm ölçüleri. ToolBar.resizeEvent yalnız kademe
+    değişince _apply_tier ile bunu uygular (gereksiz relayout yok)."""
+
+    name: str
+    glyph_h: int
+    glyph_px: int
+    show_label: bool
+    swatch_d: int
+    dot_d: int
+    record_d: int
+    spacing: int
+    margins: tuple[int, int, int, int]
+    nine_px: int
+    captions_visible: bool         # başlık etiketleri + ayırıcılar
+    dot_rows: tuple[tuple[int, ...], ...]
+    single_line: bool              # WrapButton'lar sarmasın (tek satır)
+
+
+_FULL = _TierSpec(
+    name="full", glyph_h=48, glyph_px=18, show_label=True,
+    swatch_d=28, dot_d=22, record_d=56,
+    spacing=6, margins=(10, 14, 10, 14), nine_px=40,
+    captions_visible=True, dot_rows=(WIDTHS[:3], WIDTHS[3:]), single_line=False,
+)
+_COMPACT = _TierSpec(
+    name="compact", glyph_h=38, glyph_px=16, show_label=True,
+    swatch_d=24, dot_d=18, record_d=44,
+    spacing=4, margins=(8, 8, 8, 8), nine_px=28,
+    captions_visible=True, dot_rows=(WIDTHS[:3], WIDTHS[3:]), single_line=False,
+)
+_MINI = _TierSpec(
+    # SwatchButton/RecordButton COMPACT ile aynı ölçüde kalıyor. DotButton çapı brifte
+    # verilmemişti; 5 tanesi tek satırda 88px genişliğe sığsın diye COMPACT'ın 18'inden
+    # küçük, 14 seçildi (5*14=70px < iç genişlik ~72px; 5*18=90px sığmazdı).
+    name="mini", glyph_h=28, glyph_px=16, show_label=False,
+    swatch_d=24, dot_d=14, record_d=44,
+    spacing=4, margins=(8, 8, 8, 8), nine_px=28,
+    captions_visible=False, dot_rows=(WIDTHS,), single_line=True,
+)
+
+_FULL_MIN_H = 1030
+_COMPACT_MIN_H = 800
+
+
+def _tier_for_height(h: int) -> _TierSpec:
+    if h >= _FULL_MIN_H:
+        return _FULL
+    if h >= _COMPACT_MIN_H:
+        return _COMPACT
+    return _MINI
+
+
 class ToolBar(QWidget):
-    """Bölge 9: dış araç çubuğu. Kayıtta görünmez."""
+    """Bölge 9: dış araç çubuğu. Kayıtta görünmez.
+
+    İçerik (self.content) bir QScrollArea içinde: pencere kısaldıkça düğmeler önce
+    üç kademede küçülür (FULL -> COMPACT -> MINI, bkz. _TierSpec), en küçük kademenin
+    altında da kaydırma bir güvenlik ağı olarak devreye girer. Kayıt düğmesi bu
+    kaydırma alanının DIŞINDA, dış layout'ta durur; böylece hep görünür ve tıklanabilir.
+    """
 
     toolSelected = pyqtSignal(object)      # Tool
     colorSelected = pyqtSignal(str)        # hex
@@ -35,20 +97,28 @@ class ToolBar(QWidget):
     def __init__(self, fam: FontFamilies, parent=None):
         super().__init__(parent)
         self.fam = fam
+        self.tier = _FULL.name
         self.setFixedWidth(theme.TOOLBAR_WIDTH)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.setStyleSheet(f"background: {theme.INK};")
         self.setAutoFillBackground(True)
 
-        col = QVBoxLayout(self)
+        # --- kaydırılabilir iç içerik -----------------------------------
+        self.content = QWidget()
+        self.content.setStyleSheet("background: transparent;")
+        col = QVBoxLayout(self.content)
         col.setContentsMargins(10, 14, 10, 14)
         col.setSpacing(6)
         col.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self._col = col
 
-        nine = QLabel("9"); nine.setFont(theme.hand_font(fam, 40, 700))
-        nine.setStyleSheet(f"color: {theme.PANEL_SOFT};")
-        col.addWidget(nine, 0, Qt.AlignmentFlag.AlignHCenter)
-        col.addWidget(self._caption("KAYITTA\nGÖRÜNMEZ"))
+        self.section_captions: list[QLabel] = []
+        self.separators: list[QFrame] = []
+
+        self._nine = QLabel("9"); self._nine.setFont(theme.hand_font(fam, 40, 700))
+        self._nine.setStyleSheet(f"color: {theme.PANEL_SOFT};")
+        col.addWidget(self._nine, 0, Qt.AlignmentFlag.AlignHCenter)
+        cap = self._caption("KAYITTA\nGÖRÜNMEZ"); col.addWidget(cap); self.section_captions.append(cap)
 
         self.pen_settings_button = QPushButton("Kalem"); self.pen_settings_button.setStyleSheet(_BTN_CSS)
         self.pen_settings_button.clicked.connect(self.penSettingsRequested)
@@ -87,21 +157,22 @@ class ToolBar(QWidget):
         col.addLayout(row)
         self.swatches[PALETTE[0]].setChecked(True)
 
-        col.addWidget(self._caption("KALINLIK"))
+        cap = self._caption("KALINLIK"); col.addWidget(cap); self.section_captions.append(cap)
         self._width_group = QButtonGroup(self); self._width_group.setExclusive(True)
         self.width_buttons: dict[int, DotButton] = {}
-        for group in (WIDTHS[:3], WIDTHS[3:]):        # 5 kademe: 3 + 2, ortalı
-            wrow = QHBoxLayout(); wrow.setSpacing(0); wrow.addStretch(1)
-            for w in group:
-                d = DotButton(w); self._width_group.addButton(d); self.width_buttons[w] = d
-                d.clicked.connect(lambda _c=False, v=w: self.widthSelected.emit(v))
-                wrow.addWidget(d)
-            wrow.addStretch(1)
-            col.addLayout(wrow)
+        for w in WIDTHS:
+            d = DotButton(w); self._width_group.addButton(d); self.width_buttons[w] = d
+            d.clicked.connect(lambda _c=False, v=w: self.widthSelected.emit(v))
+        # Beş DotButton'ın satır dağılımı kademeye göre değişir (FULL/COMPACT: 3+2,
+        # MINI: 5'i tek satırda) -> ayrı bir alt QVBoxLayout, bkz. _set_dot_rows.
+        self._dots_col = QVBoxLayout(); self._dots_col.setSpacing(0)
+        col.addLayout(self._dots_col)
+        self.dot_rows: list[QHBoxLayout] = []
+        self._dot_row_shape: tuple[tuple[int, ...], ...] | None = None
         self.width_buttons[4].setChecked(True)
         col.addWidget(self._rule())
 
-        col.addWidget(self._caption("SORU AKIŞI"))
+        cap = self._caption("SORU AKIŞI"); col.addWidget(cap); self.section_captions.append(cap)
         self.work_button = WrapButton("Soruyu işle"); self.work_button.setStyleSheet(_BTN_CSS)
         self.work_button.clicked.connect(self.workToggled)
         self.prev_button = WrapButton("← Önceki soru"); self.prev_button.setStyleSheet(_BTN_CSS)
@@ -121,13 +192,29 @@ class ToolBar(QWidget):
         self.clear_button.clicked.connect(self.clearRequested)
         hrow.addWidget(self.undo_button); hrow.addWidget(self.clear_button)
         col.addLayout(hrow)
-
         col.addStretch(1)
+
+        # --- dış layout: kaydırma alanı + hep görünür kayıt düğmesi ------
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        self.scroll_area.viewport().setStyleSheet("background: transparent;")
+        self.scroll_area.setWidget(self.content)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 10)
+        outer.setSpacing(6)
+        outer.addWidget(self.scroll_area, 1)
+
         self.record_button = RecordButton()
         self.record_button.clicked.connect(lambda: self.recordToggled.emit(self.record_button.isChecked()))
         self.record_label = self._caption("KAYIT")
-        col.addWidget(self.record_button, 0, Qt.AlignmentFlag.AlignHCenter)
-        col.addWidget(self.record_label)
+        outer.addWidget(self.record_button, 0, Qt.AlignmentFlag.AlignHCenter)
+        outer.addWidget(self.record_label)
+
+        self._apply_tier(_FULL)
 
     # --- helpers -----------------------------------------------------------
     def _caption(self, text: str) -> QLabel:
@@ -139,7 +226,53 @@ class ToolBar(QWidget):
 
     def _rule(self) -> QFrame:
         r = QFrame(); r.setFixedHeight(1); r.setStyleSheet(f"background: {theme.TOOLBAR_LINE};")
+        self.separators.append(r)
         return r
+
+    # --- kademe (FULL / COMPACT / MINI) -------------------------------------
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        spec = _tier_for_height(self.height())
+        if spec.name != self.tier:
+            self.tier = spec.name
+            self._apply_tier(spec)
+
+    def _apply_tier(self, spec: _TierSpec) -> None:
+        for b in self.tool_buttons.values():
+            b.set_metrics(spec.glyph_h, spec.glyph_px, spec.show_label)
+        for s in self.swatches.values():
+            s.set_diameter(spec.swatch_d)
+        for d in self.width_buttons.values():
+            d.set_size(spec.dot_d)
+        self.record_button.set_diameter(spec.record_d)
+        self._col.setSpacing(spec.spacing)
+        self._col.setContentsMargins(*spec.margins)
+        self._nine.setFont(theme.hand_font(self.fam, spec.nine_px, 700))
+        for cap in self.section_captions:
+            cap.setVisible(spec.captions_visible)
+        for sep in self.separators:
+            sep.setVisible(spec.captions_visible)
+        for wb in (self.work_button, self.prev_button, self.next_button):
+            wb.set_single_line(spec.single_line)
+        self._set_dot_rows(spec.dot_rows)
+
+    def _set_dot_rows(self, groups: tuple[tuple[int, ...], ...]) -> None:
+        """DotButton'ları groups'a göre satırlara dağıtır (yalnız dağılım değişince)."""
+        if groups == self._dot_row_shape:
+            return
+        self._dot_row_shape = groups
+        for row in self.dot_rows:
+            while row.count():
+                row.takeAt(0)          # widget'ı bırakır, yalnız bu satırdan söker
+            self._dots_col.removeItem(row)
+        self.dot_rows = []
+        for group in groups:
+            wrow = QHBoxLayout(); wrow.setSpacing(0); wrow.addStretch(1)
+            for w in group:
+                wrow.addWidget(self.width_buttons[w])
+            wrow.addStretch(1)
+            self._dots_col.addLayout(wrow)
+            self.dot_rows.append(wrow)
 
     # --- silent setters (no signals) ---------------------------------------
     def set_tool(self, t: Tool) -> None:

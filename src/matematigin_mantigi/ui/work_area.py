@@ -125,7 +125,6 @@ class WorkArea(QWidget):
     fontScaleChanged = pyqtSignal(float)         # düzen çubuğundaki yazı boyutu kaydırıcısı, 0.7 - 1.6
 
     ASPECT_W, ASPECT_H = 16, 9
-    ASPECT = ASPECT_W / ASPECT_H
     # Sahne 32k x 18k adımlarıyla ölçülür: oran TAM 16:9 kalır ve iki kenar da çift olur.
     STAGE_STEP_W, STAGE_STEP_H = 2 * ASPECT_W, 2 * ASPECT_H
     MIN_STAGE_K = 4                            # 128x72; theme.FRAME_BAND (Klasik) için kalibre edilmiş taban --
@@ -134,6 +133,11 @@ class WorkArea(QWidget):
     def __init__(self, fam: FontFamilies, parent=None):
         super().__init__(parent)
         self.fam = fam
+        # Tahtanın O AN kullandığı (ölçekli) aile -- FrameContext.fam buradan gelir. self.fam'den AYRI
+        # tutulur (nihai inceleme, madde 2): set_families self.fam'i BİLEREK güncellemez çünkü "MM" logo
+        # monogramının kendi boyut kaydırıcısı var; çerçeve bandının yazıları ise Görev 7'nin yazı ölçeğine
+        # VE Ayarlar'dan seçilen yazı tipine uymak zorunda (bkz. frames.FrameContext.fam docstring'i).
+        self._board_fam = fam
         self._zones: dict[str, Zone] = {}
         self._layout: lm.Layout = dict(lm.DEFAULT_LAYOUT)
         self._item_pos: dict[str, lm.ItemPos] = {}    # yalnız sürüklenmiş öğeler; eksik anahtar = bugünkü formül
@@ -271,6 +275,8 @@ class WorkArea(QWidget):
         self.editModeChanged.emit(on)
 
     def set_frame_visible(self, on: bool) -> None:
+        if on == self.frame_visible:
+            return                                  # değer değişmedi: sıcak yolda boşuna relayout etme (madde 5)
         self.frame_visible = on
         self._apply_chrome()
         self.relayout()
@@ -280,7 +286,18 @@ class WorkArea(QWidget):
         """Ayarlar > Tahta'daki çerçeve stili açılır listesinden gelir (Görev 8). set_frame_visible ile
         aynı kalıp: sakla, chrome görünürlüğünü eşitle (bkz. _apply_chrome), relayout() -- yeni stilin bandı
         (FRAME_SPECS[style].band) klasikten farklı olabilir, bu da inner_rect()'i ve ona bağlı her bölgeyi
-        yeniden akıtır -- sonra update()."""
+        yeniden akıtır -- sonra update().
+
+        DEĞER DEĞİŞMEDİYSE hiçbir şey yapmaz (nihai inceleme, madde 5): apply_ui_settings bu üç ayarı
+        (aspect_lock/frame_visible/frame_style) HER göz düğmesi tıklamasında ve HER yazı boyutu kaydırıcısı
+        tıkında yeniden uygular, ama değer o çağrıların neredeyse hiçbirinde değişmez -- ölçülen maliyet
+        90 tıklık bir sürüklemede 450 relayout / 362 ms. Chrome eşitlemesi bu erken dönüşe takılmaz:
+        apply_ui_settings zaten set_item_visible("frame_titles", ...) ve set_presenter_name ile
+        _apply_chrome()'u KOŞULSUZ çağırır; rozetin doğru boyutlanması da Görev 7'nin düzelttiği
+        badge.set_families -> work_area.set_families sırasıyla YAPISAL olarak garanti (bkz. main_window.py),
+        bu üç çağrının tesadüfi relayout()'una yaslanmıyor."""
+        if style == self.frame_style:
+            return
         self.frame_style = style
         self._apply_chrome()
         self.relayout()
@@ -309,6 +326,8 @@ class WorkArea(QWidget):
                                     and bool(self.name_label.text().strip()))
 
     def set_aspect_lock(self, on: bool) -> None:
+        if on == self.aspect_lock:
+            return                                  # değer değişmedi: bkz. set_frame_style (madde 5)
         self.aspect_lock = on
         self.relayout()
         self.update()
@@ -340,7 +359,12 @@ class WorkArea(QWidget):
         """WorkArea'nın kendi etiketlerinin (durum satırı, marka plakası, sunucu adı) yazı tipini/ölçeğini
         günceller -- Ayarlar'daki yazı tipi dosyası VE düzen çubuğundaki yazı boyutu kaydırıcısı (Görev 7)
         buradan geçer. `self.fam` BİLEREK dokunulmaz kalır: `set_logo`'daki "MM" monogramı kendi
-        `logo_size` kaydırıcısına sahip, tahta yazı ölçeğinin kapsamı dışında (bkz. set_logo)."""
+        `logo_size` kaydırıcısına sahip, tahta yazı ölçeğinin kapsamı dışında (bkz. set_logo).
+
+        `self._board_fam` ise GÜNCELLENİR: çerçeve boyacısına giden FrameContext.fam odur (bkz. paintEvent).
+        HUD'un bant yazıları (sunucu adı/marka) böylece kaydırıcıyı ve seçilen yazı tipini izler -- eskiden
+        self.fam geçiliyordu ve tahtadaki en göze çarpan iki yazı ölçeğin DIŞINDA kalıyordu (madde 2)."""
+        self._board_fam = fam
         self.status_label.setFont(theme.font(fam, 10, 500))
         self.brand.setFont(theme.hand_font(fam, 30, 700))
         self.name_label.setFont(theme.hand_font(fam, 28, 700))
@@ -492,13 +516,24 @@ class WorkArea(QWidget):
 
     def _place_item(self, key: str, widget: QWidget, stage: QRect, default: QPoint) -> None:
         """Kayıtlı bir geçersiz kılma (`self._item_pos[key]`, stage_rect'e göre kesirli) varsa onu
-        kullanır; yoksa `default`'u (bugünkü sert kodlu formül) kullanır."""
+        kullanır; yoksa `default`'u (bugünkü sert kodlu formül) kullanır.
+
+        Sonuç HER İKİ yolda da sahneye KIRPILIR (nihai inceleme, madde 9). mouseReleaseEvent öğeyi yalnız
+        SÜRÜKLEME anında sahneye sokuyordu; oysa widget'ın genişliği içeriğe ve fonta bağlı MUTLAK bir
+        değer: yazı ölçeği 1,6'ya çekilince marka plakası 1000x650 pencerede, hiç sürüklenmemiş VARSAYILAN
+        konumunda bile sahneyi ~14 px taşıyordu -- taşan kısım kayda girmez, yani kullanıcı sağ kenarını
+        her kayıtta sessizce kaybederdi. Yalnız KONUM kaydırılır, BOYUT değiştirilmez (boyut içerik
+        kaynaklı); sahneden geniş/uzun bir öğe sol/üst kenara hizalanır -- mouseMoveEvent'in öğe dalıyla
+        BİREBİR aynı formül, böylece sürükleme ile yeniden akıtma aynı sonucu verir."""
         override = self._item_pos.get(key)
         if override is not None:
             dx, dy = lm.item_pixel_from_pos(override, stage.width(), stage.height())
-            widget.move(stage.x() + dx, stage.y() + dy)
+            x, y = stage.x() + dx, stage.y() + dy
         else:
-            widget.move(default)
+            x, y = default.x(), default.y()
+        x = max(stage.x(), min(x, stage.x() + stage.width() - widget.width()))
+        y = max(stage.y(), min(y, stage.y() + stage.height() - widget.height()))
+        widget.move(x, y)
         widget.raise_()
 
     # --- göz düğmeleri (yalnız düzen modunda) ---------------------------------------
@@ -526,13 +561,32 @@ class WorkArea(QWidget):
 
     def _sync_eye_buttons(self) -> None:
         """relayout()'un sonunda çağrılır: her bölge ve her öğe için köşesine bir göz düğmesi yerleştirir
-        (yoksa oluşturur), işaretli durumunu bilinen görünürlükten alır, yalnız düzen modunda gösterir."""
-        for zkey, zone in self._zones.items():
-            self._place_eye_button(_ZONE_VIS_KEY.get(zkey, zkey), zone.geometry(), is_zone=True)
-        for key, widget in self._items.items():
-            self._place_eye_button(key, widget.geometry(), is_zone=False)
+        (yoksa oluşturur), işaretli durumunu bilinen görünürlükten alır, yalnız düzen modunda gösterir.
 
-    def _place_eye_button(self, key: str, geo: QRect, is_zone: bool) -> None:
+        `placed` bu turda konmuş düğmelerin dikdörtgenleridir: küçük pencerelerde birden çok sahip
+        (ör. `ipucu` bölgesi + marka plakası + rozet) sahnenin SAĞ ÜST köşesinde buluşur ve düğmeleri
+        üst üste biner -- üstte kalan hariç hepsi tıklanamaz olur (nihai inceleme, madde 10'un ölçtüğü
+        çakışma; 700x500'de gözlendi). _place_eye_button çakışanı sola kaydırır, bkz. orada."""
+        placed: list[QRect] = []
+        for zkey, zone in self._zones.items():
+            self._place_eye_button(_ZONE_VIS_KEY.get(zkey, zkey), zone.geometry(), True, placed)
+        for key, widget in self._items.items():
+            self._place_eye_button(key, widget.geometry(), False, placed)
+
+    def _free_eye_x(self, x: int, y: int, placed: list[QRect]) -> int:
+        """(x, y) bu turda konmuş bir düğmeyle çakışıyorsa soldaki ilk BOŞ yuvayı döndürür (aynı satırda
+        kalır: y'yi değiştirmek bölgelerin köşe tutamağı kaçış yolunu -- bkz. _place_eye_button -- yeniden
+        bozardı). Sola yer kalmazsa özgün x'e döner: çakışma iyileştirilemedi, ama düğme hiç değilse
+        pencerenin içinde kalır."""
+        step = EYE_SIZE + 2
+        cand = x
+        while cand >= 0:
+            if not any(QRect(cand, y, EYE_SIZE, EYE_SIZE).intersects(r) for r in placed):
+                return cand
+            cand -= step
+        return x
+
+    def _place_eye_button(self, key: str, geo: QRect, is_zone: bool, placed: list[QRect] | None = None) -> None:
         """Düğme normalde köşenin üst-sağında, bölgenin/öğenin GEOMETRİSİNİN TAMAMEN DIŞINDA durur (üst
         kenarla çakışmaz) -- bir öğenin taşıma alanı hiç etkilenmesin diye kasıtlı; düğme gerçek bir Qt
         çocuğu olduğundan tıklamayı _hit()'ten önce yakalar.
@@ -549,7 +603,10 @@ class WorkArea(QWidget):
         (bkz. modül üstü not) yeniden bozar: düğme bölgenin içine, tutamağın ÜSTÜNE biner ve o köşeden
         yeniden boyutlandırmayı kalıcı olarak imkansız kılardı. Bölgeler bu yüzden farklı bir kaçış
         yolu kullanır: üstte yer yoksa düğme köşe tutamağının (GRIP + 1 px pay ile) HEMEN ALTINA, bölgenin
-        içine itilir -- x ekseni sağda kaldığı için yalnız "ne" ile çakışma riski vardı, bu da onu giderir."""
+        içine itilir -- x ekseni sağda kaldığı için yalnız "ne" ile çakışma riski vardı, bu da onu giderir.
+
+        Son adım (`placed` verilmişse): aynı turda konmuş bir düğmeyle çakışma varsa sola kaydır --
+        bkz. _free_eye_x ve _sync_eye_buttons."""
         btn = self._eye_buttons.setdefault(key, self._make_eye_button(key))
         x = geo.right() - EYE_SIZE
         y = geo.top() - EYE_SIZE
@@ -557,6 +614,9 @@ class WorkArea(QWidget):
             y = geo.top() + GRIP + 1 if is_zone else 0
         x = max(0, min(x, self.width() - EYE_SIZE))
         y = max(0, min(y, self.height() - EYE_SIZE))
+        if placed is not None:
+            x = self._free_eye_x(x, y, placed)
+            placed.append(QRect(x, y, EYE_SIZE, EYE_SIZE))
         btn.move(x, y)
         btn.setChecked(self._visible.get(key, True))
         btn.setVisible(self.edit_mode)
@@ -602,8 +662,13 @@ class WorkArea(QWidget):
         # tutamağına gidiyordu, öğenin kendisine değil -- bkz. test_hit_test_center_of_logo_and_badge_...).
         # UYARI: GRIP'i büyütmek ya da bir öğenin varsayılan/sürüklenmiş konumunu bir bölge kenarına daha
         # da yaklaştırmak bu dengeyi yeniden bozabilir; o testler bunu köşe ve kenar için ayrı ayrı bekçiler.
+        # Hem bölge hem öğe isabet sırası GERÇEK Qt yığınından (self.children(), raise_() tarafından güncel
+        # tutulur) türetilir -- sözlük ekleme sırasını çizim sırasıyla elle senkron tutmaya dayanmaz
+        # (nihai inceleme, madde 6: öğeler zaten böyleydi, bölgeler değildi; bugün aynı sonucu veriyorlar
+        # ama relayout()'un raise_() sırası değişirse bölge önceliği sessizce kayardı).
+        stacking = self.children()
         zone_fallback: tuple[str, str] | None = None
-        for key in reversed(list(self._zones)):           # üstteki bölge önce; yalnız en üsttekine bakılır
+        for key in sorted(self._zones, key=lambda k: stacking.index(self._zones[k]), reverse=True):
             if not self._visible.get(_ZONE_VIS_KEY.get(key, key), True):
                 continue                                   # gizli bölge yokmuş gibi davranılır, sürüklenmez
             geo = self._zones[key].geometry()
@@ -623,10 +688,9 @@ class WorkArea(QWidget):
             elif near_r: zone_fallback = (key, "e")
             else: zone_fallback = (key, "move")
             break
-        # Öğe isabet sırası GERÇEK Qt yığınından (self.children(), raise_() tarafından güncel tutulur)
-        # türetilir -- self._items'ın kuruluş sırasıyla _place_item çağrı sırasını elle senkron tutmaya
-        # dayanmaz, bu yüzden ileride biri değişip diğeri değişmezse bile görüneni yansıtmaya devam eder.
-        stacking = self.children()
+        # Öğeler için aynı yığın (yukarıda bir kez okundu): _items'ın kuruluş sırasıyla _place_item çağrı
+        # sırasını elle senkron tutmaya dayanmaz, ileride biri değişip diğeri değişmezse bile görüneni
+        # yansıtmaya devam eder.
         for key in sorted(self._items, key=lambda k: stacking.index(self._items[k]), reverse=True):
             if not self._visible.get(key, True):
                 continue                                    # gizli öğe yokmuş gibi davranılır, sürüklenmez
@@ -729,7 +793,7 @@ class WorkArea(QWidget):
             # (paint_hud) bandı yine çizer ama içi boş kalır (bkz. Görev 8 brief'i, frame_titles).
             ctx = FrameContext(
                 rect=self.rect(), stage=self.stage_rect(), inner=self.inner_rect(), band=self.frame_band(),
-                fam=self.fam,
+                fam=self._board_fam,                       # self.fam DEĞİL: bkz. set_families (madde 2)
                 presenter=self.name_label.text() if titles_on and self._visible.get("presenter", True) else "",
                 brand=self.brand.text() if titles_on and self._visible.get("brand", True) else "",
             )

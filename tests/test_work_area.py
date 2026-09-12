@@ -1,5 +1,7 @@
 import json
+from dataclasses import replace
 
+import pytest
 from PyQt6.QtCore import QPoint, QRect, Qt
 from PyQt6.QtWidgets import QWidget
 
@@ -91,6 +93,20 @@ def test_letterbox_stays_visible_when_frame_is_hidden(qtbot):
     assert inside.name() == "#ffffff"
     assert band_top != inside and band_left != inside                  # sınır belli
     assert band_top.name() == theme.INK and band_left.name() == theme.INK
+
+    # Nihai inceleme, madde 1: HUD boyacısı tüm widget'ı beyaza boyayıp bandı siliyordu. Çerçeve AÇIK ve
+    # HUD seçiliyken de sahne dışı bant koyu, sahne içi tahta beyaz kalmalı -- yoksa kaydın nerede bittiğini
+    # söyleyen tek ipucu stil değiştirilir değiştirilmez kayboluyor.
+    wa.set_frame_visible(True)
+    wa.set_frame_style(FrameStyle.HUD)
+    stage, inner = wa.stage_rect(), wa.inner_rect()
+    img = wa.grab().toImage()
+    assert img.pixelColor(stage.center().x(), stage.top() - 4).name() == theme.INK
+    assert img.pixelColor(stage.left() - 2, stage.center().y()).name() == theme.INK
+    assert img.pixelColor(inner.center().x(), inner.center().y()).name() == "#ffffff"
+
+    wa.set_frame_style(FrameStyle.CLASSIC)
+    wa.set_frame_visible(False)
     wa.set_aspect_lock(False)                                          # kilit kapalı: eski tek renk görüntü
     assert wa.stage_rect() == wa.rect()
     assert wa.grab().toImage().pixelColor(3, 300).name() == "#ffffff"
@@ -471,18 +487,23 @@ def test_edit_mode_drag_moves_brand_and_round_trips_via_duzen_json(qtbot, tmp_pa
 def test_dragged_item_stays_proportional_to_stage_after_resize(qtbot):
     """Sürüklenmiş bir öğe pencere yeniden boyutlandığında (letterbox bantları kayarken bile) sahneye göre
     aynı oranlı noktada kalmalı -- Görev 5'in koordinat tabanı kararının (stage_rect, inner_rect DEĞİL)
-    doğrudan testi."""
+    doğrudan testi.
+
+    Özne marka plakası DEĞİL logo: plakanın genişliği (metin + font) 900x1200'ün 896 px'lik sahnesinde
+    %30'luk bir x'ten sağa taşıyor, yani nihai incelemenin 9. maddesindeki sahneye kırpma ORADA HAKLI
+    OLARAK devreye giriyor (kırpmanın kendi testi: test_items_are_clamped_into_the_stage_...). Logo
+    48x48 sabit -- ölçülen şey burada yalnız koordinat tabanı kalsın, font ölçülerine bulaşmasın."""
     wa, _ = make(qtbot)
-    wa.set_layout(dict(wa.layout(), brand=lm.ItemPos(0.3, 0.1)))
+    wa.set_layout(dict(wa.layout(), logo=lm.ItemPos(0.3, 0.1)))
     stage1 = wa.stage_rect()
-    assert (wa.brand.x(), wa.brand.y()) == (stage1.x() + round(0.3 * stage1.width()),
-                                            stage1.y() + round(0.1 * stage1.height()))
+    assert (wa.logo_label.x(), wa.logo_label.y()) == (stage1.x() + round(0.3 * stage1.width()),
+                                                      stage1.y() + round(0.1 * stage1.height()))
 
     wa.resize(900, 1200)                       # çok farklı en-boy oranı: bantlar tamamen değişir
     stage2 = wa.stage_rect()
     assert stage2 != stage1
-    assert (wa.brand.x(), wa.brand.y()) == (stage2.x() + round(0.3 * stage2.width()),
-                                            stage2.y() + round(0.1 * stage2.height()))
+    assert (wa.logo_label.x(), wa.logo_label.y()) == (stage2.x() + round(0.3 * stage2.width()),
+                                                      stage2.y() + round(0.1 * stage2.height()))
 
 
 def test_badge_drag_applies_to_real_widget_bound_after_construction(qtbot):
@@ -667,27 +688,31 @@ def test_eye_buttons_stay_reachable_at_common_window_sizes(qtbot):
     başlık çubuğunda kalır, tıklanamaz olur. Bu, çerçeve kapalıyken ya da pencere tam/dara-yakın 16:9
     iken (stage.y() == 0'a çok yakın) YAYGINDIR: 1920x1080, 1280x720, 1600x900 hepsi review'da brand/
     logo/soru için negatif y üretiyordu. `wa.childAt(center)` gerçek Qt hit-testiyle (childAt overlay'in
-    WA_TransparentForMouseEvents'ini atlar) düğmenin GERÇEKTEN tıklanabilir olduğunu doğrular."""
+    WA_TransparentForMouseEvents'ini atlar) düğmenin GERÇEKTEN tıklanabilir olduğunu doğrular.
+
+    Nihai inceleme (madde 10): boyut listesi KÜÇÜĞE doğru genişletildi ve her boyut artık İKİ çerçeve
+    stilinde, çerçeve açık VE kapalıyken deneniyor. Küçük pencerelerde ortaya çıkan ikinci arıza bir taşma
+    değil ÇAKIŞMA: sahnenin sağ üst köşesinde birden çok sahip (ipucu bölgesi + marka plakası + rozet)
+    buluşunca göz düğmeleri üst üste biniyor ve üstte kalan hariç hepsi tıklanamaz oluyordu (700x500'de
+    ölçüldü: `hint_zone`'un merkezi `brand`'in düğmesine, `brand`'inki `badge`'inkine çözülüyordu).
+    Düzeltme _sync_eye_buttons/_free_eye_x'te: çakışan düğme aynı satırda sola kaydırılır."""
     wa, zones = make(qtbot)
     wa.set_edit_mode(True)
-    sizes = [(1832, 1080), (1920, 1080), (1280, 720), (1600, 900), (1600, 850), (1920, 1000)]
-    for w, h in sizes:
-        wa.resize(w, h)
-        for key in EYE_KEYS:
-            btn = wa._eye_buttons[key]
-            center = btn.geometry().center()
-            assert wa.rect().contains(center), (w, h, key, center)
-            assert wa.childAt(center) is btn, (w, h, key, center)
-
-    # Çerçeve kapalıyken inner_rect == stage_rect: "soru" bölgesi de stage'in en üst satırına biner.
-    wa.set_frame_visible(False)
-    for w, h in ((1920, 1080), (1280, 720), (1600, 900)):
-        wa.resize(w, h)
-        for key in ("question_zone", "hint_zone", "webcam"):
-            btn = wa._eye_buttons[key]
-            center = btn.geometry().center()
-            assert wa.rect().contains(center), (w, h, key, center)
-            assert wa.childAt(center) is btn, (w, h, key, center)
+    sizes = [(1832, 1080), (1920, 1080), (1600, 900), (1600, 850), (1920, 1000), (1366, 768),
+             (1280, 720), (1152, 720), (1024, 768), (900, 600), (800, 600), (700, 500)]
+    for style in (FrameStyle.CLASSIC, FrameStyle.HUD):
+        wa.set_frame_style(style)
+        # Çerçeve kapalıyken inner_rect == stage_rect: "soru" bölgesi de stage'in en üst satırına biner.
+        for frame_on in (True, False):
+            wa.set_frame_visible(frame_on)
+            for w, h in sizes:
+                wa.resize(w, h)
+                for key in EYE_KEYS:
+                    btn = wa._eye_buttons[key]
+                    center = btn.geometry().center()
+                    assert wa.rect().contains(center), (style, frame_on, w, h, key, center)
+                    assert wa.childAt(center) is btn, (style, frame_on, w, h, key, center)
+    wa.set_frame_visible(True)
 
 
 def test_presenter_name_and_visibility_do_not_stomp_each_other(qtbot):
@@ -882,3 +907,161 @@ def test_frame_style_setting_flows_from_settings_values_style(qtbot):
     after = zones["soru"].geometry()
     assert before != after                                              # bant büyüdü, bölge yeniden konumlandı
     assert after.left() == wa.stage_rect().left() + theme.HUD_BAND
+
+
+# --- Nihai inceleme dalgası (tüm dalı gören bulgular) -----------------------------------------------------
+
+def test_hud_band_text_uses_the_scaled_board_family_not_the_constructor_one(qtbot, monkeypatch):
+    """Madde 2: FrameContext.fam'in docstring'i 'tahtanın o an kullandığı (ölçekli) yazı ailesi' diyor, ama
+    paintEvent `self.fam`'i geçiyordu -- `set_families` onu BİLEREK güncellemez (logo monogramı kendi
+    boyut kaydırıcısına sahip). Sonuç: yazı boyutu kaydırıcısı ve Ayarlar'dan seçilen yazı tipi, tahtanın
+    EN GÖZE ÇARPAN iki yazısı (HUD bandındaki sunucu adı ve marka) dışında her yere uygulanıyordu.
+    Boyacıya casus koyup ctx.fam'i doğrudan okuyoruz: gerçek paintEvent yolu, taklit yok."""
+    wa, _ = make(qtbot)
+    seen: list[FontFamilies] = []
+    spec = frames.FRAME_SPECS[FrameStyle.HUD]
+    monkeypatch.setitem(frames.FRAME_SPECS, FrameStyle.HUD,
+                        replace(spec, paint=lambda p, ctx: seen.append(ctx.fam)))
+    wa.set_frame_style(FrameStyle.HUD)
+
+    wa.set_families(FontFamilies("Courier New", "Courier New", False, scale=1.6))
+    wa.grab()
+    assert seen, "HUD boyacısı hiç çağrılmadı"
+    assert seen[-1].scale == 1.6 and seen[-1].sans == "Courier New"
+    assert wa.logo_label.font().pixelSize() == round(max(10, int(wa.logo_size * 0.42)))   # logo ölçek dışında
+
+    seen.clear()                                                  # geri dönüş de izlenmeli
+    wa.set_families(FAM)
+    wa.grab()
+    assert seen[-1] == FAM
+
+
+def test_unchanged_frame_and_aspect_setters_do_not_relayout(qtbot):
+    """Madde 5: apply_ui_settings bu üç ayarı HER göz düğmesi tıklamasında ve HER yazı kaydırıcısı tıkında
+    yeniden uyguluyor; değer değişmediği hâlde koşulsuz relayout etmek sıcak yolu (90 tıklık bir sürükleme
+    = 450 relayout, 362 ms) boşuna yakıyordu. Değer GERÇEKTEN değiştiğinde akış aynen sürmeli."""
+    wa, _ = make(qtbot)
+    calls = []
+    real = wa.relayout
+    wa.relayout = lambda: (calls.append(1), real())[1]            # type: ignore[method-assign]
+
+    wa.set_aspect_lock(wa.aspect_lock)
+    wa.set_frame_visible(wa.frame_visible)
+    wa.set_frame_style(wa.frame_style)
+    assert calls == []                                            # üçü de no-op
+
+    wa.set_frame_style(FrameStyle.HUD)
+    assert len(calls) == 1
+    wa.set_frame_visible(False)
+    assert len(calls) == 2
+    wa.set_aspect_lock(False)
+    assert len(calls) == 3
+    assert wa.frame_style is FrameStyle.HUD and not wa.frame_visible and not wa.aspect_lock
+
+
+def test_zone_hit_priority_follows_the_qt_stacking_order(qtbot):
+    """Madde 6: bölge isabet önceliği `reversed(list(self._zones))` ile SÖZLÜK EKLEME sırasından geliyordu,
+    oysa öğe önceliği (Karar 10) gerçek Qt yığınından türetiliyor. Bugün ikisi uyuşuyor, ama relayout()'un
+    raise_() sırası değişirse bölgeler sessizce kayardı. Burada yığını bilerek sözlük sırasından AYIRIYORUZ:
+    `soru` en üste kaldırılınca, `ipucu` ile birebir çakışan bir noktada artık `soru` kazanmalı."""
+    wa, zones = make(qtbot)
+    wa.set_edit_mode(True)
+    zones["soru"].setGeometry(zones["ipucu"].geometry())          # birebir üst üste
+    center = zones["ipucu"].geometry().center()
+    assert wa._hit(center) == ("ipucu", "move")                   # yığında ipucu üstte (ekleme sırası)
+
+    zones["soru"].raise_()                                        # görünen yığın değişti
+    assert wa._hit(center) == ("soru", "move")
+
+
+def wide_item(wa, w: int, h: int = 40) -> QWidget:
+    """Genişliği TAM OLARAK bilinen bir öğe: rozet yuvasını verilen ölçüde bir widget'la değiştirir
+    (main_window.py:83'teki gerçek RecordBadge atamasıyla aynı yol, bkz.
+    test_badge_drag_applies_to_real_widget_bound_after_construction) ve relayout()'un onu adjustSize ile
+    yeniden ölçmediği tek öğe olduğu için genişlik sabit kalır.
+
+    Neden metin değil: gerçek hayatta bu durumu yazı ölçeği %160 ya da uzun bir sunucu adı üretiyor
+    (brief'in ölçümü: 1000x650'de marka plakası 14 px taşıyor), ama METİN GENİŞLİĞİ bu testlerde
+    ÖLÇÜLEBİLİR DEĞİL: offscreen QPA sıfır font ailesiyle başlıyor ve kayıtlı gerçek font olup olmamasına
+    göre aynı metin 660 px ya da 293 px geliyor -- yani hangi test dosyasının önce koştuğuna göre
+    (bkz. tests/test_toolbar.py'deki aynı tuzağın uzun notu). Ölçü buradan sabitlenirse test sıradan
+    bağımsız olur; kırpmanın kendisi zaten metnin nereden geldiğini umursamıyor."""
+    big = QWidget(wa)
+    big.resize(w, h)
+    big.show()
+    wa.badge_slot = big
+    wa.relayout()
+    return big
+
+
+def test_items_are_clamped_into_the_stage(qtbot):
+    """Madde 9: `_place_item` hesapladığı konumu sahneye kırpmıyordu. mouseReleaseEvent yalnız SÜRÜKLEME
+    anında kırpıyor; oysa bir öğenin genişliği içeriğe ve fonta bağlı MUTLAK bir değer -- yazı ölçeği
+    %160'a çekilince marka plakası 1000x650 pencerede HİÇ SÜRÜKLENMEDEN sahneyi 14 px taşıyordu, 52
+    karakterlik bir sunucu adı her ölçekte taşıyor. Taşan kısım kayda girmez: markayı sağ kenara yakın
+    bırakan, sonra yazı ölçeğini artıran kullanıcı sağ kenarını HER KAYITTA sessizce kaybeder."""
+    wa, _ = make(qtbot)
+    wa.resize(1000, 650)
+    stage = wa.stage_rect()
+
+    # (1) Sahneden GENİŞ öğe: sol kenara hizalanır, BOYUTU DEĞİŞMEZ (boyut içerik kaynaklı).
+    big = wide_item(wa, stage.width() + 208)
+    assert big.width() == stage.width() + 208 and big.x() == stage.x()
+    assert big.y() >= stage.y() and big.geometry().bottom() <= stage.bottom()
+
+    # (2) Sahneye SIĞAN ama sağ kenarın dışına düşen kayıtlı bir konum: sağ kenara yaslanır.
+    fits = wide_item(wa, 300)
+    wa.set_layout(dict(wa.layout(), badge=lm.ItemPos(0.9, 0.5)))
+    assert stage.contains(fits.geometry())
+    assert fits.geometry().right() == stage.right()
+
+    # (3) Sığan ve içeride kalan bir konum hiç kıpırdamaz -- kırpma yalnız taşmada devreye girer.
+    wa.set_layout(dict(wa.layout(), badge=lm.ItemPos(0.25, 0.25)))
+    assert (fits.x(), fits.y()) == (stage.x() + round(0.25 * stage.width()),
+                                    stage.y() + round(0.25 * stage.height()))
+
+
+SHAPES = ((1920, 1080), (2560, 1080), (900, 1200), (1000, 650))
+
+
+@pytest.mark.parametrize("size", SHAPES)
+def test_board_invariants_hold_for_every_shape_and_frame_style(qtbot, size):
+    """Madde 10: tek parametrik değişmezlik testi. Her pencere şekli x her çerçeve stili x yazı ölçeğinin
+    iki ucu için:
+      * inner_rect() pozitif,
+      * her bölge inner içinde,
+      * her öğe sahneye KIRPILMIŞ,
+      * her göz düğmesinin merkezi childAt ile kendisine çözülüyor.
+
+    "Sahneye kırpılmış", "stage.contains(...)" ile AYNI ŞEY DEĞİL: sahneden geniş bir öğe küçültülemez
+    (boyut içerik kaynaklı), madde 9'un kuralı "sol/üst kenara hizala". Değişmez bu yüzden "sol/üst kenarı
+    asla geçme, sağ/alt kenarı ancak öğe sahneden BÜYÜKSE geçebilir" biçiminde yazılır -- kırpmanın
+    verebileceği EN GÜÇLÜ garanti.
+
+    1200 px'lik öğe (bkz. wide_item) bilerek İKİ dar şeklin (900x1200 -> 896 px, 1000x650 -> 992 px)
+    sahnesinden geniş, iki geniş şeklinkinden (1920 px) dar: düzeltmeden önce test tam olarak dört
+    şeklin ikisinde düşüyordu. Ölçü metinden değil widget'tan gelir, yani çalıştırma sırasından
+    bağımsız (gerekçe: wide_item'ın docstring'i)."""
+    wa, zones = make(qtbot)
+    wa.set_edit_mode(True)
+    wide_item(wa, 1200)
+    wa.resize(*size)
+    for style in (FrameStyle.CLASSIC, FrameStyle.HUD):
+        wa.set_frame_style(style)
+        for scale in (1.0, 1.6):
+            wa.set_families(FontFamilies("Arial", "Arial", False, scale=scale))
+            ctx = (size, style, scale)
+            stage, inner = wa.stage_rect(), wa.inner_rect()
+            assert inner.width() > 0 and inner.height() > 0, (ctx, inner)
+            for key, zone in zones.items():
+                assert inner.contains(zone.geometry()), (ctx, key, zone.geometry(), inner)
+            for key, widget in wa._items.items():
+                geo = widget.geometry()
+                assert geo.left() >= stage.left() and geo.top() >= stage.top(), (ctx, key, geo, stage)
+                assert geo.right() <= stage.right() or geo.width() >= stage.width(), (ctx, key, geo, stage)
+                assert geo.bottom() <= stage.bottom() or geo.height() >= stage.height(), (ctx, key, geo, stage)
+            for key in EYE_KEYS:
+                btn = wa._eye_buttons[key]
+                center = btn.geometry().center()
+                assert wa.rect().contains(center), (ctx, key, center)
+                assert wa.childAt(center) is btn, (ctx, key, center)

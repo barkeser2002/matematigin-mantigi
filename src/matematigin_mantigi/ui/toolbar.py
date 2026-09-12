@@ -59,8 +59,13 @@ _MINI = _TierSpec(
     captions_visible=False, dot_rows=(WIDTHS,), single_line=True,
 )
 
-_FULL_MIN_H = 1030
-_COMPACT_MIN_H = 800
+# Eşikler ÖLÇÜMLE seçildi (nihai inceleme, madde 8): FULL içeriğinin sizeHint().height()'ı 853 px,
+# yani ToolBar ~940 px'e kadar kaydırmasız sığıyor. Eski 1030 değeri brief'in yanlış tahminindendi
+# (gerçek eski asgari 936'ydı) ve görev çubuğu görünen 1920x1080 TAM EKRAN penceresinde -- kullanıcının
+# BİRİNCİL hedefi -- ToolBar'a kalan ~1000-1010 px'i COMPACT'a düşürüyordu, oysa FULL ~150 px boşlukla
+# sığıyor. COMPACT için aynı pay: 790.
+_FULL_MIN_H = 950
+_COMPACT_MIN_H = 790
 
 
 def _tier_for_height(h: int) -> _TierSpec:

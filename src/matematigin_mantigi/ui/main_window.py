@@ -418,7 +418,11 @@ class MainWindow(QMainWindow):
         self.work_area.status_label.setVisible(s.visible("status"))
         self.work_area.set_item_visible("status", s.visible("status"))
         self.webcam_panel.overlay_label.setVisible(s.visible("cam_label"))
-        self.work_area.brand.setVisible(s.visible("brand"))
+        # brand'in setVisible'ı BURADA YOK (nihai inceleme, madde 4): marka plakasının görünürlüğünü
+        # yalnız _apply_chrome yazar (set_item_visible onu tetikler) -- etkin çerçeve stili markayı kendi
+        # bandına çizdiğinde plaka gizli kalmalı. Buradaki ikinci yazıcı zaten bir satır sonra eziliyordu.
+        # NOT: "status" (yukarıda) ve "logo" (aşağıda) için aynı satırlar ÖLÜ DEĞİL -- _apply_chrome onlara
+        # dokunmaz, gerçek widget görünürlüğünü hâlâ burası uygular.
         self.work_area.set_item_visible("brand", s.visible("brand"))
         self.question_zone.set_hide_link_enabled(s.visible("hide_link"))
         self.question_zone.set_number_visible(s.visible("question_number"))

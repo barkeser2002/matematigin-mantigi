@@ -15,16 +15,20 @@ Windows PowerShell'de önce `$env:PYTHONUTF8 = "1"`.
 
 ## Tahta
 
-Çalışma alanının tamamı düz beyaz tuval; her yerine çizilir. Üstünde üç şeffaf bölge: sol üstte soru (kırmızı
+Tahta, 16:9 sahnenin çerçeve bandı içinde kalan düz beyaz tuvalidir; her yerine çizilir (bant ile sahne dışındaki
+koyu kenarlara çizilemez). Üstünde üç şeffaf bölge: sol üstte soru (kırmızı
 numara, kalın metin, görsel, A) B) C) D)), sağ üstte "AKILLI İPUÇLARI" kartları, sağ alt köşede çerçevesiz webcam.
 Sayfa başına tek soru; "Sıradaki soru →" (N) ve "← Önceki soru" (P) ile gezilir. Soru değişince metin harf harf
 belirir, son harfler solarak gelir (varsayılan 40 ms/harf; ⚙ Ayarlar > "Soru yazma hızı", 0 = kapalı); tıklayınca
 tamamlanır. İpucu kartları blur veya redakte ile gizlidir, tıklanmadan açılmaz; açılırken bulanıklık 300 ms'de çözülür.
 
 ⚙ Ayarlar: yazı tipi dosyası (.ttf/.otf; soru, seçenekler ve ipucu kartlarına uygulanır), logo dosyası (sol üst; yoksa
-"MM" monogramı), kamera seçimi ("Kameraları tara" kare veren cihazları listeler, seçim kalıcıdır), soru yazma hızı,
-yeşil perde (kaldır aç/kapat, tonun otomatik ölçümü) ve tahtadaki yazısal öğelerin görünürlüğü: ipucu kontrolleri (1/3 ◀ ▶ Blur Redakte),
-"AKILLI İPUÇLARI" başlığı, durum satırı, kamera etiketi, marka plakası, "gizle" bağlantısı, soru numarası.
+"MM" monogramı) ve boyutu, kamera seçimi ("Kameraları tara" kare veren cihazları listeler, seçim kalıcıdır), soru yazma hızı,
+yeşil perde (kaldır aç/kapat, tonun otomatik ölçümü), **Tahta**: "Tahtayı 16:9 oranında tut" (açıkken tahta pencerede
+ortalanır, artan yer koyu bant olur ve kayıt tam 16:9 çıkar; kapalıyken tüm pencereyi kaplar) ve **çerçeve stili**
+(Klasik / HUD, aşağıda) — ve tahtadaki öğelerin görünürlüğü: ipucu kontrolleri (1/3 ◀ ▶ Blur Redakte),
+"AKILLI İPUÇLARI" başlığı, durum satırı, kamera etiketi, marka plakası, "gizle" bağlantısı, soru numarası, ekran
+çerçevesi, çerçeve sunucu/marka bantları, sunucu adı, logo, kayıt rozeti, soru/ipucu/webcam panelleri.
 
 Araçlar: kalem (5 kalınlık: 1/2/4/8/12 px), silgi, lazer (izi 1,5 sn'de sönerek kaybolur), yazı (tıkla, yaz,
 Enter ile tahtaya işle, Esc iptal; punto kalınlık kademesine göre), şekil (sürükle; Şekil düğmesine tekrar basınca
@@ -39,17 +43,28 @@ açılıp kapanır (kameraya tıklamak değiştirmez). Yeşil perde kamera kares
 kenarlarından otomatik ölçülür (yeşilimsi ve doygunsa), böylece #00ff3c olmayan
 gerçek perdeler de temizlenir; kamera yokken sadece kısa bir durum yazısı görünür.
 "⧉ Düzen" (L) modunda bölgeler OBS gibi serbestçe taşınır/boyutlandırılır (8 kenar/köşe tutamağı); Ctrl basılı
-tutulursa 12x10 ızgaraya yapışır. Sonuç `duzen.json`'a kaydedilir.
-Normal kullanımda çerçeve ve bölge çizgisi yoktur; sadece düzen modunda görünür.
+tutulursa 12x10 ızgaraya yapışır. Bölgelerin yanı sıra tahtanın **öğeleri** de (marka plakası, logo, sunucu adı,
+kayıt rozeti, durum satırı) sürüklenir — bunlar bandın üstünde de durabilir, boyutları içeriklerinden gelir,
+sahnenin dışına çıkamazlar. Her bölge ve öğenin köşesinde bir **göz düğmesi** (👁) çıkar: tek tıkla o panel ya da
+öğe tamamen gizlenir/geri gelir (⚙ Ayarlar > Görünürlük ile aynı anahtarlar). Düzen çubuğundaki **yazı boyutu
+kaydırıcısı** tahtadaki tüm yazıları %70–%160 arasında ölçekler (araç çubuğu ve pencereler etkilenmez; logo
+monogramının kendi boyutu ⚙ Ayarlar'dadır). Bölge ölçüleri ve öğe konumları `duzen.json`'a; görünürlükler ile yazı
+ölçeği diğer ayarlarla birlikte kaydedilir; düzen çubuğundaki "Sıfırla" bölge ve öğe konumlarını varsayılana döndürür.
+Normal kullanımda bölge çizgisi yoktur; sadece düzen modunda görünür.
 
-Ekran çerçevesi: tüm çalışma alanını saran 26 px koyu bant, üstüne çizilemez; "Matematiğin Mantığı" plakası üst
-ortada, sunucu adı (varsayılan "Koray Varol", el yazısı fontu) webcam'in üstünde. İkisi de ⚙ Ayarlar'dan değişir
-veya kapatılır. Logo alanı sonraki sürümde.
+Ekran çerçevesi: 16:9 sahneyi saran bant (tüm pencereyi değil), üstüne çizilemez. İki stil var (⚙ Ayarlar > Tahta >
+Çerçeve stili): **Klasik (koyu bant)** 26 px degradeli koyu bant, turuncu iç çizgi ve köşe süsleri; "Matematiğin
+Mantığı" plakası üst ortada, sunucu adı (varsayılan "Koray Varol", el yazısı fontu) webcam'in üstünde. **HUD
+(teknik çizim)** 52 px beyaz bant üstünde lacivert raylar, cetvel şeridi ve köşe motifleri; sunucu adı ile markayı
+sağ üst/sağ alt yazı bantlarına KENDİSİ yazar, bu yüzden eski plaka ve el yazısı gizlenir ("Çerçeve sunucu/marka
+bantları" kapatılırsa eski düzene dönülür). Logo sol üst köşede, sahnenin üst bandına asılıdır (kayda girer);
+dosyası ve boyutu ⚙ Ayarlar'dan, konumu düzen modundan değişir.
 
 ## Kısayollar
 
 1-6 araçlar (6 = Tıkla) · Ctrl+Z geri al · Ctrl+Shift+X temizle · N sıradaki · P önceki · Space işle/tamamla · R kayıt ·
-H soruyu gizle/göster · ←/→ ipucu · Enter ipucunu aç · L düzen · F11 tam ekran · Esc çık
+H soruyu gizle/göster · ←/→ ipucu · Enter ipucunu aç · L düzen · F11 tam ekran · Esc çık (düzen modundaysa
+önce düzenden, sonra tam ekrandan)
 
 ## Soru şablonu ve PDF aktarımı
 
@@ -135,7 +150,9 @@ macOS: `.app`'i sağ tık > Aç (imzasız).
 ## Kayıt
 
 KAYIT düğmesi (R) tahtayı (araç çubuğu hariç) `mss` ile yakalar, `ffmpeg` (imageio-ffmpeg ile gelir, ayrıca
-kurulum gerekmez) H.264 MP4 yazar: `oturum/<tarih-saat>/kayit_<saat>.mp4`. Varsayılan 60 fps ve 2K (1440p'ye
+kurulum gerekmez) H.264 MP4 yazar: `oturum/<tarih-saat>/kayit_<saat>.mp4`. Kayda giren dikdörtgen 16:9 **sahnenin
+tamamı**dır: oran kilidi açıkken kenarlardaki koyu bantlar kayda GİRMEZ — bu yüzden tahtada görünür bırakılırlar,
+bandın üstüne düşen bir çizgi ya da öğe videoda olmaz. Varsayılan 60 fps ve 2K (1440p'ye
 ölçeklenir); ⚙ Ayarlar > Kayıt'tan 30/60 fps, Doğal/1080p/2K/4K ve mikrofon ("Ses aygıtlarını listele": PortAudio
 aygıtları — Windows'ta en iyi host API, macOS'ta CoreAudio) seçilir. Süre araç çubuğundaki DURDUR düğmesinin altında sayar; tahtadaki
 "KAYIT · 00:00" rozeti varsayılan kapalıdır (kayda girer), Görünürlük'ten açılabilir.

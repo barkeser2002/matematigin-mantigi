@@ -5,7 +5,7 @@ davranışları tests/test_work_area.py'ye eklendi (bkz. o dosyadaki '--- Görev
 from dataclasses import replace
 
 from PyQt6.QtCore import QRect, Qt
-from PyQt6.QtGui import QPainter, QPixmap
+from PyQt6.QtGui import QColor, QPainter, QPixmap
 
 from matematigin_mantigi.core.models import FrameStyle
 from matematigin_mantigi.ui import frames, theme
@@ -21,8 +21,12 @@ def _ctx(rect: QRect, band: int, presenter: str = "Koray Varol", brand: str = "M
 
 
 def _paint_on_pixmap(w: int, h: int, ctx: FrameContext, paint) -> "QPixmap":
-    pm = QPixmap(w, h); pm.fill(Qt.GlobalColor.black)
+    """Zemini WorkArea.paintEvent'in yaptığı gibi kurar: önce TÜM widget theme.INK, sonra 16:9 sahne
+    theme.PANEL -- boyacılar zemini KENDİLERİ doldurmaz (nihai inceleme, madde 1: paint_hud'un ilk satırı
+    tüm widget'ı beyaza boyuyor ve Görev 3'ün bilerek koyu bıraktığı letterbox bandını siliyordu)."""
+    pm = QPixmap(w, h); pm.fill(QColor(theme.INK))
     p = QPainter(pm)
+    p.fillRect(ctx.stage, QColor(theme.PANEL))
     paint(p, ctx)
     p.end()
     return pm
@@ -95,6 +99,23 @@ def test_paint_hud_draws_blank_band_when_titles_are_empty(qapp):
     pm = _paint_on_pixmap(rect.width(), rect.height(), ctx, frames.paint_hud)
     c = ctx.inner.center()
     assert pm.toImage().pixelColor(c.x(), c.y()).name() == theme.PANEL
+
+
+def test_paint_hud_does_not_repaint_the_letterbox_band(qapp):
+    """Nihai inceleme, madde 1: paint_hud'un ilk satırı `fillRect(ctx.rect, PANEL)` idi -- sahnenin DIŞINDA
+    kalan (kayda girmeyen) bandı da beyaza boyuyordu. 2560x1080'de bu, öğretmenin tahta sanacağı iki adet
+    320 px genişliğinde beyaz şerit demekti; Görev 3 o bandı BİLEREK koyu bırakmıştı ('kayıtlar ürünün
+    kendisi', Karar 6). Burada stage ctx.rect'ten KÜÇÜK: boyacı banda dokunmamalı."""
+    rect = QRect(0, 0, 2560, 1080)
+    stage = QRect(320, 0, 1920, 1080)                    # 2560x1080'de gerçek 16:9 sahne
+    inner = stage.adjusted(theme.HUD_BAND, theme.HUD_BAND, -theme.HUD_BAND, -theme.HUD_BAND)
+    ctx = FrameContext(rect=rect, stage=stage, inner=inner, band=theme.HUD_BAND, fam=FAM,
+                       presenter="Koray Varol", brand="Matematiğin Mantığı")
+    img = _paint_on_pixmap(rect.width(), rect.height(), ctx, frames.paint_hud).toImage()
+    y = stage.center().y()
+    assert img.pixelColor(stage.left() - 4, y).name() == theme.INK       # sol bant koyu kaldı
+    assert img.pixelColor(stage.right() + 4, y).name() == theme.INK      # sağ bant koyu kaldı
+    assert img.pixelColor(inner.center().x(), inner.center().y()).name() == theme.PANEL   # tahta beyaz
 
 
 def test_paint_hud_survives_degenerate_and_tiny_rects(qapp):

@@ -249,8 +249,13 @@ def paint_hud(p: QPainter, ctx: FrameContext) -> None:
     saydam mavi köşe motifleri (tarif: task-8-brief.md). Birebir kopya değil, 'benzerine yakın' yeterli
     (kullanıcının onayı). TÜM koordinatlar ctx.stage + ctx.band'den türetilir; pencere her boyutta -- çok
     küçük olsa, hatta ctx.inner negatife düşse bile -- çökmeden çalışmalı (bkz. hemen altındaki koruma:
-    stage/band geçersizse yalnız beyaz zemin kalır, daha ileri gidilmez)."""
-    p.fillRect(ctx.rect, QColor(theme.PANEL))
+    stage/band geçersizse hiçbir şey çizilmez, daha ileri gidilmez).
+
+    ZEMİNİ BU BOYACI DOLDURMAZ (nihai inceleme, madde 1): eskiden ilk satır tüm widget'ı (ctx.rect)
+    theme.PANEL ile boyuyordu, bu da Görev 3'ün BİLEREK koyu bıraktığı letterbox bandını siliyordu --
+    2560x1080'de iki adet 320 px genişliğinde beyaz şerit, öğretmen için tahtadan ayırt edilemez.
+    Zemin artık yalnız WorkArea.paintEvent'in işi: önce tüm widget theme.INK, sonra 16:9 sahne
+    theme.PANEL (bkz. work_area.py paintEvent). Klasik boyacı da zaten kendi zeminini oradan alır."""
     stage, band = ctx.stage, ctx.band
     if stage.width() <= 0 or stage.height() <= 0 or band <= 0:
         return

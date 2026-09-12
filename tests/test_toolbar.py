@@ -155,7 +155,30 @@ def test_short_height_does_not_crash_and_keeps_minimum_small(qtbot):
     tb = make(qtbot)
     tb.resize(88, 400)                                        # eski davranışta hiç mümkün değildi
     assert tb.tier == "mini"
-    assert tb.minimumSizeHint().height() < 300                # ~1030 px dayatmıyor
+    assert tb.minimumSizeHint().height() < 300                # ~950 px dayatmıyor
+
+
+def test_full_tier_survives_a_1080p_fullscreen_window_and_thresholds_match_real_fit(qtbot):
+    """Nihai inceleme, madde 8: eşikler (_FULL_MIN_H=1030, _COMPACT_MIN_H=800) brief'in YANLIŞ tahmininden
+    alınmıştı -- gerçek eski asgari 936'ydı. Sonuç: görev çubuğu görünen 1920x1080 tam ekran pencerede
+    ToolBar'a ~1000-1010 px kalıyor ve araç çubuğu FULL ~150 px boşlukla sığacakken COMPACT'a düşüyordu.
+    Kullanıcının birincil hedefi tam olarak o pencere.
+
+    Eşiklerin ölçüldüğü değerler (FULL içeriğinin sizeHint().height()'ı 853, ToolBar ~940'a kadar
+    kaydırmasız sığıyor) toolbar.py'deki yorumda duruyor; BURADA iddia edilmiyor. Sebep bu dosyanın
+    kendi tuzak notu (bkz. test_glyph_button_hides_label_ink_when_show_label_false): offscreen QPA'da
+    kayıtlı font olup olmamasına göre glif ölçüleri -- dolayısıyla content.sizeHint() -- çalıştırma
+    sırasına göre değişiyor. Kademe eşikleri ise saf sayı karşılaştırması, sıradan bağımsız."""
+    tb = make(qtbot)
+    for h in (1010, 1000, 960, 950):
+        tb.resize(88, h)
+        assert tb.tier == "full", h                           # 1080p tam ekran + görev çubuğu: FULL kalır
+    for h in (949, 900, 800, 790):
+        tb.resize(88, h)
+        assert tb.tier == "compact", h
+    for h in (789, 700, 400):
+        tb.resize(88, h)
+        assert tb.tier == "mini", h
 
 
 def test_record_button_always_visible_and_outside_scroll_area(qtbot):

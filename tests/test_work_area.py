@@ -847,8 +847,9 @@ def test_hud_frame_style_survives_tiny_and_aspect_unlocked_window_sizes(qtbot):
 
 
 def test_frame_style_setting_flows_from_settings_values_style(qtbot):
-    """set_frame_style tek başına set_frame_visible ile aynı kalıbı izler: sakla, relayout(), update() --
-    burada relayout() gerçekten çağrıldığını (bant değişince bölgelerin yeniden aktığını) doğrular."""
+    """set_frame_style set_frame_visible ile aynı kalıbı izler (sakla, chrome eşitle, relayout(), update());
+    burada relayout()'un GERÇEKTEN çağrıldığını doğruluyoruz -- bant büyüyünce bölgelerin yeniden aktığını
+    (yeni sol kenarın stage + HUD_BAND'e oturduğunu) gözlemleyerek, dolaylı ama somut bir kanıt."""
     wa, zones = make(qtbot)
     before = zones["soru"].geometry()
     wa.set_frame_style(FrameStyle.HUD)

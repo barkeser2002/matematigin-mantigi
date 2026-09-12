@@ -1,8 +1,9 @@
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFileDialog
 
-from matematigin_mantigi.core.models import PenSettings
+from matematigin_mantigi.core.models import FrameStyle, PenSettings
 from matematigin_mantigi.core.settings import VISIBILITY_KEYS
+from matematigin_mantigi.ui.frames import FRAME_SPECS
 from matematigin_mantigi.ui.settings_dialog import SettingsDialog
 from matematigin_mantigi.ui.theme import FontFamilies
 
@@ -115,6 +116,27 @@ def test_new_panel_keys_get_checkboxes_and_report_in_value(qtbot, ini_settings):
     d.visibility_checks["webcam"].setChecked(False)
     v = d.value()
     assert v.visible["webcam"] is False and v.visible["question_zone"] is True
+
+
+def test_frame_style_combo_reflects_settings_and_reports_in_value(qtbot, ini_settings):
+    """Görev 8: 'Tahta' kartına eklenen çerçeve stili açılır listesi FRAME_SPECS'ten üretilir, kayıtlı
+    ayarı yansıtır ve value() içinde raporlar. frame_titles anahtarı ise VISIBILITY_KEYS'ten geldiği için
+    (bkz. test_new_panel_keys_get_checkboxes_and_report_in_value) settings_dialog.py'ye DOKUNMADAN
+    kendiliğinden görünürlük ızgarasına düşer -- burada da doğrulanıyor."""
+    d = SettingsDialog(ini_settings, FAM)
+    qtbot.addWidget(d)
+    assert d.frame_style_combo.count() == len(FRAME_SPECS)
+    assert d.frame_style_combo.currentData() == FrameStyle.CLASSIC       # kayıtlı ayardan gelir (varsayılan)
+    assert d.value().frame_style == FrameStyle.CLASSIC
+    assert "frame_titles" in d.visibility_checks and d.visibility_checks["frame_titles"].isChecked()
+
+    idx = d.frame_style_combo.findData(FrameStyle.HUD)
+    d.frame_style_combo.setCurrentIndex(idx)
+    assert d.value().frame_style == FrameStyle.HUD
+
+    ini_settings.frame_style = FrameStyle.HUD
+    d2 = SettingsDialog(ini_settings, FAM); qtbot.addWidget(d2)
+    assert d2.frame_style_combo.currentData() == FrameStyle.HUD          # kayıtlı HUD'dan gelir
 
 
 def test_dialog_scrolls_and_keeps_apply_visible_on_small_screen(qtbot, ini_settings):

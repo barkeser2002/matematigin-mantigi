@@ -8,9 +8,11 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel,
                              QLineEdit, QPushButton, QScrollArea, QSlider, QVBoxLayout, QWidget)
 
+from matematigin_mantigi.core.models import FrameStyle
 from matematigin_mantigi.core.recorder import RESOLUTIONS
 from matematigin_mantigi.core.settings import VISIBILITY_KEYS, AppSettings
 from matematigin_mantigi.ui import theme
+from matematigin_mantigi.ui.frames import FRAME_SPECS
 from matematigin_mantigi.ui.theme import FontFamilies
 
 
@@ -28,6 +30,7 @@ class SettingsValues:
     record_height: int = 1440
     audio_device: str = ""
     aspect_lock: bool = True
+    frame_style: FrameStyle = FrameStyle.CLASSIC
     visible: dict[str, bool] = field(default_factory=dict)
 
 
@@ -109,6 +112,15 @@ class SettingsDialog(QDialog):
         board_note = QLabel("Açıkken tahta pencerede ortalanır ve kayıt tam 16:9 olur; kapalıyken tüm pencereyi kaplar.")
         board_note.setWordWrap(True); board_note.setFont(theme.font(fam, 10, 400)); board_note.setStyleSheet(f"color: {theme.MUTED};")
         bcol.addWidget(board_note)
+        row = QHBoxLayout()
+        style_lab = QLabel("Çerçeve stili"); style_lab.setFont(theme.font(fam, 11, 500))
+        self.frame_style_combo = QComboBox()
+        for style, spec in FRAME_SPECS.items():
+            self.frame_style_combo.addItem(spec.label, style)
+        idx = self.frame_style_combo.findData(settings.frame_style)
+        self.frame_style_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        row.addWidget(style_lab); row.addWidget(self.frame_style_combo, 1)
+        bcol.addLayout(row)
         col.addWidget(board_card)
 
         rec_card, rcol = _card("Kayıt (mss + ffmpeg, MP4)", fam)
@@ -245,6 +257,7 @@ class SettingsDialog(QDialog):
                               audio_device=("" if self.audio_combo.currentText().strip() == "(ses yok)"
                                             else self.audio_combo.currentText().strip()),
                               aspect_lock=self.aspect_lock_check.isChecked(),
+                              frame_style=self.frame_style_combo.currentData(),
                               visible={k: cb.isChecked() for k, cb in self.visibility_checks.items()})
 
     def _apply(self) -> None:

@@ -6,13 +6,15 @@ from __future__ import annotations
 
 from fractions import Fraction
 
-from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QLinearGradient, QMouseEvent, QPainter, QPen, QPixmap
+from PyQt6.QtCore import QPoint, QRect, QRectF, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSlider, QWidget
 
 from matematigin_mantigi.core import layout_model as lm
+from matematigin_mantigi.core.models import FrameStyle
 from matematigin_mantigi.ui import theme
 from matematigin_mantigi.ui.canvas import DrawingCanvas
+from matematigin_mantigi.ui.frames import FRAME_SPECS, FrameContext, FrameSpec
 from matematigin_mantigi.ui.theme import FontFamilies
 from matematigin_mantigi.ui.zone import Zone
 
@@ -143,6 +145,7 @@ class WorkArea(QWidget):
         self._eye_buttons: dict[str, QPushButton] = {}
         self.edit_mode = False
         self.frame_visible = True
+        self.frame_style: FrameStyle = FrameStyle.CLASSIC
         self.aspect_lock = True
         self._drag: tuple[str, str, QPoint, QRect] | None = None   # key, mode ("move" ya da kenar kodu), press pos, start geom
         self._snap_active = False                           # Ctrl basılı mı: overlay ızgarayı buna göre belirginleştirir
@@ -268,8 +271,41 @@ class WorkArea(QWidget):
 
     def set_frame_visible(self, on: bool) -> None:
         self.frame_visible = on
+        self._apply_chrome()
         self.relayout()
         self.update()
+
+    def set_frame_style(self, style: FrameStyle) -> None:
+        """Ayarlar > Tahta'daki çerçeve stili açılır listesinden gelir (Görev 8). set_frame_visible ile
+        aynı kalıp: sakla, chrome görünürlüğünü eşitle (bkz. _apply_chrome), relayout() -- yeni stilin bandı
+        (FRAME_SPECS[style].band) klasikten farklı olabilir, bu da inner_rect()'i ve ona bağlı her bölgeyi
+        yeniden akıtır -- sonra update()."""
+        self.frame_style = style
+        self._apply_chrome()
+        self.relayout()
+        self.update()
+
+    def _chrome_state(self) -> tuple[FrameSpec, bool]:
+        """(etkin FrameSpec, çerçeve kendi başlıklarını fiilen çiziyor mu). İkincisi hem _apply_chrome'un
+        eski plaka/el yazısı widget'larını gizleyip göstermesi HEM DE paintEvent'in FrameContext.presenter/
+        brand'e boş dize mi gerçek metin mi geçeceği için TEK yerden hesaplanır -- ikisi ayrışırsa (bkz.
+        Görev 8 brief'i) HUD bandı yazı çizerken eski widget görünür kalır gibi bir tutarsızlık olmasın."""
+        return FRAME_SPECS[self.frame_style], self.frame_visible and self._visible.get("frame_titles", True)
+
+    def _apply_chrome(self) -> None:
+        """Etkin çerçeve stili sunucu adını/markayı KENDİSİ çiziyorsa (FrameSpec.draws_presenter/
+        draws_brand) VE "frame_titles" açıksa, eski plaka (self.brand) ve el yazısı (self.name_label)
+        widget'larını gizler -- ikisi üst üste binmesin. Kapalıyken (stil çizmiyor, çerçeve kapalı ya da
+        frame_titles kapalı) eski widget'lar yalnız kendi görünürlük anahtarlarına (brand/presenter) döner.
+        WorkArea AppSettings'i görmediği için bu hesap TAMAMEN self._visible önbelleğinden yapılır --
+        set_item_visible/set_frame_style/set_frame_visible/set_presenter_name hangi sırayla çağrılırsa
+        çağrılsın SONUÇ tutarlı olsun diye hepsi bunu tetikler (bkz. çağıranlar)."""
+        spec, titles_on = self._chrome_state()
+        hide_brand = spec.draws_brand and titles_on
+        hide_presenter = spec.draws_presenter and titles_on
+        self.brand.setVisible(self._visible.get("brand", True) and not hide_brand)
+        self.name_label.setVisible(self._visible.get("presenter", True) and not hide_presenter
+                                    and bool(self.name_label.text().strip()))
 
     def set_aspect_lock(self, on: bool) -> None:
         self.aspect_lock = on
@@ -329,9 +365,11 @@ class WorkArea(QWidget):
     def set_presenter_name(self, text: str) -> None:
         """Yalnız METNİ taşır; GÖRÜNÜRLÜĞÜ artık tek başına belirlemez (bkz. set_item_visible("presenter", ..)) --
         göz düğmesi ile Ayarlar'daki ad kutusu birbirini ezmesin diye ayrıldı. Boş ad hâlâ etiketi gizler
-        (gösterilecek bir şey yok), ama dolu bir ad "presenter" kapalıyken görünmez kalır."""
+        (gösterilecek bir şey yok), ama dolu bir ad "presenter" kapalıyken görünmez kalır. Görünürlük artık
+        _apply_chrome() üzerinden hesaplanır (Görev 8): etkin çerçeve stili bu adı kendi bandına çiziyorsa
+        (bkz. _chrome_state) eski etiket burada da gizli kalmalı."""
         self.name_label.setText(text)
-        self.name_label.setVisible(bool(text.strip()) and self._visible.get("presenter", True))
+        self._apply_chrome()
         self.name_label.adjustSize()
         self.relayout()
 
@@ -340,17 +378,17 @@ class WorkArea(QWidget):
         AppSettings'i hiç görmez, yalnız BU çağrıdan öğrenir -- göz düğmesinin işaretli durumu, _hit'in
         gizliyi sürüklemeyi reddetmesi ve overlay'in hayalet çizimi bunu okur. Gerçek widget görünürlüğü
         (bölge/marka/logo/rozet/durum) hâlâ apply_ui_settings'in kendi setVisible çağrılarında uygulanır --
-        TEK istisna "presenter": ad metniyle çakışmaması için o widget'ı burada uygularız (yukarı bakın)."""
+        TEK istisna "presenter"/"brand"/"frame_titles": bunlar _apply_chrome() üzerinden burada uygulanır
+        (Görev 8) çünkü etkin çerçeve stili bu ikisini kendi bandına çizebilir (bkz. _apply_chrome)."""
         self._visible[key] = on
-        if key == "presenter":
-            self.name_label.setVisible(on and bool(self.name_label.text().strip()))
         btn = self._eye_buttons.get(key)
         if btn is not None:
             btn.setChecked(on)
+        self._apply_chrome()
         self.overlay.update()
 
     def frame_band(self) -> int:
-        return theme.FRAME_BAND if self.frame_visible else 0
+        return FRAME_SPECS[self.frame_style].band if self.frame_visible else 0
 
     def stage_rect(self) -> QRect:
         """Tahtanın 16:9 sahnesi: pencerede ortalanır, artan yer bant olarak kalır.
@@ -662,37 +700,15 @@ class WorkArea(QWidget):
         p.fillRect(self.rect(), QColor(theme.INK))
         p.fillRect(self.stage_rect(), QColor(theme.PANEL))
         if self.frame_visible:
-            self._paint_frame(p)
+            spec, titles_on = self._chrome_state()
+            # presenter/brand metni yalnız etkin stil onu KENDİSİ çiziyorsa (draws_presenter/draws_brand)
+            # VE ilgili görünürlük açıksa geçilir -- kapalıyken FrameContext'e boş dize gider, boyacı
+            # (paint_hud) bandı yine çizer ama içi boş kalır (bkz. Görev 8 brief'i, frame_titles).
+            ctx = FrameContext(
+                rect=self.rect(), stage=self.stage_rect(), inner=self.inner_rect(), band=self.frame_band(),
+                fam=self.fam,
+                presenter=self.name_label.text() if titles_on and self._visible.get("presenter", True) else "",
+                brand=self.brand.text() if titles_on and self._visible.get("brand", True) else "",
+            )
+            spec.paint(p, ctx)
         p.end()
-
-    def _paint_frame(self, p: QPainter) -> None:
-        """Gösterişli çerçeve: degrade bant, nokta dokusu, turuncu iç çizgi, köşe süsleri."""
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        band = theme.FRAME_BAND
-        inner = self.inner_rect()
-        stage = self.stage_rect()
-        grad = QLinearGradient(0, 0, 0, self.height())
-        grad.setColorAt(0.0, QColor("#2a2925")); grad.setColorAt(0.5, QColor(theme.INK)); grad.setColorAt(1.0, QColor("#0f0e0d"))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QBrush(grad))
-        p.drawRect(self.rect())                                           # bant
-        p.setBrush(QColor("#3a3834"))                                     # sahne kenarında ince nokta dokusu
-        for x in range(stage.left() + 6, stage.right() - 3, 8):           # bant tabanlı olsaydı üst/alt
-            p.drawEllipse(QPointF(x, stage.top() + 5), 1.0, 1.0)          # sıralar kaydın dışında kalırdı
-            p.drawEllipse(QPointF(x, stage.bottom() - 4), 1.0, 1.0)
-        for y in range(stage.top() + 6, stage.bottom() - 3, 8):
-            p.drawEllipse(QPointF(stage.left() + 5, y), 1.0, 1.0)
-            p.drawEllipse(QPointF(stage.right() - 4, y), 1.0, 1.0)
-        p.setBrush(QColor(theme.PANEL))
-        p.drawRoundedRect(QRectF(inner), 12, 12)                          # yuvarlak iç köşeli tahta
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(QPen(QColor(theme.HINT_CARD_BORDER), 2))                 # turuncu iç çizgi
-        p.drawRoundedRect(QRectF(inner).adjusted(-4, -4, 4, 4), 14, 14)
-        p.setPen(QPen(QColor(theme.FRAME_LINE), 1))                       # gri dış çizgi
-        p.drawRoundedRect(QRectF(inner).adjusted(-band / 2 - 2, -band / 2 - 2, band / 2 + 2, band / 2 + 2), 18, 18)
-        pen = QPen(QColor(theme.BULB), 3); pen.setCapStyle(Qt.PenCapStyle.RoundCap); p.setPen(pen)
-        L = 22                                                            # köşe süsleri (L şeklinde)
-        for cx, cy, sx, sy in ((inner.left() - 8, inner.top() - 8, 1, 1), (inner.right() + 9, inner.top() - 8, -1, 1),
-                               (inner.left() - 8, inner.bottom() + 9, 1, -1), (inner.right() + 9, inner.bottom() + 9, -1, -1)):
-            p.drawLine(QPointF(cx, cy), QPointF(cx + sx * L, cy))
-            p.drawLine(QPointF(cx, cy), QPointF(cx, cy + sy * L))

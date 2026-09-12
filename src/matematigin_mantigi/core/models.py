@@ -61,6 +61,12 @@ class Nib(str, Enum):
     CHALK = "Tebeşir"
 
 
+class FrameStyle(str, Enum):
+    """Tahtanın ekran çerçevesi stili -- Ayarlar > Tahta kartından seçilir (bkz. ui/frames.py:FRAME_SPECS)."""
+    CLASSIC = "classic"
+    HUD = "hud"
+
+
 PALETTE: tuple[str, ...] = ("#1c1b19", "#c8322b", "#2456b8", "#1f8a4c")
 WIDTHS: tuple[int, ...] = (1, 2, 4, 8, 12)     # 5 kalınlık kademesi (px, basınç 0.5'te)
 OPTION_LETTERS = ("A", "B", "C", "D")

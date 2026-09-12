@@ -6,7 +6,7 @@ from dataclasses import fields
 from PyQt6.QtCore import QSettings
 
 from matematigin_mantigi.core.chroma_key import ChromaParams
-from matematigin_mantigi.core.models import HintMaskMode, Nib, PenSettings, Tool
+from matematigin_mantigi.core.models import FrameStyle, HintMaskMode, Nib, PenSettings, Tool
 
 # Tahtadaki gizlenebilir yazısal öğeler: (anahtar, etiket)
 VISIBILITY_KEYS: tuple[tuple[str, str], ...] = (
@@ -18,6 +18,7 @@ VISIBILITY_KEYS: tuple[tuple[str, str], ...] = (
     ("hide_link", "Sorudaki \"gizle\" bağlantısı"),
     ("question_number", "Soru numarası"),
     ("frame", "Ekran çerçevesi"),
+    ("frame_titles", "Çerçeve sunucu/marka bantları"),
     ("presenter", "Sunucu adı (webcam üstünde)"),
     ("logo", "Logo (sol üst)"),
     ("badge", "Tahtadaki kayıt rozeti (KAYIT · 00:00; kayda girer)"),
@@ -130,6 +131,11 @@ class AppSettings:
     def aspect_lock(self) -> bool: return self._bool("ui/aspect_lock", True)
     @aspect_lock.setter
     def aspect_lock(self, on: bool) -> None: self._q.setValue("ui/aspect_lock", bool(on))
+
+    @property
+    def frame_style(self) -> FrameStyle: return self._enum("frame_style", FrameStyle, FrameStyle.CLASSIC)
+    @frame_style.setter
+    def frame_style(self, s: FrameStyle) -> None: self._q.setValue("frame_style", s.value)
 
     @property
     def record_fps(self) -> int: return 30 if self._int("record/fps", 60) == 30 else 60

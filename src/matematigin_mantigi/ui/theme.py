@@ -47,6 +47,13 @@ WORK_PADDING = (0, 0, 0, 0)        # tahta kenardan kenara; top, right, bottom, 
 FRAME_BAND = 26                    # ekran çerçevesi kalınlığı (px); üstüne çizilemez
 FRAME_LINE = "#4a4741"             # çerçevenin iç ince çizgisi
 
+# HUD çerçevesi (Görev 8): beyaz zemin üstünde lacivert "teknik çizim" bandı -- bkz. ui/frames.py:paint_hud
+HUD_BAND = 52                       # klasikten kalın: büyük harf bant yazıları sığsın
+HUD_INK = "#12284c"                  # koyu lacivert dolgu/bant
+HUD_MID = "#1b3f7a"                  # orta mavi
+HUD_BLUE = "#2f6fd0"                 # parlak vurgu mavisi
+HUD_SOFT = "#8fc2f2"                 # soluk/yarı saydam açık mavi
+
 
 def tr_upper(text: str) -> str:
     """Türkçe büyük harf: i -> İ, ı -> I (str.upper 'Silgi' için 'SILGI' üretir)."""

@@ -369,6 +369,7 @@ class MainWindow(QMainWindow):
         s.logo_size = v.logo_size
         s.record_fps, s.record_height, s.audio_device = v.record_fps, v.record_height, v.audio_device
         s.aspect_lock = v.aspect_lock
+        s.frame_style = v.frame_style
         if v.camera_index != s.camera_index:
             s.camera_index = v.camera_index
             if self.camera_source_factory is not None:
@@ -425,6 +426,8 @@ class MainWindow(QMainWindow):
         self.work_area.set_item_visible("question_zone", s.visible("question_zone"))
         self.work_area.set_aspect_lock(s.aspect_lock)
         self.work_area.set_frame_visible(s.visible("frame"))
+        self.work_area.set_frame_style(s.frame_style)
+        self.work_area.set_item_visible("frame_titles", s.visible("frame_titles"))
         # presenter: metin (set_presenter_name) ve görünürlük (set_item_visible) artık AYRI -- göz düğmesi
         # ile Ayarlar'daki ad kutusu birbirini ezmesin diye (bkz. work_area.set_presenter_name docstring'i).
         self.work_area.set_presenter_name(s.presenter_name)

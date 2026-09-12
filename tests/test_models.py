@@ -1,5 +1,5 @@
 from matematigin_mantigi.core.models import (PALETTE, SAMPLE_QUESTIONS, TOOL_META, WIDTHS,
-                                             PenSettings, Question, Tool)
+                                             FrameStyle, PenSettings, Question, Tool)
 from matematigin_mantigi import app
 
 
@@ -29,6 +29,13 @@ def test_question_optional_fields_default():
     q = Question("S1", "k", None, "soru?", ("h",), "c")
     assert q.options == () and q.image is None
     assert SAMPLE_QUESTIONS[0].options == ("3", "4", "5", "6")
+
+
+def test_frame_style_enum_values():
+    """core/models.py'de Tool/Nib/HintMaskMode ile aynı yerde -- ui/frames.py:FRAME_SPECS bu değerleri
+    anahtar olarak kullanır, core/settings.py:AppSettings.frame_style _enum yardımcısıyla okur."""
+    assert FrameStyle.CLASSIC.value == "classic" and FrameStyle.HUD.value == "hud"
+    assert set(FrameStyle) == {FrameStyle.CLASSIC, FrameStyle.HUD}
 
 
 def test_parse_args_defaults():

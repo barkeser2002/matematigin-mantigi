@@ -1,7 +1,7 @@
 from PyQt6.QtCore import QSettings
 
 from matematigin_mantigi.core.chroma_key import ChromaParams
-from matematigin_mantigi.core.models import HintMaskMode, Nib, PenSettings, Tool
+from matematigin_mantigi.core.models import FrameStyle, HintMaskMode, Nib, PenSettings, Tool
 from matematigin_mantigi.core.settings import VISIBILITY_KEYS, AppSettings
 
 
@@ -100,3 +100,28 @@ def test_new_panel_visibility_keys_exist_and_default_true(ini_settings):
     # Not: dize round-trip'i zaten test_ui_settings_round_trip'te genel olarak (herhangi bir anahtar için)
     # doğrulanıyor -- set_visible/visible VISIBILITY_KEYS üyeliğini kontrol etmiyor, bu yüzden ayrı bir
     # round-trip testi burada Görev 6'ya özgü hiçbir şeyi ayırt etmezdi (uygulama geri alınsa da geçerdi).
+
+
+# --- Görev 8: HUD çerçeve stili ---------------------------------------------------------------------------
+
+def test_frame_style_setting_round_trips_and_falls_back_to_classic(tmp_path):
+    path = str(tmp_path / "frame.ini")
+    s = AppSettings(QSettings(path, QSettings.Format.IniFormat))
+    assert s.frame_style == FrameStyle.CLASSIC                     # varsayılan (_enum kalıbı)
+    s.frame_style = FrameStyle.HUD
+    s.sync()
+    t = AppSettings(QSettings(path, QSettings.Format.IniFormat))
+    assert t.frame_style == FrameStyle.HUD
+
+    q = QSettings(path, QSettings.Format.IniFormat)
+    q.setValue("frame_style", "duvar_kagidi"); q.sync()             # bozuk/bilinmeyen değer
+    assert AppSettings(q).frame_style == FrameStyle.CLASSIC
+
+
+def test_frame_titles_visibility_key_exists_and_defaults_true(ini_settings):
+    """VISIBILITY_KEYS'e Görev 8'de eklendi: Ayarlar'daki onay kutusu ızgarası kendiliğinden üretilsin
+    diye (bkz. test_settings_dialog.py). Varsayılan True: HUD seçilince kullanıcı ekstra bir şey
+    yapmadan sunucu adı/marka bandına yazılır (bkz. tests/test_work_area.py, Görev 8 bölümü)."""
+    keys = {k for k, _ in VISIBILITY_KEYS}
+    assert "frame_titles" in keys
+    assert ini_settings.visible("frame_titles") is True

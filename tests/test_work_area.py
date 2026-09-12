@@ -4,6 +4,7 @@ from PyQt6.QtCore import QPoint, QRect, Qt
 from PyQt6.QtWidgets import QWidget
 
 from matematigin_mantigi.core import layout_model as lm
+from matematigin_mantigi.core.models import FrameStyle
 from matematigin_mantigi.ui import theme
 from matematigin_mantigi.ui.theme import FontFamilies
 from matematigin_mantigi.ui.work_area import WorkArea
@@ -761,3 +762,96 @@ def test_work_area_set_families_scales_its_own_labels_but_not_logo_monogram(qtbo
     assert wa.brand.font().pixelSize() == round(30 * 1.5)
     assert wa.name_label.font().pixelSize() == round(28 * 1.5)
     assert wa.logo_label.font().pixelSize() == base_logo_px            # dokunulmadı, ölçek dışında kaldı
+
+
+# --- Görev 8: HUD çerçeve stili ---------------------------------------------------------------------------
+
+def test_default_frame_style_is_classic_with_unchanged_band(qtbot):
+    """Varsayılan davranış hiç dokunulmamış gibi kalmalı: frame_style eklenmeden önceki testlerin hepsi
+    CLASSIC'i varsayıyordu (bkz. B = theme.FRAME_BAND, dosyanın başında)."""
+    wa, _ = make(qtbot)
+    assert wa.frame_style == FrameStyle.CLASSIC
+    assert wa.frame_band() == B
+
+
+def test_hud_frame_style_grows_the_band_and_keeps_stage_at_16_9(qtbot):
+    wa, _ = make(qtbot)
+    stage_before = wa.stage_rect()
+    wa.set_frame_style(FrameStyle.HUD)
+    assert wa.frame_style == FrameStyle.HUD
+    assert wa.frame_band() == theme.HUD_BAND > B
+    stage, inner = wa.stage_rect(), wa.inner_rect()
+    assert stage == stage_before                                       # sahnenin kendisi değişmez
+    assert abs(stage.width() / stage.height() - 16 / 9) < 0.01          # hâlâ tam 16:9 (Görev 3)
+    assert inner == stage.adjusted(theme.HUD_BAND, theme.HUD_BAND, -theme.HUD_BAND, -theme.HUD_BAND)
+    assert wa.board.geometry() == inner                                 # bant büyüdüğü için tahta yeniden aktı
+
+
+def test_hud_frame_style_hides_brand_and_presenter_until_frame_titles_disabled(qtbot):
+    """HUD kendi bandına sunucu adı/marka çiziyor (draws_presenter/draws_brand=True): eski plaka
+    (wa.brand) ve el yazısı (wa.name_label) çift görünmesin diye gizlenir. frame_titles kapatılınca
+    (kullanıcı 'eski plaka + el yazısı düzenine dönsün' istediğinde) ikisi de geri gelir."""
+    wa, _ = make(qtbot)
+    assert not wa.brand.isHidden() and not wa.name_label.isHidden()     # klasikte ikisi de görünür (önce)
+
+    wa.set_frame_style(FrameStyle.HUD)
+    assert wa.brand.isHidden() and wa.name_label.isHidden()
+
+    wa.set_item_visible("frame_titles", False)
+    assert not wa.brand.isHidden() and not wa.name_label.isHidden()
+
+    wa.set_item_visible("frame_titles", True)
+    assert wa.brand.isHidden() and wa.name_label.isHidden()             # tekrar HUD'a döner
+
+
+def test_classic_frame_style_ignores_the_frame_titles_key(qtbot):
+    """'Klasik stilde bu anahtarın görünür bir etkisi olmaz' (brief): klasik zaten kendi başına yazı
+    çizmiyor, dolayısıyla frame_titles'ı açıp kapatmak eski widget'ları etkilememeli."""
+    wa, _ = make(qtbot)
+    assert wa.frame_style == FrameStyle.CLASSIC
+    wa.set_item_visible("frame_titles", False)
+    assert not wa.brand.isHidden() and not wa.name_label.isHidden()
+    wa.set_item_visible("frame_titles", True)
+    assert not wa.brand.isHidden() and not wa.name_label.isHidden()
+
+
+def test_hud_frame_paints_white_board_center_and_navy_band(qtbot):
+    """Gerçek WorkArea.grab() ile: HUD seçiliyken tahtanın (inner) ortası beyaz kalmalı (çerçeve tahtanın
+    içine taşmıyor) ve sahnenin üst/alt kenarında lacivert bir piksel bulunmalı (çerçeve fiilen çizilmiş)."""
+    wa, _ = make(qtbot)
+    wa.set_frame_style(FrameStyle.HUD)
+    inner, stage = wa.inner_rect(), wa.stage_rect()
+    img = wa.grab().toImage()
+    assert img.pixelColor(inner.center().x(), inner.center().y()).name() == theme.PANEL
+
+    navy = {theme.HUD_INK.lower(), theme.HUD_MID.lower(), theme.HUD_BLUE.lower()}
+    hit = any(img.pixelColor(x, stage.top() + 4).name().lower() in navy
+             for x in range(stage.left(), stage.right(), 5))
+    hit = hit or any(img.pixelColor(x, stage.bottom() - 4).name().lower() in navy
+                     for x in range(stage.left(), stage.right(), 5))
+    assert hit
+
+
+def test_hud_frame_style_survives_tiny_and_aspect_unlocked_window_sizes(qtbot):
+    """paint_hud çok küçük pencerede -- stage_rect() eski davranışa dönüp tüm alanı kapladığında,
+    inner_rect() bandın altına (negatife) düştüğünde -- çökmemeli. Doğrudan/izole kanıt
+    tests/test_frames.py:test_paint_hud_survives_degenerate_and_tiny_rects'te; burada gerçek widget +
+    resize + grab() ile uçtan uca aynı gereksinim doğrulanır."""
+    wa, _ = make(qtbot)
+    wa.set_frame_style(FrameStyle.HUD)
+    wa.resize(20, 20)                     # 20 < 2*HUD_BAND: inner negatif genişlik/yükseklik
+    wa.grab()                             # çökmemeli
+    wa.set_aspect_lock(False)
+    wa.resize(1, 1)                       # aşırı küçük + oran kilidi kapalı
+    wa.grab()                             # çökmemeli
+
+
+def test_frame_style_setting_flows_from_settings_values_style(qtbot):
+    """set_frame_style tek başına set_frame_visible ile aynı kalıbı izler: sakla, relayout(), update() --
+    burada relayout() gerçekten çağrıldığını (bant değişince bölgelerin yeniden aktığını) doğrular."""
+    wa, zones = make(qtbot)
+    before = zones["soru"].geometry()
+    wa.set_frame_style(FrameStyle.HUD)
+    after = zones["soru"].geometry()
+    assert before != after                                              # bant büyüdü, bölge yeniden konumlandı
+    assert after.left() == wa.stage_rect().left() + theme.HUD_BAND

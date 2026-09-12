@@ -5,13 +5,13 @@
     "semantic_hash": ""
   },
   "mac/build_mac.sh": {
-    "mtime": 1788856720.5141623,
-    "ast_hash": "436006c33c54cad634ee787cd6fbfe1f",
+    "mtime": 1788858319.7533827,
+    "ast_hash": "a3e822fd51ef5f2be031a78565458231",
     "semantic_hash": ""
   },
   "pyproject.toml": {
-    "mtime": 1788856720.5181699,
-    "ast_hash": "44aa3f43f2e2c8f8e4885e2b8de802f0",
+    "mtime": 1788885543.2501462,
+    "ast_hash": "adea54b152e6c92baf8ffee389909c20",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/__init__.py": {
@@ -25,8 +25,8 @@
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/app.py": {
-    "mtime": 1788856720.5201676,
-    "ast_hash": "548b65d98b6be574141cbb7ce04034aa",
+    "mtime": 1789138739.3849432,
+    "ast_hash": "dbbb877c09f50f44968530637f1f9d75",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/core/__init__.py": {
@@ -35,68 +35,68 @@
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/core/cameras.py": {
-    "mtime": 1788855476.5469286,
-    "ast_hash": "6f02b0eb1962911ffa893d6a3e3b2b15",
+    "mtime": 1788861374.3152683,
+    "ast_hash": "f46a88fee9b32a0a405a51adda529e64",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/core/chroma_key.py": {
-    "mtime": 1788776574.946427,
-    "ast_hash": "47e5eef5d833f45efb7a1aa8934a5639",
+    "mtime": 1788858319.7553835,
+    "ast_hash": "e5fe0e75c384ed602e0fcf92a8c340ae",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/core/layout_model.py": {
-    "mtime": 1788533073.7238767,
-    "ast_hash": "c605a0ae46e213677b0f0fce92661fef",
+    "mtime": 1789158886.0714605,
+    "ast_hash": "de7bb11e14a3c848db437c472413f378",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/core/models.py": {
-    "mtime": 1788777488.5774872,
-    "ast_hash": "0cd193d2541463ff56eecc236520e6f0",
+    "mtime": 1789181439.0598483,
+    "ast_hash": "42e5b62ff71a4cd5d200111359966d48",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/core/pdf_import.py": {
-    "mtime": 1788533073.7258763,
-    "ast_hash": "a2c1e3298b2ef57fae4567ffa7cf8249",
+    "mtime": 1788858319.7568884,
+    "ast_hash": "7733c8a18cef559ae7428336fa1fed70",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/core/question_flow.py": {
-    "mtime": 1788533073.72713,
-    "ast_hash": "44788e4b895513c3da89fcb6e7fe32be",
+    "mtime": 1789063335.6904252,
+    "ast_hash": "939c1cf5d68e26fe027ffcbc5e394f64",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/core/question_loader.py": {
-    "mtime": 1788533073.7281327,
-    "ast_hash": "6b8f94c56f27d4393d5b09df6291f49e",
+    "mtime": 1789063316.97174,
+    "ast_hash": "75e1568a8301a341db5662f08c5c4460",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/core/recorder.py": {
-    "mtime": 1788856720.5221684,
-    "ast_hash": "09b05e743ed13c08d83a8a6e3cdbc4b5",
+    "mtime": 1789063732.5432186,
+    "ast_hash": "6514ec2d44a0c48029886ac1b8aee80f",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/core/session_store.py": {
-    "mtime": 1788525402.238118,
-    "ast_hash": "5542dd4e9db879014df1f2ab554d294b",
+    "mtime": 1788858319.7584012,
+    "ast_hash": "1ae4a444355e56eafcf6514b59313247",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/core/settings.py": {
-    "mtime": 1788856720.5239377,
-    "ast_hash": "95d4d0b4bfc37b8d8b1ad6e30e5a346a",
+    "mtime": 1789181439.0619075,
+    "ast_hash": "9cecd305ea27ff81c07ce4479f62ad32",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/core/stroke.py": {
-    "mtime": 1788525402.240118,
-    "ast_hash": "b1d40c1a93d4739f4bb5c7b369fd50fb",
+    "mtime": 1788858319.759408,
+    "ast_hash": "16463526d93757637fd215c30777a6e8",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/paths.py": {
-    "mtime": 1788522056.9420483,
-    "ast_hash": "9cd50f1be31f6e5ab03b0641e13e4c8a",
+    "mtime": 1788857216.7291615,
+    "ast_hash": "983a34e661c3ff89d44c1eacb919bae7",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/pdf_import.py": {
-    "mtime": 1788533073.7316465,
-    "ast_hash": "c68f7f63522533ee6ada33eff475a8e5",
+    "mtime": 1788858319.759408,
+    "ast_hash": "50718dfd339c01ab88435074e3e835bd",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/ui/__init__.py": {
@@ -105,78 +105,78 @@
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/ui/camera_worker.py": {
-    "mtime": 1788776574.9484277,
-    "ast_hash": "fab70afa52439660ecab3c0a8192263b",
+    "mtime": 1788861374.3152683,
+    "ast_hash": "318a4f2433ec648274e064aa7944a4f3",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/ui/canvas.py": {
-    "mtime": 1788777488.5794861,
-    "ast_hash": "16377d48585527be48bc0151a7ace387",
+    "mtime": 1789138022.670056,
+    "ast_hash": "65dea5727700481942a8a216f3d3ad48",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/ui/cursors.py": {
-    "mtime": 1788769880.5287247,
-    "ast_hash": "d1f556cfa69a0d367a11446fb90d5705",
+    "mtime": 1788858319.7614067,
+    "ast_hash": "5fa1184012d35f379bf05f515701cf7e",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/ui/hint_zone.py": {
-    "mtime": 1788769880.5315268,
-    "ast_hash": "2b8df6a0f1157c1ec9278d1dc00f1694",
+    "mtime": 1789177930.5432518,
+    "ast_hash": "14d6d42f58246afd9a9c7ede2274b5e6",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/ui/main_window.py": {
-    "mtime": 1788856720.5264184,
-    "ast_hash": "3193387b56b17ba977576d9074ce529d",
+    "mtime": 1789181439.0639248,
+    "ast_hash": "8edbe14f134b819a8ef9d9a02aef224d",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/ui/pen_settings.py": {
-    "mtime": 1788769880.5345316,
-    "ast_hash": "0d299641a3df56f71b29bb2a23f67f75",
+    "mtime": 1788858319.7624073,
+    "ast_hash": "f68e23e310bcaa3c75c509a749e2f3d8",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/ui/question_zone.py": {
-    "mtime": 1788769880.5365312,
-    "ast_hash": "1a6662689b8bc8578f0b133dc79b6767",
+    "mtime": 1789179062.3560922,
+    "ast_hash": "6dd2e29b56feee940d7c8c7426707171",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/ui/record_badge.py": {
-    "mtime": 1788856720.5274172,
-    "ast_hash": "c16fd274c1a568b92f1ef0d2bfcb3df2",
+    "mtime": 1789176797.1684172,
+    "ast_hash": "03b53a77e2de909528f2c672382189c8",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/ui/settings_dialog.py": {
-    "mtime": 1788856720.5294685,
-    "ast_hash": "80f35e346aba34e819b81a504e595577",
+    "mtime": 1789181439.0658696,
+    "ast_hash": "110fab63acdc718b6b02b02de388a8c6",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/ui/theme.py": {
-    "mtime": 1788770149.5215323,
-    "ast_hash": "c125ab942bdb441c16e94418f7420963",
+    "mtime": 1789181439.06787,
+    "ast_hash": "50eb8ac7c64864a89f7294d25de54140",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/ui/toolbar.py": {
-    "mtime": 1788856720.530474,
-    "ast_hash": "5a9b432f5d299934adb9590c05cac84c",
+    "mtime": 1789063328.9595246,
+    "ast_hash": "79e7774548ff95c936d9b90bd36ded39",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/ui/webcam_panel.py": {
-    "mtime": 1788855476.5538585,
-    "ast_hash": "ae9f362a6771d92ec5cc74cedeed06cc",
+    "mtime": 1789176797.171418,
+    "ast_hash": "81336e3ad36430314409e82fad82ceae",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/ui/widgets.py": {
-    "mtime": 1788768929.6653347,
-    "ast_hash": "24ee1874d3e0d921077b3be1ec63fca9",
+    "mtime": 1788858319.7644062,
+    "ast_hash": "60d7f94b7bfb65120fceba8ddd205f95",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/ui/work_area.py": {
-    "mtime": 1788856720.532473,
-    "ast_hash": "035304f6a19b7e2d388e51ec64f10be4",
+    "mtime": 1789181439.0688696,
+    "ast_hash": "2590d55fca233debc0f8b7bc41145b6a",
     "semantic_hash": ""
   },
   "src/matematigin_mantigi/ui/zone.py": {
-    "mtime": 1788769880.5455315,
-    "ast_hash": "e3c9b60384a6998fa808e11b61107488",
+    "mtime": 1789137121.1997366,
+    "ast_hash": "fa18b4cb7ab3d1ade5a7f88abc6af2f7",
     "semantic_hash": ""
   },
   "support.js": {
@@ -185,118 +185,118 @@
     "semantic_hash": ""
   },
   "tests/conftest.py": {
-    "mtime": 1788855476.5578587,
-    "ast_hash": "1d7c4247158b089e41d689b3629079b2",
+    "mtime": 1788858319.7664118,
+    "ast_hash": "69132919d0efc271c55a2c493c800826",
     "semantic_hash": ""
   },
   "tests/test_camera_worker.py": {
-    "mtime": 1788776574.9504268,
-    "ast_hash": "8ce39bb9732e78f2c3d4c40a9d1e5f56",
+    "mtime": 1788861399.262918,
+    "ast_hash": "7a2ef4fce6884b1e2b5ccc6415849710",
     "semantic_hash": ""
   },
   "tests/test_cameras.py": {
-    "mtime": 1788855476.5588605,
-    "ast_hash": "d9501d3c012e61fde7626ee9ad596c93",
+    "mtime": 1788861432.3480117,
+    "ast_hash": "cbe19ee21427ffd4ff3940ff1ea00837",
     "semantic_hash": ""
   },
   "tests/test_canvas.py": {
-    "mtime": 1788777488.591005,
-    "ast_hash": "db58780b967666169503378d654ad83b",
+    "mtime": 1788858319.76741,
+    "ast_hash": "e98d7635d51928e502f4730b102bf243",
     "semantic_hash": ""
   },
   "tests/test_chroma_key.py": {
-    "mtime": 1788776574.9518979,
-    "ast_hash": "1c0d2063915d08d3c5cbcd6bf7322b63",
+    "mtime": 1788858319.76741,
+    "ast_hash": "f2eb06ca769bd6fb08631296a64dcc5a",
     "semantic_hash": ""
   },
   "tests/test_cursors.py": {
-    "mtime": 1788768929.6748464,
-    "ast_hash": "f72742d9f999c3d2580a417e3069d7cc",
+    "mtime": 1788858319.7684102,
+    "ast_hash": "3359db96d98057a2d889be64529edf36",
     "semantic_hash": ""
   },
   "tests/test_layout_model.py": {
-    "mtime": 1788533073.7521582,
-    "ast_hash": "2524c513dd66342c8454175904b9a345",
+    "mtime": 1789158854.803912,
+    "ast_hash": "b967133c30cae72608022bd37e759719",
     "semantic_hash": ""
   },
   "tests/test_main_window.py": {
-    "mtime": 1788856720.5344737,
-    "ast_hash": "de8efd7cd8d1629136d0717ce9617af2",
+    "mtime": 1789179721.507922,
+    "ast_hash": "ad5ac0cb9c67440a3fd8d861a9f961f5",
     "semantic_hash": ""
   },
   "tests/test_models.py": {
-    "mtime": 1788769880.5533805,
-    "ast_hash": "c9351ca95208e6e477d12aebde9f5b94",
+    "mtime": 1789181362.1061933,
+    "ast_hash": "63b2fc6b1b4da5da779e4eb6e714434c",
     "semantic_hash": ""
   },
   "tests/test_pdf_import.py": {
-    "mtime": 1788533073.75616,
-    "ast_hash": "df24076217b9184855780958a32407ce",
+    "mtime": 1788858319.7694101,
+    "ast_hash": "dff8e7bc0ed29d3ebffacf0c742465cf",
     "semantic_hash": ""
   },
   "tests/test_pen_settings.py": {
-    "mtime": 1788769880.555133,
-    "ast_hash": "e5e948eac32609bde7009bcf3bb5e7f5",
+    "mtime": 1788858319.77041,
+    "ast_hash": "4fa5ccedaa12a0745fb85b28aca4340e",
     "semantic_hash": ""
   },
   "tests/test_question_flow.py": {
-    "mtime": 1788533073.7606642,
-    "ast_hash": "df7264646bfffaf16247ccd87b725d24",
+    "mtime": 1788858319.77041,
+    "ast_hash": "3ee40001edf1f13f3651167e5b9ed337",
     "semantic_hash": ""
   },
   "tests/test_question_loader.py": {
-    "mtime": 1788533073.7616644,
-    "ast_hash": "a0667ddef4941451b17a931abe48a39c",
+    "mtime": 1788858319.77041,
+    "ast_hash": "f51220ca41e3abbc8ed8231b03a8fa9d",
     "semantic_hash": ""
   },
   "tests/test_recorder.py": {
-    "mtime": 1788856720.5364742,
-    "ast_hash": "be1a9d15e37a6e9cddb84ddb41dea795",
+    "mtime": 1789063767.0042684,
+    "ast_hash": "71d3632404ff82fb43d53900121658f1",
     "semantic_hash": ""
   },
   "tests/test_session_store.py": {
-    "mtime": 1788525402.261232,
-    "ast_hash": "d10a837cbc9ebd6f933525360c7b6d0e",
+    "mtime": 1788858319.77141,
+    "ast_hash": "1e8526abbd402ee8ffb0be694b9f12e5",
     "semantic_hash": ""
   },
   "tests/test_settings.py": {
-    "mtime": 1788856720.5379808,
-    "ast_hash": "b40c2fb31549033a7a2c59a9665e6398",
+    "mtime": 1789181341.7381096,
+    "ast_hash": "0c89d4d49c9ab8e65b5be730893611b7",
     "semantic_hash": ""
   },
   "tests/test_settings_dialog.py": {
-    "mtime": 1788856720.5399873,
-    "ast_hash": "b10f93f5c8bf49d13019d82d65f1cd19",
+    "mtime": 1789181354.588693,
+    "ast_hash": "3ab0f672308998c4aa0fe871941b38ef",
     "semantic_hash": ""
   },
   "tests/test_stroke.py": {
-    "mtime": 1788525402.2622323,
-    "ast_hash": "b7ca43a73d85bd6398a2a9a77f875efd",
+    "mtime": 1788858319.7724102,
+    "ast_hash": "da262a85e0a9613902b8836fd175aab4",
     "semantic_hash": ""
   },
   "tests/test_theme.py": {
-    "mtime": 1788525402.2632313,
-    "ast_hash": "f3640950083c6e59a403f4c6cb500bed",
+    "mtime": 1789176604.966354,
+    "ast_hash": "a7a4d1f4085f2c12ba39c2d4667f92c1",
     "semantic_hash": ""
   },
   "tests/test_toolbar.py": {
-    "mtime": 1788777488.59683,
-    "ast_hash": "6446931ee1b9dc594efcafd712799928",
+    "mtime": 1788858319.7734184,
+    "ast_hash": "43dfeeece57d68ba490bb0f34c8d6184",
     "semantic_hash": ""
   },
   "tests/test_webcam_panel.py": {
-    "mtime": 1788777488.5988348,
-    "ast_hash": "b27f3bc08ab45d78b426bc4c93dfd3ae",
+    "mtime": 1789175017.923943,
+    "ast_hash": "8efb92f9b647d9528ca4156af9fca8cd",
     "semantic_hash": ""
   },
   "tests/test_work_area.py": {
-    "mtime": 1788856720.541988,
-    "ast_hash": "d87b9ec1fb9edb1faf18762dbda45659",
+    "mtime": 1789181320.4071062,
+    "ast_hash": "03f7025488e323beb48185e5e6c27921",
     "semantic_hash": ""
   },
   "tests/test_zones.py": {
-    "mtime": 1788769880.562045,
-    "ast_hash": "91349b834025f335495236f8518e4933",
+    "mtime": 1789179112.837255,
+    "ast_hash": "73b0ab158580dabda9f2637b30a3b270",
     "semantic_hash": ""
   },
   "Ogretim Platformu.dc.html": {
@@ -310,8 +310,8 @@
     "semantic_hash": ""
   },
   "README.md": {
-    "mtime": 1788856720.511656,
-    "ast_hash": "cabb4dca8cb10624d2afef411014ae30",
+    "mtime": 1789154067.9376302,
+    "ast_hash": "3d6536f593b2619f513c187d208912d9",
     "semantic_hash": ""
   },
   "docs/superpowers/plans/2026-09-04-gorunus-demosu.md": {
@@ -352,6 +352,56 @@
   "uploads/UI_design_layout_specifications_202609041256.jpeg": {
     "mtime": 1788517480.0,
     "ast_hash": "b0bcfc698d040431b4d42cde945062f3",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/core/audio_capture.py": {
+    "mtime": 1789062996.0635471,
+    "ast_hash": "def14ced362b21f94219f8e93bf8ce16",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/ui/question_editor.py": {
+    "mtime": 1789139423.0055282,
+    "ast_hash": "e7484afa89e1f665f10052c3bd1c6ef6",
+    "semantic_hash": ""
+  },
+  "tests/test_audio_capture.py": {
+    "mtime": 1789063175.368232,
+    "ast_hash": "636355f3012b4cfaa3cb40967806087d",
+    "semantic_hash": ""
+  },
+  "tests/test_paths.py": {
+    "mtime": 1788857222.766589,
+    "ast_hash": "fff11ab2b4620309f4e2740c21311901",
+    "semantic_hash": ""
+  },
+  "tests/test_question_editor.py": {
+    "mtime": 1789139191.0926993,
+    "ast_hash": "de0eefb062510fecfc3a84399ec8a784",
+    "semantic_hash": ""
+  },
+  "windows/build_win.ps1": {
+    "mtime": 1789063258.7837052,
+    "ast_hash": "79a72eb847cd787fba129c60671066fc",
+    "semantic_hash": ""
+  },
+  ".github/workflows/mac.yml": {
+    "mtime": 1788857227.8183422,
+    "ast_hash": "0e882a6000ac9287cfc2b70da28e68ac",
+    "semantic_hash": ""
+  },
+  ".github/workflows/release.yml": {
+    "mtime": 1789063285.2119987,
+    "ast_hash": "f888dc9f87949421f9b311c3faf6fa0c",
+    "semantic_hash": ""
+  },
+  "src/matematigin_mantigi/ui/frames.py": {
+    "mtime": 1789181439.1348996,
+    "ast_hash": "9629d79ae346046ecb870a6065c28fde",
+    "semantic_hash": ""
+  },
+  "tests/test_frames.py": {
+    "mtime": 1789181276.4812136,
+    "ast_hash": "4ee3249e4b11486d870828428a9ef8ad",
     "semantic_hash": ""
   }
 }

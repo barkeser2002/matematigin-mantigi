@@ -25,10 +25,12 @@ class SessionStore:
         return self._counts.get(self._safe(question_id), 0)
 
     def save_snapshot(self, question_id: str, image: QImage) -> Path:
+        """Yazılamazsa OSError fırlatır (çağıran yakalayıp bildirir); sıra numarası yalnız başarıda ilerler."""
         key = self._safe(question_id)
-        self._counts[key] = self._counts.get(key, 0) + 1
+        n = self._counts.get(key, 0) + 1
         self.session_dir.mkdir(parents=True, exist_ok=True)
-        target = self.session_dir / f"{key}_{self._counts[key]:02d}.png"
+        target = self.session_dir / f"{key}_{n:02d}.png"
         if not image.save(str(target), "PNG"):
             raise OSError(f"PNG yazılamadı: {target}")
+        self._counts[key] = n
         return target

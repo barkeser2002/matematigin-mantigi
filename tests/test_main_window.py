@@ -1,3 +1,4 @@
+import pytest
 from PyQt6.QtCore import QPointF, QSize, Qt
 from PyQt6.QtGui import QColor
 
@@ -73,6 +74,27 @@ def test_prev_button_goes_back(window, qtbot):
 def test_next_without_drawing_writes_nothing(window, qtbot):
     qtbot.mouseClick(window.toolbar.next_button, Qt.MouseButton.LeftButton)
     assert not window.session_store.session_dir.exists()
+
+
+@pytest.mark.parametrize("failure", ["klasor", "png"])
+def test_snapshot_failure_on_question_change_is_reported_and_lesson_continues(window, qtbot, tmp_path, monkeypatch,
+                                                                              failure):
+    """pen#1/app#2: soru değişirken tahta PNG'si yazılamazsa (oturum klasörü yerine dosya / silinmiş klasör, dolu
+    disk) save_snapshot OSError fırlatıyor, yuva uygulamayı süren kayıtla birlikte düşürüyordu. Artık modal
+    olmayan uyarı (kancaya kadar gitmez); sonraki soruya geçilir, tahta temizlenir, ders sürer."""
+    from PyQt6.QtGui import QImage
+    posted = _capture_notices(monkeypatch)
+    if failure == "klasor":
+        (tmp_path / "engel").write_text("dosya", encoding="utf-8")
+        window.session_store.session_dir = tmp_path / "engel" / "oturum"
+    else:
+        monkeypatch.setattr(QImage, "save", lambda *a, **k: False)
+    c = window.canvas
+    c.begin_stroke(QPointF(50, 50), 0.6); c.extend_stroke(QPointF(200, 200), 0.6); c.end_stroke()
+    qtbot.mouseClick(window.toolbar.next_button, Qt.MouseButton.LeftButton)
+    assert window.flow.index == 1 and c.is_empty()
+    assert window.question_zone.number_label.text() == "2."
+    assert posted and posted[0][0] == "Tahta görüntüsü kaydedilemedi" and "S1" in posted[0][1]
 
 
 def test_hint_reveal_and_mask_mode(window, qtbot):
@@ -310,6 +332,29 @@ def test_layout_edit_persists_to_file(window, qtbot, tmp_path):
     assert lm.load_layout(tmp_path / "duzen.json") == lm.DEFAULT_LAYOUT
     window.work_area.done_button.click()
     assert not window.work_area.edit_mode and not window.toolbar.layout_button.isChecked()
+
+
+def _capture_notices(monkeypatch) -> list:
+    from matematigin_mantigi.ui import error_notice
+    posted = []
+    monkeypatch.setattr(error_notice, "post", lambda title, text, key=None: posted.append((title, text, key)))
+    return posted
+
+
+def test_layout_save_failure_is_reported_and_editing_continues(window, qtbot, tmp_path, monkeypatch):
+    """app#2: düzen değişince duzen.json yazılamazsa (izin, salt okunur disk, klasör yerine dosya) layoutChanged
+    lambda'sındaki save_layout OSError fırlatıyor, yuva uygulamayı süren kayıtla birlikte düşürüyordu. Artık modal
+    olmayan uyarı (kancaya kadar gitmez); yeni düzen bu oturumda geçerli kalır, düzenleme sürer."""
+    posted = _capture_notices(monkeypatch)
+    (tmp_path / "engel").write_text("dosya", encoding="utf-8")
+    window.layout_path = tmp_path / "engel" / "duzen.json"
+    qtbot.mouseClick(window.toolbar.layout_button, Qt.MouseButton.LeftButton)
+    window.work_area.reset_layout()
+    window.work_area.reset_layout()                         # tekrar: aynı uyarı anahtarı (pencere yağmuru yok)
+    assert [p[0] for p in posted] == ["Düzen kaydedilemedi"] * 2 and posted[0][2] == posted[1][2]
+    assert "duzen.json" in posted[0][1]
+    window.work_area.done_button.click()
+    assert not window.work_area.edit_mode
 
 
 def test_restores_settings_on_start(qtbot, tmp_path, ini_settings, dead_camera):

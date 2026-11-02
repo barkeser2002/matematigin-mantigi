@@ -24,7 +24,7 @@ from matematigin_mantigi.ui.question_editor import QuestionEditorDialog
 from matematigin_mantigi.ui.question_zone import QuestionZone
 from matematigin_mantigi.ui.record_badge import RecordBadge
 from matematigin_mantigi.ui.settings_dialog import SettingsDialog, SettingsValues
-from matematigin_mantigi.ui import theme
+from matematigin_mantigi.ui import error_notice, theme
 from matematigin_mantigi.ui.theme import FontFamilies
 from matematigin_mantigi.ui.toolbar import ToolBar
 from matematigin_mantigi.ui.webcam_panel import WebcamPanel
@@ -124,7 +124,7 @@ class MainWindow(QMainWindow):
         tb.editorRequested.connect(self.open_editor)
         tb.layoutEditToggled.connect(self.work_area.set_edit_mode)
         self.work_area.editModeChanged.connect(tb.set_layout_edit)
-        self.work_area.layoutChanged.connect(lambda lay: lm.save_layout(self.layout_path, lay))
+        self.work_area.layoutChanged.connect(self._save_layout)
         self.work_area.visibilityToggled.connect(self._on_visibility_toggled)
         self.work_area.fontScaleChanged.connect(self._on_font_scale_changed)
         self.badge.ticked.connect(tb.set_recording_time)     # süre araç çubuğunda sayar (kayda girmez)
@@ -233,8 +233,26 @@ class MainWindow(QMainWindow):
 
     def _on_question_leaving(self, i: int) -> None:
         if not self.canvas.is_empty():
-            self.session_store.save_snapshot(self.flow.questions[i].id, self.canvas.snapshot_image())
+            qid = self.flow.questions[i].id
+            try:
+                self.session_store.save_snapshot(qid, self.canvas.snapshot_image())
+            except OSError as err:
+                # Yuvadan kaçan hata uygulamayı (süren kayıtla) düşürüyordu; ders sürer, yalnız bu PNG eksik kalır.
+                error_notice.post("Tahta görüntüsü kaydedilemedi",
+                                  f"{qid} sorusunun tahta resmi kaydedilemedi: {error_notice.describe_os_error(err)}."
+                                  f"\nKlasör: {self.session_store.session_dir}\nDers ve süren kayıt devam ediyor.",
+                                  key="tahta-goruntusu")
         self.canvas.clear()
+
+    def _save_layout(self, layout) -> None:
+        """Düzen değişince duzen.json'a yazar; yazılamazsa uygulama düşmez, uyarı verilir."""
+        try:
+            lm.save_layout(self.layout_path, layout)
+        except OSError as err:
+            error_notice.post("Düzen kaydedilemedi",
+                              f"{self.layout_path.name} yazılamadı: {error_notice.describe_os_error(err)}.\n"
+                              "Bölgelerin yeni yeri bu oturumda geçerli; uygulama yeniden açılınca eski düzen gelir.",
+                              key="duzen")
 
     def _on_question_changed(self, i: int) -> None:
         if not self.flow.questions:

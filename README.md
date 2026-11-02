@@ -83,12 +83,17 @@ soru metni, A–D şıkları, cevap ve 4 ipucu doldur, **Resim seç…** ile gö
 kopyalanır). **Kaydet** xlsx'e yazar ve uygulamayı yeniden başlatmadan tazeler. `--sorular` verilmezse veri
 klasöründeki `sorular_sablon.xlsx` düzenlenir.
 
-Kaydet önce dosyanın o anki hâlini yanına `sorular_sablon.xlsx.bak` olarak kopyalar, yeni sürümü geçici bir dosyaya
-yazar ve ancak yazım tamamlanınca yerine koyar: disk dolsa, USB çıkarılsa ya da dosya Excel'de açık olsa da soru
-dosyası yarım kalmaz (mesaj dosyanın değişmediğini söyler). Bir önceki sürüme dönmek için uygulama kapalıyken `.bak`
-dosyasının adını `sorular_sablon.xlsx` yapın. Soru dosyası okunamazsa uygulama dosya adını ve sebebi söyleyip örnek
-sorularla açılır; editör böyle bir dosyanın üzerine yazmaz (önce düzeltilmeli ya da klasörden kaldırılmalı).
-`duzen.json` da aynı yolla (geçici dosya + yerine koyma) yazılır.
+Kaydet yeni sürümü önce aynı klasörde geçici bir dosyaya yazar ve geri okuyarak denetler; ancak ondan sonra dosyanın o
+anki hâlini yanına `sorular_sablon.xlsx.bak` olarak kopyalar ve yeni sürümü yerine koyar: disk dolsa, USB çıkarılsa ya
+da dosya Excel'de açık olsa da soru dosyası ve yedeği yarım kalmaz (mesaj dosyanın değişmediğini ve hangi dosyanın
+kilitli olduğunu söyler). Excel'in saklayamadığı karakterler (PDF'den kopyalanan metindeki görünmez işaretler gibi)
+kaydederken atılır. Windows'ta eşitleme ya da virüs tarayıcının anlık kilidinde kısa aralarla birkaç kez yeniden
+denenir; yarıda kalmış eski yazımların `.sorular_sablon.xlsx.<…>.tmp` artıkları sonraki başarılı kayıtta silinir. Bir
+önceki sürüme dönmek için uygulama kapalıyken `.bak` dosyasının adını `sorular_sablon.xlsx` yapın. Soru dosyası
+okunamazsa uygulama dosya adını ve sebebi söyleyip örnek sorularla açılır; editör böyle bir dosyanın üzerine yazmaz
+(önce düzeltilmeli ya da klasörden kaldırılmalı). Örnek sorular hiçbir zaman gerçek soruların yerine yazılmaz: dosya
+uygulama açıkken düzelirse Kaydet önce dosyadaki soruları editöre yüklemeyi önerir; dosya yoksa ya da boşsa ama `.bak`
+yedeğinde sorular varsa yedekten yüklemeyi önerir. `duzen.json` da aynı yolla (geçici dosya + yerine koyma) yazılır.
 
 ## Hatalar ve uyarılar
 

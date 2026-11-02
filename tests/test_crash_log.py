@@ -166,7 +166,118 @@ def test_half_written_question_file_still_opens_the_app_with_samples(tmp_path):
     assert "PENCERE True ['S1', 'S2', 'S3']" in r.stdout
     warning = next(ln for ln in r.stdout.splitlines() if ln.startswith("UYARI"))
     assert "sorular.xlsx" in warning and "Sebep:" in warning and "Örnek sorularla" in warning
+    assert "dosya bozuk ya da yazımı yarıda kalmış" in warning, warning
     assert "yakalanan hata (soru dosyası" in (tmp_path / "hatalar.log").read_text(encoding="utf-8")
+
+
+# Q1 uçtan uca: soru dosyası açılışta okunamaz (yarım satır), uygulama örnek sorularla açılır; pencere açıkken öğretmen
+# dosyayı Excel'de düzeltir. Editör iki tur gerçek modal exec ile açılır, her turda Kaydet'e iki kez basılır.
+_SAMPLES_THEN_FIXED = textwrap.dedent('''
+    import hashlib, json, sys
+    from pathlib import Path
+    import openpyxl
+    from PyQt6.QtCore import QSettings, QTimer
+    from PyQt6.QtWidgets import QApplication, QMessageBox
+    from matematigin_mantigi import app as app_mod
+    from matematigin_mantigi.core.models import Question
+    from matematigin_mantigi.core.question_loader import backup_path, load_backup, load_questions, write_questions
+    from matematigin_mantigi.core.settings import AppSettings
+    from matematigin_mantigi.ui import question_editor as qe
+
+    p = Path("sorular.xlsx")
+    real = [Question(f"G{i}", "gerçek", 8, f"Öğretmenin gerçek sorusu {i}", ("i1",), "c", (), None)
+            for i in range(1, 6)]
+    write_questions(p, real)
+    wb = openpyxl.load_workbook(p); wb.active.append(["G6", "yarım satır"]); wb.save(p)     # açılışta okunamaz
+    backup_path(p).unlink(missing_ok=True)
+    answer = qe.RELOAD_FROM_FILE if sys.argv[1] == "yukle" else qe.KEEP_EDITING
+    res = {"uyarilar": [], "sorular": [], "turlar": []}
+    QMessageBox.warning = staticmethod(lambda _p, title, text, *a, **k: res["uyarilar"].append(text.splitlines()[0]))
+
+    def ask(box):                                   # editörün sorusu (gerçek QMessageBox, exec yerine yanıt)
+        res["sorular"].append(box.text().splitlines()[0])
+        next(b for b in box.buttons() if b.text() == answer).click()
+        return 0
+    QMessageBox.exec = ask
+
+    def texts(load):
+        try:
+            return [q.soru for q in load(p)]
+        except Exception as err:
+            return type(err).__name__
+
+    real_build = app_mod.build_window
+
+    def build(args, fam, settings=None):
+        win = real_build(args, fam, AppSettings(QSettings("ayarlar.ini", QSettings.Format.IniFormat)))
+        res["acilis"] = [q.id for q in win.flow.questions]
+
+        def fixed_in_excel():
+            write_questions(p, real)                # öğretmen satırı Excel'de düzeltip kaydetti (Excel .bak yazmaz)
+            backup_path(p).unlink()
+            res["duzeltilen"] = hashlib.sha256(p.read_bytes()).hexdigest()
+            QTimer.singleShot(0, lambda: editor_round(1))
+
+        def editor_round(n):
+            def press_save_twice():
+                dlg = QApplication.activeModalWidget()
+                if not isinstance(dlg, qe.QuestionEditorDialog):
+                    QTimer.singleShot(20, press_save_twice)
+                    return
+                for _ in range(2):
+                    if dlg.isVisible():
+                        dlg.save_button.click()
+                if dlg.isVisible():
+                    dlg.reject()
+            QTimer.singleShot(0, press_save_twice)
+            win.open_editor()                       # gerçek modal exec
+            res["turlar"].append({"dosya": texts(load_questions),
+                                  "yedek": texts(load_backup) if backup_path(p).exists() else None,
+                                  "ayni": hashlib.sha256(p.read_bytes()).hexdigest() == res["duzeltilen"],
+                                  "tahta": [q.id for q in win.flow.questions]})
+            if n == 1:
+                QTimer.singleShot(0, lambda: editor_round(2))
+            else:
+                res["artik"] = sorted(x.name for x in Path(".").iterdir() if x.name.endswith(".tmp"))
+                print("SONUC " + json.dumps(res, ensure_ascii=False), flush=True)
+                win.close()
+                QApplication.instance().quit()
+        QTimer.singleShot(200, fixed_in_excel)
+        return win
+
+    app_mod.build_window = build
+    sys.exit(app_mod.main(["matematigin-mantigi", "--kamera-yok", "--sorular", "sorular.xlsx",
+                           "--duzen", "duzen.json"]))
+''')
+
+
+@pytest.mark.parametrize("answer", ["yukle", "donme"])
+def test_app_opened_with_samples_never_saves_them_over_the_fixed_question_file(tmp_path, answer):
+    """Q1 uçtan uca (inceleme v07): örnek sorularla açılan uygulamada dosya sonradan düzelince editörün Kaydet'i 3
+    örnek soruyu gerçek dosyanın üzerine uyarısız yazıyor, ikinci turda yedek de örneklerle değişiyordu. Artık editör
+    dosyadaki soruları yüklemeyi önerir: öğretmen yüklerse dosya ve yedek gerçek sorularla kalır, tahta onları gösterir
+    ve ikinci turda soru sorulmaz; yüklemezse hiçbir şey yazılmaz (dosya bayt bayt aynı, yedek oluşmaz)."""
+    script = tmp_path / "calistir.py"
+    script.write_text(_SAMPLES_THEN_FIXED, encoding="utf-8")
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", XDG_CONFIG_HOME=str(tmp_path / "cfg"))
+    r = subprocess.run([sys.executable, str(script), answer], cwd=tmp_path, env=env, capture_output=True, text=True,
+                       timeout=120)
+    line = next((ln for ln in r.stdout.splitlines() if ln.startswith("SONUC ")), None)
+    assert r.returncode == 0 and line is not None, f"çıkış {r.returncode}:\n{r.stdout}\n{r.stderr[-2000:]}"
+    import json
+    res = json.loads(line[len("SONUC "):])
+    real = [f"Öğretmenin gerçek sorusu {i}" for i in range(1, 6)]
+    assert res["acilis"] == ["S1", "S2", "S3"] and res["uyarilar"] == ["Soru dosyası okunamadı: sorular.xlsx"], res
+    if answer == "yukle":
+        assert len(res["sorular"]) == 1 and "sorular.xlsx" in res["sorular"][0], res
+        for tur in res["turlar"]:
+            assert tur["dosya"] == real and tur["yedek"] == real, res
+            assert tur["tahta"] == [f"G{i}" for i in range(1, 6)], res
+    else:
+        assert len(res["sorular"]) == 4, res
+        for tur in res["turlar"]:
+            assert tur == {"dosya": real, "yedek": None, "ayni": True, "tahta": ["S1", "S2", "S3"]}, res
+    assert res["artik"] == [], res
 
 
 # --- süreç içi: kancanın kendi sözleşmesi -------------------------------------------------------------------

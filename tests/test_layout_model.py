@@ -1,8 +1,10 @@
 import errno
 import json
+import os
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -174,6 +176,61 @@ def test_disk_full_mid_layout_save_keeps_the_old_layout(tmp_path):
     assert r.returncode == 0 and line is not None, f"çıkış {r.returncode}:\n{r.stdout}\n{r.stderr[-2000:]}"
     res = json.loads(line[len("SONUC "):])
     assert res == {"hata": errno.EFBIG, "eski_duzen": True, "dosyalar": ["calistir.py", "duzen.json"]}
+
+
+def _flaky_replace(monkeypatch, target: Path, failures):
+    """target'a os.replace ilk `failures` denemede (None: her seferinde) PermissionError verir; denemeler listede."""
+    real_replace = os.replace
+    attempts = []
+
+    def replace(src, dst, *a, **k):
+        if os.fspath(dst) == os.fspath(target):
+            attempts.append(time.monotonic())
+            if failures is None or len(attempts) <= failures:
+                raise PermissionError(errno.EACCES, "The process cannot access the file", os.fspath(src), None,
+                                      os.fspath(dst))
+        return real_replace(src, dst, *a, **k)
+    monkeypatch.setattr(os, "replace", replace)
+    return attempts
+
+
+def test_brief_lock_on_layout_save_is_retried(tmp_path, monkeypatch):
+    """Q5: Windows'ta OneDrive/Defender duzen.json'u ya da yeni geçici dosyayı anlık tutunca os.replace'in ilk
+    PermissionError'ı 'Düzen kaydedilemedi' uyarısı veriyordu. Kısa aralarla yeniden denenir."""
+    p = tmp_path / "duzen.json"
+    lm.save_layout(p, _OLD)
+    attempts = _flaky_replace(monkeypatch, p, failures=2)
+    lm.save_layout(p, dict(lm.DEFAULT_LAYOUT))
+    assert len(attempts) == 3 and lm.load_layout(p) == lm.DEFAULT_LAYOUT
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["duzen.json"]
+
+
+def test_lasting_lock_on_layout_save_gives_up_quickly(tmp_path, monkeypatch):
+    """Q5: kalıcı kilitte birkaç kısa denemeden sonra PermissionError çağırana (uyarıya) gider; eski düzen kalır, geçici
+    dosya kalmaz, bekleme kısa (her sürüklemede çalışır, arayüz donmamalı)."""
+    from matematigin_mantigi.core import question_loader
+    p = tmp_path / "duzen.json"
+    lm.save_layout(p, _OLD)
+    attempts = _flaky_replace(monkeypatch, p, failures=None)
+    t0 = time.monotonic()
+    with pytest.raises(PermissionError):
+        lm.save_layout(p, dict(lm.DEFAULT_LAYOUT))
+    assert len(attempts) == len(question_loader.REPLACE_RETRY_S) + 1 and time.monotonic() - t0 < 2.0
+    assert lm.load_layout(p) == _OLD and sorted(x.name for x in tmp_path.iterdir()) == ["duzen.json"]
+
+
+def test_stale_layout_temp_files_are_removed_after_a_successful_save(tmp_path):
+    """Q5: çökmede kalan eski '.duzen.json.<8 onaltılık>.tmp' artıkları başarılı bir kayıttan sonra silinir (bir saatten
+    eskiler); yenileri ve kalıba uymayanlar kalır."""
+    old = time.time() - 2 * 3600
+    for name in (".duzen.json.0123abcd.tmp", ".duzen.json.fedcba98.tmp", ".duzen.json.yedek.tmp"):
+        f = tmp_path / name
+        f.write_text("{", encoding="utf-8")
+        if name != ".duzen.json.fedcba98.tmp":
+            os.utime(f, (old, old))
+    lm.save_layout(tmp_path / "duzen.json", _OLD)
+    assert sorted(x.name for x in tmp_path.iterdir()) == [".duzen.json.fedcba98.tmp", ".duzen.json.yedek.tmp",
+                                                         "duzen.json"]
 
 
 def test_load_layout_reads_legacy_integer_file_unchanged(tmp_path):

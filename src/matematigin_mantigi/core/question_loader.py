@@ -4,13 +4,15 @@ from __future__ import annotations
 import contextlib
 import filecmp
 import os
+import re
 import secrets
 import shutil
+import stat
+import time
 from pathlib import Path
 from typing import Callable, Sequence
 
 import openpyxl
-from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Font
 
 from matematigin_mantigi.core.models import SAMPLE_QUESTIONS, Question
@@ -21,6 +23,11 @@ ALL_COLUMNS = REQUIRED_COLUMNS + OPTIONAL_COLUMNS
 _WIDTHS = {"id": 8, "konu": 16, "sinif": 8, "soru": 60, "ipucu1": 40, "ipucu2": 40, "ipucu3": 40,
            "cevap": 16, "ipucu4": 40, "a": 14, "b": 14, "c": 14, "d": 14, "gorsel": 28}
 _LINE_BREAK_CONTROLS = str.maketrans({"\x0b": "\n", "\x0c": "\n"})   # Word/PowerPoint satır sonu, sayfa sonu
+# XML 1.0'ın taşıyamadığı karakterler: C0 denetim karakterleri (sekme, satır sonu ve satır başı dışında), tek başına
+# vekil (U+D800-U+DFFF), U+FFFE ve U+FFFF. openpyxl yalnız C0'ı reddeder; kalanını yazar ama dosya bir daha okunamaz.
+_XML_ILLEGAL_RE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
+REPLACE_RETRY_S = (0.1, 0.1, 0.1)   # os.replace PermissionError'da yeniden deneme aralıkları (Windows anlık kilidi)
+STALE_TMP_S = 3600                   # bundan eski '.<ad>.<onaltılık>.tmp' yarıda kalmış bir yazımın artığıdır
 
 
 class QuestionTemplateError(ValueError):
@@ -31,11 +38,16 @@ class EmptyTemplateError(QuestionTemplateError):
     """Şablon okunabildi ama hiç soru yok (boş şablon): editör soruları güvenle ona yazabilir."""
 
 
+class UnreadableWriteError(ValueError):
+    """Yeni sürüm yazıldı ama geri okunamadı ya da eksik okundu: soru dosyasının yerine konmadı, dosya ve yedeği
+    değişmedi. __cause__ asıl okuma hatasıdır."""
+
+
 def clean_text(text: str) -> str:
-    """Excel hücresine yazılamayan kontrol karakterlerini temizler (openpyxl bunlarda IllegalCharacterError
-    fırlatır): dikey sekme ve sayfa sonu (Word/PowerPoint'ten kopyalanan satır sonları) satır sonu olur, gerisi
-    (\\x00-\\x1f) atılır. Sekme ve satır sonu korunur."""
-    return ILLEGAL_CHARACTERS_RE.sub("", text.translate(_LINE_BREAK_CONTROLS))
+    """Excel hücresine yazılamayan ya da yazılınca dosyayı okunamaz yapan karakterleri temizler: dikey sekme ve
+    sayfa sonu (Word/PowerPoint'ten kopyalanan satır sonları) satır sonu olur; diğer denetim karakterleri, tek başına
+    vekiller ve U+FFFE/U+FFFF atılır. Sekme ve satır sonu korunur."""
+    return _XML_ILLEGAL_RE.sub("", text.translate(_LINE_BREAK_CONTROLS))
 
 
 def backup_path(path: Path) -> Path:
@@ -44,29 +56,84 @@ def backup_path(path: Path) -> Path:
     return path.with_name(path.name + ".bak")
 
 
-def _replace_atomically(target: Path, write: Callable[[Path], object]) -> None:
-    """write(tmp) hedefin klasöründeki geçici bir dosyaya yazar; hedef ancak yazım tamamlanınca os.replace ile tek
-    adımda değişir. Yazım yarıda kalırsa (dolu disk, çıkarılan USB) hedef eski hâlinde kalır, geçici dosya silinir.
-    Windows'ta hedef başka bir programda (Excel) açıksa os.replace PermissionError verir; hedef yine değişmez."""
+def replace_atomically(target: Path, write: Callable[[Path], object],
+                       before_replace: Callable[[Path], object] | None = None) -> None:
+    """write(tmp) hedefin klasöründeki geçici bir dosyaya yazar; before_replace(tmp) (geri okuma, yedek) de geçerse
+    hedef os.replace ile tek adımda değişir. Herhangi bir adımda hata olursa (yazım yarıda kaldı: dolu disk, çıkarılan
+    USB; geri okunamadı) hedef eski hâlinde kalır, geçici dosya silinir. Windows'ta hedef başka bir programda (Excel)
+    açıksa os.replace PermissionError verir (kısa yeniden denemelerden sonra); hedef yine değişmez. Soru dosyası, yedeği
+    ve duzen.json bununla yazılır; başarılı yazımdan sonra hedefin eski geçici dosya artıkları temizlenir."""
+    target = Path(target)
     tmp = target.with_name(f".{target.name}.{secrets.token_hex(4)}.tmp")
     try:
         write(tmp)
+        if before_replace is not None:
+            before_replace(tmp)
         if os.name == "posix" and target.exists():
             with contextlib.suppress(OSError):      # izinler eski dosyanınki gibi kalsın
                 shutil.copymode(target, tmp)
-        os.replace(tmp, target)
+        _replace_retrying(tmp, target)
     except BaseException:
         with contextlib.suppress(OSError):
             tmp.unlink(missing_ok=True)
         raise
+    _remove_stale_temps(target)
+
+
+def _replace_retrying(src: Path, dst: Path) -> None:
+    """os.replace; PermissionError'da REPLACE_RETRY_S aralarıyla yeniden dener. Windows'ta eşitleme istemcisi
+    (OneDrive) ya da virüs tarayıcı (Defender) hedefi ya da yeni yazılan dosyayı birkaç on milisaniye açık tutabilir;
+    kalıcı kilitte (Excel) son PermissionError gider. Toplam bekleme ~0,3 sn: arayüz donmaz."""
+    for delay in REPLACE_RETRY_S:
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            time.sleep(delay)
+    os.replace(src, dst)
+
+
+def _remove_stale_temps(target: Path) -> None:
+    """Hedefin yarıda kalmış eski geçici dosyalarını (.<ad>.<8 onaltılık>.tmp; çökme, elektrik kesintisi ya da
+    Windows'ta silinemeyen artık) siler. Yalnız STALE_TMP_S'den eskiler: aynı anda yazan başka bir pencerenin geçici
+    dosyasına dokunulmaz. Hata olursa sessizce geçer (yazım zaten tamamlandı)."""
+    prefix, now = f".{target.name}.", time.time()
+    with contextlib.suppress(OSError):
+        for leftover in target.parent.iterdir():
+            name = leftover.name
+            if not (name.startswith(prefix) and name.endswith(".tmp")
+                    and re.fullmatch(r"[0-9a-f]{8}", name[len(prefix):-len(".tmp")])):
+                continue
+            with contextlib.suppress(OSError):
+                if leftover.is_file() and now - leftover.stat().st_mtime > STALE_TMP_S:
+                    _make_writable(leftover)
+                    leftover.unlink()
+
+
+def _check_written(tmp: Path, folder: Path, expected: int) -> None:
+    """Geçici dosyaya yazılan çalışma kitabı soru dosyası gibi geri okunur: okunamayan (XML'de yasak karakter) ya da
+    eksik okunan sürüm yerine konmaz. Dosya hatası (OSError) olduğu gibi gider."""
+    try:
+        with open(tmp, "rb") as fh:                 # dosya nesnesi: openpyxl .tmp uzantısını reddeder
+            got = len(_questions_from_rows(_read_rows(fh), folder))
+    except EmptyTemplateError:
+        got = 0
+    except OSError:
+        raise
+    except Exception as err:  # noqa: BLE001 - geri okunamayan her sürüm reddedilir
+        raise UnreadableWriteError(f"yazılan dosya geri okunamadı ({type(err).__name__}: {err})") from err
+    if got != expected:
+        raise UnreadableWriteError(f"{expected} soru yazıldı, {got} soru geri okundu")
 
 
 def write_questions(path: Path, questions: Sequence[Question]) -> Path:
     """Soruları tüm sütunlarla yazar. Görsel yolu xlsx klasörüne göre göreli ise öyle bırakılır.
 
-    Yazım dosyayı yarıda bırakmaz (#29): önce dosyanın o anki hâli <ad>.bak'a kopyalanır, sonra yeni çalışma kitabı
-    aynı klasörde geçici dosyaya yazılıp os.replace ile yerine konur (yedek de aynı yolla). Herhangi bir adımda hata
-    olursa soru dosyası ve önceki yedek değişmez; OSError çağırana gider."""
+    Yazım dosyayı yarıda bırakmaz (#29): yeni çalışma kitabı aynı klasörde geçici dosyaya yazılır ve geri okunur
+    (okunamayan sürüm yerine konmaz, Q2); ancak ondan sonra dosyanın o anki hâli <ad>.bak'a kopyalanır ve yeni sürüm
+    os.replace ile yerine konur (yedek de aynı yolla). Yazım, geri okuma ya da yedek adımında hata olursa ne soru
+    dosyası ne önceki yedek değişir; son adımda (yerine koyma, ör. dosya Excel'de açık) hata olursa soru dosyası
+    değişmez, yedek onun o anki hâli olur. OSError ve UnreadableWriteError çağırana gider."""
     path = Path(path)
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -79,13 +146,34 @@ def write_questions(path: Path, questions: Sequence[Question]) -> Path:
         opts = list(q.options[:4]) + [""] * max(0, 4 - len(q.options))
         ws.append([q.id, q.konu, q.sinif, q.soru, hints[0], hints[1], hints[2], q.cevap,
                    hints[3], *opts, q.image or ""])
+    for row in ws.iter_rows(min_row=2):
+        for cell in row:
+            # openpyxl '=' ile başlayan metni formül, '#N/A' gibisini hata hücresi yapar: formülün değeri okunurken
+            # boş gelir (ipucu kaybolur, boş soru metni dosyayı okunamaz yapar). Metin metin olarak yazılır.
+            if isinstance(cell.value, str) and cell.data_type in ("f", "e"):
+                cell.data_type = "s"
     for i, col in enumerate(ALL_COLUMNS):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i + 1)].width = _WIDTHS[col]
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        _replace_atomically(backup_path(path), lambda tmp: shutil.copy2(path, tmp))
-    _replace_atomically(path, wb.save)
+
+    def check_then_back_up(tmp: Path) -> None:
+        _check_written(tmp, path.parent, len(questions))
+        if path.exists():
+            bak = backup_path(path)
+            _make_writable(bak)
+            # copyfile: yedek soru dosyasının salt okunur özniteliğini/iznini almaz (copy2 alıyordu; Q3).
+            replace_atomically(bak, lambda bak_tmp: shutil.copyfile(path, bak_tmp))
+    replace_atomically(path, wb.save, before_replace=check_then_back_up)
     return path
+
+
+def _make_writable(path: Path) -> None:
+    """Salt okunur dosyanın yazma bitini açar (yoksa bir şey yapmaz). Windows salt okunur hedefin yerine os.replace ile
+    yenisini koymaz: eskiden copy2 ile salt okunur alınmış bir yedek her Kaydet'i düşürürdü."""
+    with contextlib.suppress(OSError):
+        mode = os.stat(path).st_mode
+        if not mode & stat.S_IWRITE:
+            os.chmod(path, mode | stat.S_IWRITE)
 
 
 def _same_file(a: Path, b: Path) -> bool:
@@ -130,18 +218,36 @@ def _text(v) -> str:
     return "" if v is None else str(v).strip()
 
 
+def _read_rows(source) -> list[tuple]:
+    """Etkin sayfanın satırları (yalnız değerler). source bir yol ya da ikili kipte açık dosya: openpyxl yolu uzantısına
+    bakıp .bak/.tmp adlı dosyayı reddeder, dosya nesnesinde bakmaz."""
+    wb = openpyxl.load_workbook(source, read_only=True, data_only=True)
+    try:
+        # Satırlar önce belleğe alınır, kitap hemen kapanır: read_only kitap dosyayı açık tutar ve doğrulama hatası
+        # wb.close()'dan önce fırlayınca tutamak çöp toplayıcıya dek kalıyordu. Windows'ta açık tutamak dosyayı
+        # kilitler: öğretmen Excel'den kaydedemez, editörün atomik yazımı (os.replace) da düşer.
+        return list(wb.active.iter_rows(values_only=True))
+    finally:
+        wb.close()
+
+
 def load_questions(path: Path) -> list[Question]:
     path = Path(path)
     if not path.exists():
         raise QuestionTemplateError(f"Şablon bulunamadı: {path}")
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    try:
-        # Satırlar önce belleğe alınır, kitap hemen kapanır: read_only kitap dosyayı açık tutar ve aşağıdaki doğrulama
-        # hatası wb.close()'dan önce fırlayınca tutamak çöp toplayıcıya dek kalıyordu. Windows'ta açık tutamak
-        # dosyayı kilitler: öğretmen Excel'den kaydedemez, editörün atomik yazımı (os.replace) da düşer.
-        all_rows = list(wb.active.iter_rows(values_only=True))
-    finally:
-        wb.close()
+    return _questions_from_rows(_read_rows(path), path.parent)
+
+
+def load_backup(path: Path) -> list[Question]:
+    """Soru dosyasının önceki sürümündeki (<ad>.bak) sorular; görsel yolları soru dosyasının klasörüne göre çözülür.
+    Yedek dosya nesnesi olarak açılır (openpyxl .bak uzantısını reddeder). Yedek yoksa OSError."""
+    path = Path(path)
+    with open(backup_path(path), "rb") as fh:
+        return _questions_from_rows(_read_rows(fh), path.parent)
+
+
+def _questions_from_rows(all_rows: list[tuple], folder: Path) -> list[Question]:
+    """Sayfa satırlarından sorular; göreli görsel yolu folder'a (xlsx'in klasörü) göre çözülür."""
     rows = iter(all_rows)
     header = [_text(c).lower() for c in (next(rows, None) or [])]
     missing = [c for c in REQUIRED_COLUMNS if c not in header]
@@ -172,7 +278,7 @@ def load_questions(path: Path) -> list[Question]:
         image: str | None = None
         if image_raw:
             p = Path(image_raw)
-            image = str(p if p.is_absolute() else (path.parent / p))
+            image = str(p if p.is_absolute() else (folder / p))
         questions.append(Question(qid, cell(cells, "konu"), sinif, soru, hints, cell(cells, "cevap"),
                                   options, image))
     if not questions:

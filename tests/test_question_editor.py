@@ -1,6 +1,7 @@
 import errno
 import json
 import os
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -14,10 +15,23 @@ from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
 from matematigin_mantigi.core.models import Question, SAMPLE_QUESTIONS
 from matematigin_mantigi.core.question_loader import load_questions, save_question_image, write_questions
+from matematigin_mantigi.ui import question_editor as qe
 from matematigin_mantigi.ui.question_editor import QuestionEditorDialog, _display_id
 from matematigin_mantigi.ui.theme import FontFamilies
 
 FAM = FontFamilies("Arial", "Arial", False)
+
+
+@pytest.fixture(autouse=True)
+def no_modal_box_blocks(monkeypatch):
+    """Yanlış davranışta (gerileme, mutasyon) açılan gerçek modal kutu offscreen'de exec()'te sonsuza dek bekler: test
+    kırmızı yerine DONAR. Kutu beklemeyen testte açılırsa kaydedilir, 'Kaydetmeden dön' seçilmiş sayılır ve test sonda
+    düşer. Kutuyu bekleyen testler _capture_warnings / _answer ile bunun üstüne yazar."""
+    unexpected = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda _p, title, text, *a, **k: unexpected.append(text)))
+    monkeypatch.setattr(QMessageBox, "exec", lambda box: unexpected.append(box.text()) or 0)
+    yield
+    assert not unexpected, f"beklenmeyen kutu: {unexpected}"
 
 
 def _dialog(qtbot, tmp_path, questions=None):
@@ -235,16 +249,20 @@ def _capture_warnings(monkeypatch) -> list:
 
 
 def test_save_while_file_is_open_in_excel_keeps_dialog_and_edits(qtbot, tmp_path, monkeypatch):
-    """e2e#6/q#2: Windows'ta xlsx Excel'de açıkken wb.save PermissionError fırlatıyor, yakalanmadığı için uygulama
+    """e2e#6/q#2: Windows'ta xlsx Excel'de açıkken yazım PermissionError veriyor, yakalanmadığı için uygulama
     (süren kayıtla) düşüyor ve editördeki her düzenleme kayboluyordu. Artık Türkçe mesaj, pencere açık kalır;
-    Excel kapatılınca yeniden Kaydet düzenlemeleri yazar."""
-    import openpyxl
+    Excel kapatılınca yeniden Kaydet düzenlemeleri yazar. (Atomik yazımda kilit, yeni sürümü yerine koyan os.replace'te
+    görülür; hata hedefi filename2'de taşır.)"""
+    path, _before = _existing(tmp_path)
     shown = _capture_warnings(monkeypatch)
-    real_save = openpyxl.Workbook.save
+    real_replace = os.replace
 
-    def locked(self, filename):
-        raise PermissionError(13, "Permission denied", str(filename))
-    monkeypatch.setattr(openpyxl.Workbook, "save", locked)
+    def locked(src, dst, *a, **k):
+        if os.fspath(dst) == os.fspath(path):
+            raise PermissionError(errno.EACCES, "The process cannot access the file", os.fspath(src), None,
+                                  os.fspath(dst))
+        return real_replace(src, dst, *a, **k)
+    monkeypatch.setattr(os, "replace", locked)
     d, path = _dialog(qtbot, tmp_path)
     saved = []
     d.saved.connect(saved.append)
@@ -254,9 +272,9 @@ def test_save_while_file_is_open_in_excel_keeps_dialog_and_edits(qtbot, tmp_path
     assert d.isVisible() and d.result() != d.DialogCode.Accepted and saved == []
     edited = "Excel açıkken düzenlendi?"
     assert d.soru_edit.toPlainText() == edited and d.questions[0].soru == edited
-    assert not path.exists()
+    assert load_questions(path)[0].soru == SAMPLE_QUESTIONS[0].soru
 
-    monkeypatch.setattr(openpyxl.Workbook, "save", real_save)         # Excel kapatıldı
+    monkeypatch.setattr(os, "replace", real_replace)                   # Excel kapatıldı
     d.save_button.click()
     assert load_questions(path)[0].soru == "Excel açıkken düzenlendi?"
     assert saved and d.result() == d.DialogCode.Accepted
@@ -293,6 +311,35 @@ def test_pasted_control_characters_are_cleaned_and_save_succeeds(qtbot, tmp_path
     q = load_questions(path)[0]
     assert q.soru == "PDF'den kopya metin\nikinci satır\tsekme"
     assert q.hints[0] == "ipucu bir" and q.konu == "Konu"
+
+
+def test_text_xml_cannot_hold_is_cleaned_and_the_file_stays_readable(qtbot, tmp_path):
+    """Q2 (inceleme v15): U+FFFF içeren metinle Kaydet sessizce başarılı oluyor, dosya bir daha okunamıyordu
+    (ParseError; sonraki açılış örnek sorularla, Q1'in kapısı). Karakter atılır, kayıt okunabilir kalır."""
+    d, path = _dialog(qtbot, tmp_path)
+    d.soru_edit.setPlainText("PDF'den kopyalanan metin \uffff\ufffe devam")
+    d.hint_edits[0].setText("ipucu \ud800 bir")
+    d.save_button.click()
+    q = load_questions(path)[0]
+    assert q.soru == "PDF'den kopyalanan metin  devam" and q.hints[0] == "ipucu  bir"
+
+
+def test_save_whose_new_version_cannot_be_read_back_keeps_the_file(qtbot, tmp_path, monkeypatch):
+    """Q2: yeni sürüm yazılıp geri okunamazsa (temizlikten kaçan bir karakter) yerine konmaz: dosya değişmez, mesaj
+    bunu ve sebebi söyler, düzenlemeler pencerede durur."""
+    path, before = _existing(tmp_path)
+    monkeypatch.setattr(qe, "clean_text", lambda s: s)            # temizlik devre dışı: \\uffff modele geçer
+    shown = _capture_warnings(monkeypatch)
+    d, _ = _dialog(qtbot, tmp_path)
+    saved = []
+    d.saved.connect(saved.append)
+    d.soru_edit.setPlainText("Kopyalanan metin \uffff devam")
+    d.save_button.click()
+    assert len(shown) == 1 and shown[0][0] == "Kaydedilemedi", shown
+    assert "geri okunamadı" in shown[0][1] and "değişmedi" in shown[0][1], shown[0][1]
+    assert "beklenmeyen" not in shown[0][1] and "ParseError" not in shown[0][1], shown[0][1]
+    assert path.read_bytes() == before and d.isVisible() and saved == []
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["sorular_sablon.xlsx"]
 
 
 def test_image_copy_error_shows_message_and_keeps_previous_image(qtbot, tmp_path, monkeypatch):
@@ -357,6 +404,62 @@ def test_save_refused_while_open_in_excel_keeps_the_file(qtbot, tmp_path, monkey
     assert path.read_bytes() == before and d.isVisible()
 
 
+@pytest.mark.parametrize("how", ["sahte", "chattr"])
+def test_locked_backup_is_named_in_the_message(qtbot, tmp_path, monkeypatch, how):
+    """Q3 (inceleme v08): yedek kilitliyken (Windows'ta eşitleme/virüs tarayıcı tutamağı ya da salt okunur yedek,
+    macOS'ta Finder 'Kilitli') yedeği yerine koyan os.replace PermissionError veriyor, mesaj ise soru dosyasını
+    suçlayıp Excel'i kapatmayı söylüyordu. Mesaj hatanın gerçek dosyasını (yedeği) söyler; dosya ve yedek değişmez.
+    'chattr': Linux'ta gerçek kilit (os.replace -> EPERM, filename2 = yedek)."""
+    from matematigin_mantigi.core.question_loader import backup_path
+    path = tmp_path / "sorular_sablon.xlsx"
+    write_questions(path, SAMPLE_QUESTIONS[:2])
+    write_questions(path, SAMPLE_QUESTIONS)
+    bak = backup_path(path)
+    before, bak_before = path.read_bytes(), bak.read_bytes()
+    if how == "sahte":
+        real_replace = os.replace
+
+        def locked(src, dst, *a, **k):
+            if os.fspath(dst) == os.fspath(bak):
+                raise PermissionError(errno.EACCES, "Access is denied", os.fspath(src), None, os.fspath(dst))
+            return real_replace(src, dst, *a, **k)
+        monkeypatch.setattr(os, "replace", locked)
+    elif (sys.platform != "linux" or shutil.which("chattr") is None
+          or subprocess.run(["chattr", "+i", str(bak)], capture_output=True).returncode != 0):
+        pytest.skip("chattr +i yok (Linux'ta yetki ve ext4 gibi bir dosya sistemi gerekir)")
+    shown = _capture_warnings(monkeypatch)
+    try:
+        d, _ = _dialog(qtbot, tmp_path)
+        d.soru_edit.setPlainText("Yedek kilitliyken düzenlendi")
+        d.save_button.click()
+    finally:
+        if how == "chattr":
+            subprocess.run(["chattr", "-i", str(bak)])
+    assert len(shown) == 1 and shown[0][0] == "Kaydedilemedi", shown
+    text = shown[0][1]
+    assert "sorular_sablon.xlsx.bak" in text and "yedeği" in text and "Excel'de" not in text, text
+    assert path.read_bytes() == before and bak.read_bytes() == bak_before and d.isVisible()
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["sorular_sablon.xlsx", "sorular_sablon.xlsx.bak"]
+
+
+def test_unwritable_folder_is_named_in_the_message(qtbot, tmp_path, monkeypatch):
+    """Q3: geçici dosya yazılamıyorsa (klasöre yazma izni yok, macOS'ta Belgeler izni kapalı) hata geçici dosyanın
+    adını taşır; mesaj anlamsız '.<ad>.<hex>.tmp' adını ya da Excel'i değil klasörü söyler."""
+    path, before = _existing(tmp_path)
+
+    def denied(self, filename):
+        raise PermissionError(errno.EPERM, "Operation not permitted", str(filename))
+    monkeypatch.setattr(openpyxl.Workbook, "save", denied)
+    shown = _capture_warnings(monkeypatch)
+    d, _ = _dialog(qtbot, tmp_path)
+    d.save_button.click()
+    assert len(shown) == 1 and shown[0][0] == "Kaydedilemedi", shown
+    text = shown[0][1]
+    assert "klasöre yazılamıyor" in text and str(tmp_path) in text, text
+    assert ".tmp" not in text and "Excel'de" not in text and "değişmedi" in text, text
+    assert path.read_bytes() == before and d.isVisible()
+
+
 @pytest.mark.parametrize("err", [zipfile.BadZipFile("bozuk zip"), KeyError("xl/workbook.xml"),
                                  ValueError("geçersiz hücre değeri")], ids=["BadZipFile", "KeyError", "ValueError"])
 def test_unexpected_save_error_shows_a_message_and_keeps_the_dialog(qtbot, tmp_path, monkeypatch, err):
@@ -377,16 +480,32 @@ def test_unexpected_save_error_shows_a_message_and_keeps_the_dialog(qtbot, tmp_p
 
 
 # --- okunamayan soru dosyasının üzerine yazılmaz (#4) ---------------------------------------------------------
-@pytest.mark.parametrize("kind", ["yarim", "sutun"])
+CORRUPT = "dosya bozuk ya da yazımı yarıda kalmış"
+
+
+def _half_sheet(path: Path) -> None:
+    """Sayfa XML'i yarıda kesilmiş xlsx (yarım kopya ya da eşitleme): okurken ParseError."""
+    write_questions(path, SAMPLE_QUESTIONS * 20)
+    with zipfile.ZipFile(path) as z:
+        items = [(info, z.read(info.filename)) for info in z.infolist()]
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for info, data in items:
+            z.writestr(info, data[: len(data) // 2] if info.filename == "xl/worksheets/sheet1.xml" else data)
+
+
+@pytest.mark.parametrize("kind", ["yarim", "sutun", "yarim-sayfa"])
 def test_save_does_not_overwrite_an_unreadable_question_file(qtbot, tmp_path, monkeypatch, kind):
     """#4: açılışta okunamayan soru dosyası (uygulama örnek sorularla açılır) editörde Kaydet'le örnek soruların
     altında kalıyordu; öğretmenin gerçek soruları o dosyada olabilir (yazımı yarıda kalmış xlsx, sütunları farklı
     kendi çizelgesi). Kaydet o dosyanın üzerine yazmaz, sebebi ve ne yapılacağını söyler, pencere açık kalır;
-    öğretmen dosyayı düzeltip ya da kaldırıp yeniden Kaydet'e basınca yazılır."""
+    öğretmen dosyayı düzeltip ya da kaldırıp yeniden Kaydet'e basınca yazılır. Q4: sebep anlaşılır (yarım sayfa
+    XML'inde 'ParseError: unclosed token…' değil, dosyanın bozuk olduğu)."""
     path = tmp_path / "sorular_sablon.xlsx"
     if kind == "yarim":
         write_questions(path, SAMPLE_QUESTIONS)
         path.write_bytes(path.read_bytes()[:2289])
+    elif kind == "yarim-sayfa":
+        _half_sheet(path)
     else:
         wb = openpyxl.Workbook()
         wb.active.append(["id", "soru", "ogretmen_notu"]); wb.active.append(["S1", "Gerçek soru", "not"])
@@ -398,6 +517,7 @@ def test_save_does_not_overwrite_an_unreadable_question_file(qtbot, tmp_path, mo
     d.saved.connect(saved.append)
     d.save_button.click()
     assert shown and shown[0][0] == "Kaydedilmedi" and "sorular_sablon.xlsx okunamıyor" in shown[0][1]
+    assert (CORRUPT if kind != "sutun" else "Eksik sütun") in shown[0][1], shown[0][1]
     assert path.read_bytes() == before and d.isVisible() and saved == []
     path.rename(tmp_path / "eski_sorular.xlsx")                      # öğretmen dosyayı klasörden kaldırdı
     d.save_button.click()
@@ -412,6 +532,207 @@ def test_save_fills_an_empty_template(qtbot, tmp_path, monkeypatch):
     d, _ = _dialog(qtbot, tmp_path)
     d.save_button.click()
     assert shown == [] and len(load_questions(path)) == 3
+
+
+def _corrupt_errors() -> list:
+    import zlib
+    from xml.etree.ElementTree import ParseError
+    from openpyxl.utils.exceptions import InvalidFileException
+    return [zipfile.BadZipFile("File is not a zip file"), KeyError("There is no item named 'xl/workbook.xml'"),
+            InvalidFileException("openpyxl does not support .tmp file format"),
+            ParseError("unclosed token: line 1, column 34430"),
+            zlib.error("Error -3 while decompressing data: invalid distance too far back"),
+            EOFError("Compressed file ended before the end-of-stream marker was reached")]
+
+
+@pytest.mark.parametrize("err", _corrupt_errors(), ids=["BadZipFile", "KeyError", "InvalidFileException", "ParseError",
+                                                         "zlib.error", "EOFError"])
+def test_corrupt_file_errors_are_described_as_corrupt(err):
+    """Q4: okuma sırasında bozuk ya da yarım kalmış dosyanın verdiği her hata (zip yapısı, eksik üye, yarım sayfa
+    XML'i, bozuk sıkıştırma, erken biten akış) açılış uyarısında ve editörde aynı anlaşılır sebebe eşlenir."""
+    from matematigin_mantigi.ui.question_editor import describe_load_error
+    assert describe_load_error(err).startswith(CORRUPT)
+
+
+def test_other_load_errors_keep_their_own_reason():
+    from matematigin_mantigi.core.question_loader import QuestionTemplateError
+    from matematigin_mantigi.ui.question_editor import describe_load_error
+    assert describe_load_error(QuestionTemplateError("Eksik sütun(lar): cevap")) == "Eksik sütun(lar): cevap"
+    assert describe_load_error(PermissionError(errno.EACCES, "Permission denied")).startswith("erişim izni yok")
+    assert describe_load_error(RuntimeError("beklenmeyen")) == "RuntimeError: beklenmeyen"
+
+
+# --- örnek sorularla açılmış uygulama gerçek soruları ezmez (Q1) --------------------------------------------------
+REAL = [Question(f"G{i}", "gerçek", 8, f"Öğretmenin gerçek sorusu {i}", ("i1",), "c", (), None) for i in range(1, 6)]
+REAL_TEXTS = [q.soru for q in REAL]
+
+
+def _answer(monkeypatch, label: str) -> list:
+    """Editörün sorusunu (QMessageBox.exec) label yazılı düğmeyle yanıtlar; sorulan metinler listede birikir."""
+    asked = []
+
+    def exec_(box):
+        asked.append(box.text())
+        next(b for b in box.buttons() if b.text() == label).click()
+        return 0
+    monkeypatch.setattr(QMessageBox, "exec", exec_)
+    return asked
+
+
+def _samples_dialog(qtbot, path: Path):
+    """Uygulama soru dosyasını açılışta okuyamamış: pencerede örnek sorular."""
+    d = QuestionEditorDialog(list(SAMPLE_QUESTIONS), path, FAM, from_file=False)
+    qtbot.addWidget(d)
+    d.show()
+    return d
+
+
+def _texts(path: Path) -> list[str]:
+    return [q.soru for q in load_questions(path)]
+
+
+def _bak_texts(path: Path) -> list[str]:
+    from matematigin_mantigi.core.question_loader import load_backup
+    return [q.soru for q in load_backup(path)]
+
+
+def test_samples_are_not_saved_over_a_question_file_that_became_readable(qtbot, tmp_path, monkeypatch):
+    """Q1: açılışta okunamayan soru dosyası (yarım satır, iCloud'da inmemiş, eşitleme kilidi) uygulama açıkken düzelince
+    editör 3 örnek soruyu gerçek dosyanın üzerine uyarısız yazıyor, ikinci Kaydet yedeği de örneklerle değiştiriyordu:
+    gerçek sorular hiçbir yerde kalmıyordu. Artık yazılmaz; dosyadaki soruları yüklemek önerilir, öğretmen istemezse
+    dosya da yedek de değişmez."""
+    from matematigin_mantigi.core.question_loader import backup_path
+    path = write_questions(tmp_path / "sorular_sablon.xlsx", REAL)
+    before = path.read_bytes()
+    asked = _answer(monkeypatch, qe.KEEP_EDITING)
+    d = _samples_dialog(qtbot, path)
+    saved = []
+    d.saved.connect(saved.append)
+    d.save_button.click()
+    d.save_button.click()
+    assert len(asked) == 2 and "sorular_sablon.xlsx" in asked[0] and "5 soru" in asked[0], asked
+    assert path.read_bytes() == before and not backup_path(path).exists()
+    assert saved == [] and d.isVisible() and [q.id for q in d.questions] == ["S1", "S2", "S3"]
+
+
+def test_reloading_the_fixed_file_then_saving_keeps_the_real_questions(qtbot, tmp_path, monkeypatch):
+    """Q1: 'Dosyadan yeniden yükle' dosyadaki soruları pencereye getirir (hiçbir şey yazılmaz); sonraki Kaydet onları
+    yazar: dosya da yedek de gerçek sorularla kalır."""
+    path = write_questions(tmp_path / "sorular_sablon.xlsx", REAL)
+    asked = _answer(monkeypatch, qe.RELOAD_FROM_FILE)
+    d = _samples_dialog(qtbot, path)
+    saved = []
+    d.saved.connect(saved.append)
+    before = path.read_bytes()
+    d.save_button.click()
+    assert len(asked) == 1 and saved == [] and d.isVisible() and path.read_bytes() == before
+    assert [d.list_widget.item(i).text() for i in range(d.list_widget.count())] == [
+        f"G0{i} · gerçek" for i in range(1, 6)]
+    assert d.soru_edit.toPlainText() == REAL_TEXTS[0]
+    d.soru_edit.setPlainText("Öğretmenin gerçek sorusu 1 (düzenlendi)")
+    d.save_button.click()
+    assert len(asked) == 1 and saved
+    assert _texts(path) == ["Öğretmenin gerçek sorusu 1 (düzenlendi)"] + REAL_TEXTS[1:]
+    assert _bak_texts(path) == REAL_TEXTS
+
+
+@pytest.mark.parametrize("state", ["yok", "bos"])
+@pytest.mark.parametrize("answer", ["dön", "yedekten"])
+def test_samples_are_not_saved_while_the_backup_holds_the_questions(qtbot, tmp_path, monkeypatch, state, answer):
+    """Q1, yedek döngüsü: öğretmen okunamayan dosyayı klasörden kaldırdıysa (ya da boşalttıysa) örnek sorular yazılınca
+    bir sonraki Kaydet önceki sürümün yedeğini (gerçek sorular) da örneklerle değiştirirdi. Yedekte sorular varken
+    örnekler yazılmaz, yedekteki soruları yüklemek önerilir; yüklenince Kaydet onları soru dosyası olarak yazar."""
+    from matematigin_mantigi.core.question_loader import backup_path, write_template
+    path = tmp_path / "sorular_sablon.xlsx"
+    write_questions(path, REAL)
+    write_questions(path, REAL)                             # yedekte de gerçek sorular
+    path.unlink()
+    if state == "bos":
+        write_template(path, with_samples=False)
+    bak_before = backup_path(path).read_bytes()
+    asked = _answer(monkeypatch, qe.KEEP_EDITING if answer == "dön" else qe.LOAD_BACKUP)
+    d = _samples_dialog(qtbot, path)
+    saved = []
+    d.saved.connect(saved.append)
+    d.save_button.click()
+    assert len(asked) == 1 and "sorular_sablon.xlsx.bak" in asked[0] and "5 soru" in asked[0], asked
+    assert saved == [] and d.isVisible() and backup_path(path).read_bytes() == bak_before
+    assert path.exists() == (state == "bos")
+    if answer == "yedekten":
+        assert d.soru_edit.toPlainText() == REAL_TEXTS[0]
+        d.save_button.click()
+        assert saved and _texts(path) == REAL_TEXTS and len(asked) == 1
+        if state == "yok":
+            assert backup_path(path).read_bytes() == bak_before
+    else:
+        d.save_button.click()
+        assert len(asked) == 2 and saved == [] and backup_path(path).read_bytes() == bak_before
+
+
+@pytest.mark.parametrize("state", ["yok", "bos"])
+def test_samples_fill_a_missing_or_empty_question_file(qtbot, tmp_path, monkeypatch, state):
+    """Korunacak soru yoksa (dosya yok ya da boş şablon, yedek yok) örnek sorularla açılmış editör yazabilir."""
+    from matematigin_mantigi.core.question_loader import write_template
+    path = tmp_path / "sorular_sablon.xlsx"
+    if state == "bos":
+        write_template(path, with_samples=False)
+    d = _samples_dialog(qtbot, path)
+    saved = []
+    d.saved.connect(saved.append)
+    d.save_button.click()
+    assert saved and [q.id for q in load_questions(path)] == ["S1", "S2", "S3"]
+
+
+def test_samples_are_not_saved_over_a_file_that_cannot_be_read(qtbot, tmp_path, monkeypatch):
+    """Örnek sorular tutan editör dosyayı okuyamıyorsa (kilit, izin, inmemiş iCloud dosyası) içinde gerçek sorular olup
+    olmadığını bilemez: yazmaz, sebebi söyler."""
+    path = write_questions(tmp_path / "sorular_sablon.xlsx", REAL)
+    before = path.read_bytes()
+
+    def locked(p):
+        raise PermissionError(errno.EACCES, "Permission denied", str(p))
+    monkeypatch.setattr(qe, "load_questions", locked)
+    shown = _capture_warnings(monkeypatch)
+    d = _samples_dialog(qtbot, path)
+    d.save_button.click()
+    assert len(shown) == 1 and shown[0][0] == "Kaydedilmedi" and "örnek sorular" in shown[0][1]
+    assert "erişim izni yok" in shown[0][1] and "sorular_sablon.xlsx" in shown[0][1]
+    assert path.read_bytes() == before and d.isVisible()
+
+
+def test_window_opened_with_samples_keeps_the_editor_off_the_real_file(qtbot, tmp_path, monkeypatch, ini_settings,
+                                                                      dead_camera):
+    """Q1, pencere yolu: örnek sorularla açılan pencere bunu editöre söyler. Dosyadaki sorular yüklenip kaydedilince
+    tahta onları gösterir ve pencere artık dosyadan okunmuş sayılır (sonraki açılışta soru sorulmaz)."""
+    from matematigin_mantigi.core.models import PenSettings
+    from matematigin_mantigi.core.recorder import NullRecorder
+    from matematigin_mantigi.core.session_store import SessionStore
+    from matematigin_mantigi.ui.main_window import MainWindow
+    path = write_questions(tmp_path / "sorular_sablon.xlsx", REAL)
+    ini_settings.set_pen(PenSettings(reading_ms=0))
+    win = MainWindow(FAM, list(SAMPLE_QUESTIONS), ini_settings, NullRecorder(), SessionStore(tmp_path / "o"),
+                     lambda index: dead_camera, tmp_path / "d.json", questions_path=path, questions_from_file=False)
+    qtbot.addWidget(win)
+    asked = _answer(monkeypatch, qe.RELOAD_FROM_FILE)
+    rounds = []
+
+    def run(dlg):                         # modal exec yerine: Kaydet (yükleme önerisi), Kaydet (yazım)
+        rounds.append(dlg.from_file)
+        dlg.show()
+        dlg.save_button.click()
+        if dlg.isVisible():
+            dlg.save_button.click()
+        if dlg.isVisible():
+            dlg.reject()
+        return dlg.result()
+    monkeypatch.setattr(QuestionEditorDialog, "exec", run)
+    win.open_editor()
+    assert rounds == [False] and len(asked) == 1
+    assert [q.soru for q in win.flow.questions] == REAL_TEXTS and win.questions_from_file
+    assert _texts(path) == REAL_TEXTS and _bak_texts(path) == REAL_TEXTS
+    win.open_editor()
+    assert rounds == [False, True] and len(asked) == 1
+    assert _texts(path) == REAL_TEXTS and _bak_texts(path) == REAL_TEXTS
 
 
 # Kaydet'in gerçek hâli: yazımın ORTASINDA işletim sistemi hatası (RLIMIT_FSIZE, write() EFBIG). Ayrı süreçte.
@@ -435,7 +756,7 @@ d.show()
 rnd = random.Random(0)
 d.soru_edit.setPlainText("Yeni düzenleme: " + "".join(rnd.choice(string.ascii_letters) for _ in range(6000)))
 soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
-resource.setrlimit(resource.RLIMIT_FSIZE, (len(before) + 1500, hard))     # yedek sığar, yeni dosya sığmaz
+resource.setrlimit(resource.RLIMIT_FSIZE, (len(before) + 1500, hard))     # yeni (büyük) dosya sığmaz
 d.save_button.click()
 resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
 try:
@@ -452,7 +773,7 @@ print("SONUC " + json.dumps(res, ensure_ascii=False), flush=True)
 def test_disk_full_mid_save_keeps_the_question_file_loadable(tmp_path):
     """B-2 uçtan uca (inceleme s03): Kaydet yazımın ortasında EFBIG alınca soru dosyası yarım kalıyor (5575 -> 2289
     bayt) ve uygulama bir daha açılmıyordu. Artık dosya bayt bayt aynı ve yüklenebilir, geçici dosya kalmaz, mesaj
-    dosyanın değişmediğini söyler, düzenlemeler pencerede durur."""
+    dosyanın değişmediğini söyler, düzenlemeler pencerede durur. Yedek yeni sürüm sağlam yazılmadan alınmaz (Q2)."""
     script = tmp_path / "calistir.py"
     script.write_text(_SAVE_DISK_FULL, encoding="utf-8")
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen", XDG_CONFIG_HOME=str(tmp_path / "cfg"))
@@ -463,4 +784,4 @@ def test_disk_full_mid_save_keeps_the_question_file_loadable(tmp_path):
     res = json.loads(line[len("SONUC "):])
     assert res["ayni"] and res["yuklenen"] == 3 and res["acik"], res
     assert len(res["uyari"]) == 1 and res["uyari"][0][0] == "Kaydedilemedi" and "değişmedi" in res["uyari"][0][1]
-    assert res["dosyalar"] == ["calistir.py", "sorular_sablon.xlsx", "sorular_sablon.xlsx.bak"], res
+    assert res["dosyalar"] == ["calistir.py", "sorular_sablon.xlsx"], res

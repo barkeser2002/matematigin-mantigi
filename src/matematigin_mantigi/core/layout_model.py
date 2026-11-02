@@ -1,12 +1,11 @@
 """OBS benzeri düzen modeli: tahta üstündeki bölgeler 12x10 ızgara biriminde konum/boyut taşır."""
 from __future__ import annotations
 
-import contextlib
 import json
-import os
-import secrets
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
+from matematigin_mantigi.core.question_loader import replace_atomically   # atomik dosya yazımı tek yerde
 
 GRID_COLS = 12
 GRID_ROWS = 10
@@ -187,13 +186,6 @@ def save_layout(path: Path, layout: Layout) -> None:
     """duzen.json'u yarıda bırakmadan yazar: metin aynı klasörde geçici dosyaya yazılır, ancak tamamlanınca os.replace
     ile yerine konur. Yazım yarıda kalırsa (dolu disk) eski düzen dosyası aynen kalır ve geçici dosya silinir; böylece
     'yeniden açılınca eski düzen gelir' uyarısı doğru olur (önceden yarım JSON yüzünden varsayılan düzen geliyordu).
-    OSError çağırana gider."""
-    path = Path(path)
-    tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
-    try:
-        tmp.write_text(to_json(layout), encoding="utf-8")
-        os.replace(tmp, path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            tmp.unlink(missing_ok=True)
-        raise
+    Soru dosyasıyla aynı yol (question_loader.replace_atomically): Windows'ta anlık kilitte (OneDrive, Defender) kısa
+    yeniden deneme, başarılı kayıttan sonra eski geçici dosya artıklarının temizliği. OSError çağırana gider."""
+    replace_atomically(Path(path), lambda tmp: tmp.write_text(to_json(layout), encoding="utf-8"))

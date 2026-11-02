@@ -80,9 +80,11 @@ class MainWindow(QMainWindow):
     def __init__(self, fam: FontFamilies, questions: Sequence[Question], settings: AppSettings,
                  recorder: Recorder, session_store: SessionStore,
                  camera_source_factory: Callable[[int], FrameSource] | None, layout_path: Path, parent=None,
-                 *, questions_path: "Path | None" = None):
+                 *, questions_path: "Path | None" = None, questions_from_file: bool = True):
         """camera_source_factory: kamera indeksinden kaynak üretir; None ise kamera açılmaz.
-        questions_path: soru dosyası (xlsx); verilmezse soru editörü açılmaz."""
+        questions_path: soru dosyası (xlsx); verilmezse soru editörü açılmaz.
+        questions_from_file: sorular o dosyadan mı okundu. False: açılışta okunamadı, tahtada örnek sorular var; editör
+        onları dosyanın (ya da yedeğinin) gerçek sorularının üzerine yazmaz (Q1)."""
         super().__init__(parent)
         self.camera_source_factory = camera_source_factory
         self._stop_worker: _StopWorker | None = None    # kayıt kapanışı arka planda sürüyor (sonucu henüz gelmedi)
@@ -97,6 +99,7 @@ class MainWindow(QMainWindow):
         self._applied_logo: tuple[str, int] | None = None
         self.layout_path = Path(layout_path)
         self.questions_path = Path(questions_path) if questions_path else None
+        self.questions_from_file = questions_from_file
         self.setWindowTitle("Matematiğin Mantığı")
 
         central = QWidget(); row = QHBoxLayout(central)
@@ -498,8 +501,11 @@ class MainWindow(QMainWindow):
         if self.questions_path is None:
             QMessageBox.information(self, "Soru editörü", "Soru dosyası tanımlı değil.")
             return
-        dlg = QuestionEditorDialog(self.flow.questions, self.questions_path, self.fam, self)
+        dlg = QuestionEditorDialog(self.flow.questions, self.questions_path, self.fam, self,
+                                   from_file=self.questions_from_file)
         dlg.saved.connect(self.reload_questions)
+        # Kaydet dosyaya yazdı: tahtadaki sorular artık dosyanınkiler (pencere örnek sorularla açılmış olsa da).
+        dlg.saved.connect(lambda _questions: setattr(self, "questions_from_file", True))
         dlg.exec()
 
     def reload_questions(self, questions) -> None:

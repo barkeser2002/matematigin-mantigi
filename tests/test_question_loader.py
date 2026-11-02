@@ -1,9 +1,13 @@
 import errno
 import json
 import os
+import stat
+import struct
 import subprocess
 import sys
 import textwrap
+import time
+import zipfile
 from pathlib import Path
 
 import openpyxl
@@ -89,6 +93,42 @@ def test_empty_file_raises(tmp_path):
         load_questions(p)
 
 
+# --- Excel'in saklayamadığı metin dosyayı okunamaz yapmaz (Q2) ------------------------------------------------
+def test_clean_text_drops_characters_xml_cannot_hold():
+    """Q2: clean_text yalnız C0 denetim karakterlerini atıyordu; U+FFFE, U+FFFF ve tek başına vekil (U+D800-U+DFFF)
+    Kaydet'ten geçip dosyayı okunamaz kılıyordu (ParseError; sonraki açılış örnek sorularla). Hepsi atılır; sekme,
+    satır sonu ve geçerli BMP dışı karakterler (𝑥, emoji) korunur."""
+    from matematigin_mantigi.core.question_loader import clean_text
+    assert clean_text("a\ufffeb\uffffc\ud800d\udfffe\x03f") == "abcdef"
+    assert clean_text("x\ty\nz \U0001d465 \U0001f600") == "x\ty\nz \U0001d465 \U0001f600"
+    assert clean_text("Word\x0bsatırı") == "Word\nsatırı"
+
+
+def test_text_starting_with_equals_or_error_code_stays_text(tmp_path):
+    """'=' ile başlayan metni openpyxl formül olarak yazıyordu: okurken boş geliyordu (ipucu ve şık sessizce
+    kayboluyor, soru metni 'soru boş' hatasıyla dosyayı okunamaz yapıyordu); '#N/A' gibi metin hata hücresi oluyordu.
+    Hepsi metin olarak yazılır ve aynen geri okunur."""
+    q = Question("S1", "Konu", 7, "=2+3 kaçtır?", ("= 5 olur", "#DIV/0! değil"), "#N/A", ("=A", "b"), None)
+    p = write_questions(tmp_path / "sorular.xlsx", [q])
+    back = load_questions(p)[0]
+    assert (back.soru, back.hints, back.cevap, back.options) == (q.soru, q.hints, q.cevap, q.options)
+
+
+@pytest.mark.parametrize("bad", ["\uffff", "\ufffe", "\ud800"], ids=["FFFF", "FFFE", "vekil"])
+def test_write_that_cannot_be_read_back_changes_nothing(tmp_path, bad):
+    """Q2: yeni sürüm geçici dosyaya yazılıp geri okunur; okunamazsa (temizlenmemiş metin, başka bir çağıran) yerine
+    konmaz: soru dosyası da önceki yedek de bayt bayt aynı kalır, geçici dosya kalmaz, hata çağırana gider."""
+    from matematigin_mantigi.core.question_loader import UnreadableWriteError
+    p = tmp_path / "sorular.xlsx"
+    write_questions(p, SAMPLE_QUESTIONS)
+    write_questions(p, SAMPLE_QUESTIONS[:2])
+    before, bak_before = p.read_bytes(), _bak(p).read_bytes()
+    with pytest.raises(UnreadableWriteError):
+        write_questions(p, [Question("S1", "K", 7, f"Kopyalanan metin {bad} devam", (), "c", ())])
+    assert p.read_bytes() == before and _bak(p).read_bytes() == bak_before
+    assert _leftovers(tmp_path, "sorular.xlsx", "sorular.xlsx.bak") == []
+
+
 # --- yazım yarıda kalırsa soru dosyası bozulmaz; önceki sürüm .bak'ta (#29, B-2) ------------------------------
 def _bak(p: Path) -> Path:
     return p.with_name(p.name + ".bak")
@@ -112,10 +152,12 @@ def test_write_keeps_the_previous_version_as_bak(tmp_path):
 def test_failed_write_leaves_the_question_file_intact_and_no_temp_file(tmp_path, monkeypatch):
     """B-2: wb.save doğrudan hedefe yazıyordu; yazımın ortasındaki hata (dolu disk, çıkarılan USB) dosyayı yarım
     bırakıyordu (5575 -> 2289 bayt, açılışta KeyError). Yazım aynı klasörde geçici dosyaya yapılır, yalnız tamamlanınca
-    os.replace ile yerine konur; hatada geçici dosya silinir, soru dosyası eski hâliyle kalır."""
+    os.replace ile yerine konur; hatada geçici dosya silinir, soru dosyası eski hâliyle kalır. Yeni sürüm yazılamadıysa
+    önceki yedeğe de dokunulmaz (Q2: yedek yeni sürüm sağlam çıktıktan sonra alınır)."""
     p = tmp_path / "sorular.xlsx"
+    write_questions(p, SAMPLE_QUESTIONS[:2])
     write_questions(p, SAMPLE_QUESTIONS)
-    before = p.read_bytes()
+    before, bak_before = p.read_bytes(), _bak(p).read_bytes()
 
     def half_written(self, filename):
         Path(filename).write_bytes(b"PK\x03\x04 yarim kalan zip")
@@ -123,7 +165,7 @@ def test_failed_write_leaves_the_question_file_intact_and_no_temp_file(tmp_path,
     monkeypatch.setattr(openpyxl.Workbook, "save", half_written)
     with pytest.raises(OSError):
         write_questions(p, SAMPLE_QUESTIONS[:1])
-    assert p.read_bytes() == before and len(load_questions(p)) == 3
+    assert p.read_bytes() == before and len(load_questions(p)) == 3 and _bak(p).read_bytes() == bak_before
     assert _leftovers(tmp_path, "sorular.xlsx", "sorular.xlsx.bak") == []
 
 
@@ -144,6 +186,109 @@ def test_file_locked_by_excel_is_not_replaced_and_no_temp_file_is_left(tmp_path,
         write_questions(p, SAMPLE_QUESTIONS[:1])
     assert p.read_bytes() == before
     assert _leftovers(tmp_path, "sorular.xlsx", "sorular.xlsx.bak") == []
+
+
+def test_backup_does_not_inherit_the_read_only_attribute(tmp_path):
+    """Q3: yedek copy2 ile alınıyordu; salt okunur soru dosyasının yedeği de salt okunur oluyor, Windows'ta sonraki her
+    Kaydet o yedeğin yerine yenisini koyamıyordu. Yedek öznitelik/izin taşımayan kopyayla alınır."""
+    p = write_questions(tmp_path / "sorular.xlsx", SAMPLE_QUESTIONS)
+    os.chmod(p, stat.S_IREAD)
+    try:
+        try:
+            write_questions(p, SAMPLE_QUESTIONS[:2])
+        except PermissionError:
+            if sys.platform != "win32":         # Windows salt okunur hedefin yerine yenisini koymaz; yedek alınmıştır
+                raise
+        assert os.stat(_bak(p)).st_mode & stat.S_IWRITE
+    finally:
+        os.chmod(p, stat.S_IREAD | stat.S_IWRITE)
+
+
+def test_read_only_backup_is_replaced(tmp_path, monkeypatch):
+    """Q3: önceden salt okunur alınmış bir yedek her Kaydet'i düşürüyordu: Windows salt okunur hedefin yerine
+    os.replace ile yenisini koymaz (kural burada sahte os.replace ile). Yedeğin salt okunur biti önce kaldırılır."""
+    p = tmp_path / "sorular.xlsx"
+    write_questions(p, SAMPLE_QUESTIONS[:1])
+    write_questions(p, SAMPLE_QUESTIONS[:2])
+    os.chmod(_bak(p), stat.S_IREAD)
+    previous = p.read_bytes()
+    real_replace = os.replace
+
+    def windows_replace(src, dst, *a, **k):
+        if os.path.exists(dst) and not os.stat(dst).st_mode & stat.S_IWRITE:
+            raise PermissionError(errno.EACCES, "Access is denied", os.fspath(src), None, os.fspath(dst))
+        return real_replace(src, dst, *a, **k)
+    monkeypatch.setattr(os, "replace", windows_replace)
+    write_questions(p, SAMPLE_QUESTIONS)
+    assert len(load_questions(p)) == 3 and _bak(p).read_bytes() == previous
+    assert _leftovers(tmp_path, "sorular.xlsx", "sorular.xlsx.bak") == []
+
+
+# --- Windows'ta anlık kilit (OneDrive/Defender) kısa süre yeniden denenir; eski geçici dosyalar temizlenir (Q5) ----
+def _flaky_replace(monkeypatch, target: Path, failures: int | None) -> list:
+    """target'a os.replace ilk `failures` denemede (None: her seferinde) PermissionError verir; denemeler listede."""
+    real_replace = os.replace
+    attempts = []
+
+    def replace(src, dst, *a, **k):
+        if os.fspath(dst) == os.fspath(target):
+            attempts.append(time.monotonic())
+            if failures is None or len(attempts) <= failures:
+                raise PermissionError(errno.EACCES, "The process cannot access the file", os.fspath(src), None,
+                                      os.fspath(dst))
+        return real_replace(src, dst, *a, **k)
+    monkeypatch.setattr(os, "replace", replace)
+    return attempts
+
+
+@pytest.mark.parametrize("which", ["soru", "yedek"])
+def test_brief_lock_is_retried(tmp_path, monkeypatch, which):
+    """Q5: Windows'ta eşitleme istemcisi ya da virüs tarayıcı yeni yazılan dosyayı/hedefi birkaç on milisaniye
+    tutabilir; os.replace'in ilk PermissionError'ı Kaydet'i düşürüyordu. Kısa aralarla yeniden denenir, yazım biter."""
+    p = tmp_path / "sorular.xlsx"
+    write_questions(p, SAMPLE_QUESTIONS[:1])
+    write_questions(p, SAMPLE_QUESTIONS[:2])
+    previous = p.read_bytes()
+    attempts = _flaky_replace(monkeypatch, p if which == "soru" else _bak(p), failures=2)
+    write_questions(p, SAMPLE_QUESTIONS)
+    assert len(attempts) == 3
+    assert len(load_questions(p)) == 3 and _bak(p).read_bytes() == previous
+    assert _leftovers(tmp_path, "sorular.xlsx", "sorular.xlsx.bak") == []
+
+
+def test_lasting_lock_gives_up_quickly_and_changes_nothing(tmp_path, monkeypatch):
+    """Q5: kalıcı kilitte (dosya Excel'de açık) birkaç deneme sonra eski hata (PermissionError) gider; toplam bekleme
+    kısa kalır (arayüz donmaz), soru dosyası değişmez, geçici dosya kalmaz."""
+    from matematigin_mantigi.core import question_loader
+    p = write_questions(tmp_path / "sorular.xlsx", SAMPLE_QUESTIONS)
+    before = p.read_bytes()
+    attempts = _flaky_replace(monkeypatch, p, failures=None)
+    t0 = time.monotonic()
+    with pytest.raises(PermissionError):
+        write_questions(p, SAMPLE_QUESTIONS[:1])
+    elapsed = time.monotonic() - t0
+    assert len(attempts) == len(question_loader.REPLACE_RETRY_S) + 1 >= 3
+    assert sum(question_loader.REPLACE_RETRY_S) <= 0.5 and elapsed < 2.0, elapsed
+    assert p.read_bytes() == before
+    assert _leftovers(tmp_path, "sorular.xlsx", "sorular.xlsx.bak") == []
+
+
+def test_stale_temp_files_are_removed_after_a_successful_write(tmp_path):
+    """Q5: çökme ya da elektrik kesintisinde silinemeyen '.<ad>.<8 onaltılık>.tmp' artıkları birikiyordu. Başarılı bir
+    yazımdan sonra bir saatten eski olanlar silinir; yenileri (aynı anda yazan başka bir pencere) ve kalıba uymayan
+    dosyalar kalır."""
+    p = write_questions(tmp_path / "sorular.xlsx", SAMPLE_QUESTIONS)
+    old = time.time() - 2 * 3600
+    stale = [".sorular.xlsx.0123abcd.tmp", ".sorular.xlsx.bak.89abcdef.tmp"]
+    kept = [".sorular.xlsx.fedcba98.tmp", ".sorular.xlsx.notlar.tmp", "sorular.xlsx.0123abcd.tmp",
+            ".diger.xlsx.0123abcd.tmp"]
+    for name in stale + kept:
+        f = tmp_path / name
+        f.write_bytes(b"PK\x03\x04 yarim")
+        if name != ".sorular.xlsx.fedcba98.tmp":
+            os.utime(f, (old, old))
+    write_questions(p, SAMPLE_QUESTIONS[:2])
+    assert _leftovers(tmp_path, "sorular.xlsx", "sorular.xlsx.bak") == sorted(kept)
 
 
 # Gerçek bir işletim sistemi hatası, yazımın ORTASINDA: RLIMIT_FSIZE yumuşak sınırı (Python SIGXFSZ'yi yok sayar,
@@ -172,19 +317,30 @@ _DISK_FULL = textwrap.dedent('''
             return type(err).__name__
 
     path, bak = Path("sorular.xlsx"), Path("sorular.xlsx.bak")
-    write_questions(path, SAMPLE_QUESTIONS)
-    write_questions(path, SAMPLE_QUESTIONS[:2])
-    v2, old_bak = path.read_bytes(), bak.read_bytes()
     rnd = random.Random(0)
-    big = [Question(f"S{i}", "Konu", 7, "".join(rnd.choice(string.ascii_letters) for _ in range(3000)), (), "", ())
-           for i in range(5)]
+
+    def big(n):
+        return [Question(f"S{i}", "Konu", 7, "".join(rnd.choice(string.ascii_letters) for _ in range(3000)), (), "",
+                         ()) for i in range(n)]
+    write_questions(path, big(5))
+    write_questions(path, big(5))
+    v2, old_bak = path.read_bytes(), bak.read_bytes()
+    small = SAMPLE_QUESTIONS[:2]
+    probe = Path("olcu.xlsx")
+    write_questions(probe, small)
+    small_size = probe.stat().st_size
+    probe.unlink()
     res = {}
-    # 1) yedek kopyası yarıda kalır: ne soru dosyası ne önceki yedek bozulur
-    res["yedekte_hata"] = limited(len(v2) // 2, lambda: write_questions(path, big))
+    # 1) yeni (küçük) sürüm yazılıp doğrulanır, ardından alınan yedek kopyası (büyük dosya) yarıda kalır: ne soru
+    #    dosyası ne önceki yedek bozulur
+    limit = (small_size + len(v2)) // 2
+    res["olculer"] = [small_size, limit, len(v2)]
+    res["yedekte_hata"] = limited(limit, lambda: write_questions(path, small))
     res["yedekte_dosya_ayni"], res["yedekte_onceki_yedek_ayni"] = path.read_bytes() == v2, bak.read_bytes() == old_bak
-    # 2) yeni çalışma kitabının yazımı yarıda kalır (yedek sığar, büyük yeni dosya sığmaz)
-    res["yazimda_hata"] = limited(max(len(v2), len(old_bak)) + 1000, lambda: write_questions(path, big))
+    # 2) yeni (büyük) çalışma kitabının yazımı yarıda kalır: yedek o sürüm sağlam yazılmadan alınmadığı için o da aynı
+    res["yazimda_hata"] = limited(len(v2) + 1000, lambda: write_questions(path, big(8)))
     res["yazimda_dosya_ayni"], res["yazimda_yuklenen"] = path.read_bytes() == v2, loads(path)
+    res["yazimda_onceki_yedek_ayni"] = bak.read_bytes() == old_bak
     res["dosyalar"] = sorted(p.name for p in Path(".").iterdir())
     print("SONUC " + json.dumps(res))
 ''')
@@ -204,15 +360,42 @@ def _run_script(tmp_path, source: str) -> dict:
 @pytest.mark.skipif(sys.platform == "win32", reason="RLIMIT_FSIZE yalnız POSIX'te")
 def test_disk_full_in_the_middle_of_a_write_keeps_the_file_and_the_backup(tmp_path):
     """B-2'nin gerçek hâli (yazım ortasında EFBIG): ne yedek kopyası ne yeni çalışma kitabı yarıda kalınca soru
-    dosyası ya da önceki yedek bozulur; geçici dosya kalmaz."""
+    dosyası ya da önceki yedek bozulur; geçici dosya kalmaz. Q2: yedek yeni sürüm yazılıp geri okunduktan sonra
+    alındığı için yeni sürüm yarıda kalınca önceki yedek de değişmez."""
     res = _run_script(tmp_path, _DISK_FULL)
     assert res["yedekte_hata"] == errno.EFBIG and res["yazimda_hata"] == errno.EFBIG, res
+    assert res["olculer"][0] < res["olculer"][1] < res["olculer"][2], res
     assert res["yedekte_dosya_ayni"] and res["yedekte_onceki_yedek_ayni"], res
-    assert res["yazimda_dosya_ayni"] and res["yazimda_yuklenen"] == 2, res
+    assert res["yazimda_dosya_ayni"] and res["yazimda_yuklenen"] == 5 and res["yazimda_onceki_yedek_ayni"], res
     assert res["dosyalar"] == ["calistir.py", "sorular.xlsx", "sorular.xlsx.bak"], res
 
 
 # --- açılış: soru dosyası okunamazsa uygulama örnek sorularla açılır (#17) -----------------------------------
+CORRUPT = "dosya bozuk ya da yazımı yarıda kalmış"
+SHEET = "xl/worksheets/sheet1.xml"
+
+
+def _rewrite_sheet(p: Path, change) -> None:
+    """xlsx'i sayfa XML'i change(bayt) ile değişmiş olarak yeniden paketler (diğer üyeler aynen)."""
+    with zipfile.ZipFile(p) as z:
+        items = [(info, z.read(info.filename)) for info in z.infolist()]
+    with zipfile.ZipFile(p, "w", zipfile.ZIP_DEFLATED) as z:
+        for info, data in items:
+            z.writestr(info, change(data) if info.filename == SHEET else data)
+
+
+def _flip_compressed_sheet_bytes(p: Path) -> None:
+    """Sayfanın sıkıştırılmış verisinin ortasındaki baytları bozar (diskte/eşitlemede bozulma): zlib.error."""
+    data = bytearray(p.read_bytes())
+    with zipfile.ZipFile(p) as z:
+        info = z.getinfo(SHEET)
+    name_len, extra_len = struct.unpack("<HH", data[info.header_offset + 26: info.header_offset + 30])
+    start = info.header_offset + 30 + name_len + extra_len + info.compress_size // 3
+    for k in range(start, start + 40):
+        data[k] ^= 0x5A
+    p.write_bytes(bytes(data))
+
+
 def _broken(kind: str, p: Path) -> None:
     if kind == "yarim":                          # yazımı yarıda kalmış xlsx (s03: 5575 -> 2289 bayt)
         write_questions(p, SAMPLE_QUESTIONS)
@@ -223,13 +406,22 @@ def _broken(kind: str, p: Path) -> None:
         p.mkdir()
     elif kind == "sutun":                        # başka bir çizelge: zorunlu sütun eksik
         wb = openpyxl.Workbook(); wb.active.append(["id", "soru"]); wb.save(p)
+    elif kind == "yarim-sayfa":                  # sayfa XML'i yarıda kesilmiş (yarım kopya/eşitleme): ParseError
+        write_questions(p, SAMPLE_QUESTIONS * 20)
+        _rewrite_sheet(p, lambda xml: xml[: len(xml) // 2])
+    elif kind == "bozuk-sikistirma":             # sıkıştırılmış veri bozuk: zlib.error
+        write_questions(p, SAMPLE_QUESTIONS * 20)
+        _flip_compressed_sheet_bytes(p)
 
 
-@pytest.mark.parametrize("kind", ["yarim", "metin", "klasor", "sutun"])
+@pytest.mark.parametrize("kind", ["yarim", "metin", "klasor", "sutun", "yarim-sayfa", "bozuk-sikistirma"])
 def test_unreadable_question_file_opens_with_samples_and_names_the_file(tmp_path, monkeypatch, kind):
     """#17: açılış yalnız QuestionTemplateError'ı yakalıyordu; yarım kalmış xlsx (KeyError), xlsx olmayan dosya
     (BadZipFile) ya da okunamayan yol uygulamayı açılmaz yapıyordu (çıkış 1, pencere yok). Her hatada dosya adı ve
-    sebep söylenir, uygulama örnek sorularla açılır; yedek varsa nerede olduğu da söylenir."""
+    sebep söylenir, uygulama örnek sorularla açılır; yedek varsa nerede olduğu da söylenir. Sorular dosyadan
+    okunmadığı da söylenir (Q1): editör örnekleri o dosyanın üzerine yazmasın. Q4: yarım sayfa XML'i (ParseError) ve
+    bozuk sıkıştırma (zlib.error) da 'ParseError: unclosed token…' gibi ham metinle değil, dosyanın bozuk olduğuyla
+    söylenir."""
     from PyQt6.QtWidgets import QMessageBox
     from matematigin_mantigi import app as app_mod
     shown = []
@@ -238,11 +430,40 @@ def test_unreadable_question_file_opens_with_samples_and_names_the_file(tmp_path
     p = tmp_path / "sorular.xlsx"
     _broken(kind, p)
     _bak(p).write_bytes(b"onceki")
-    assert app_mod.load_questions_or_samples(p) == list(SAMPLE_QUESTIONS)
+    assert app_mod.load_questions_or_samples(p) == (list(SAMPLE_QUESTIONS), False)
     assert len(shown) == 1 and "sorular.xlsx" in shown[0][1] and "Sebep:" in shown[0][1]
     assert "sorular.xlsx.bak" in shown[0][1] and "Örnek sorularla" in shown[0][1]
-    if kind in ("yarim", "metin"):
-        assert "bozuk" in shown[0][1]
+    if kind in ("yarim", "metin", "yarim-sayfa", "bozuk-sikistirma"):
+        assert CORRUPT in shown[0][1], shown[0][1]
+    elif kind == "sutun":
+        assert "Eksik sütun" in shown[0][1], shown[0][1]
+
+
+@pytest.mark.parametrize("kind", ["var", "yok"])
+def test_readable_question_file_opens_from_the_file(tmp_path, monkeypatch, kind):
+    """Okunabilen (ya da yokken örnek şablonla yazılan) soru dosyası: sorular dosyadan, uyarı yok."""
+    from PyQt6.QtWidgets import QMessageBox
+    from matematigin_mantigi import app as app_mod
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: shown.append(a)))
+    p = tmp_path / "sorular.xlsx"
+    if kind == "var":
+        write_questions(p, SAMPLE_QUESTIONS[:2])
+    questions, from_file = app_mod.load_questions_or_samples(p)
+    assert from_file is True and shown == [] and len(questions) == (2 if kind == "var" else 3)
+
+
+def test_load_backup_reads_the_previous_version(tmp_path):
+    """Yedek (<ad>.bak) okunabilir: openpyxl .bak uzantısını reddeder, yedek akış olarak açılır; görsel yolları soru
+    dosyasının klasörüne göre çözülür."""
+    from matematigin_mantigi.core.question_loader import load_backup
+    p = tmp_path / "sorular.xlsx"
+    old = [Question("S1", "K", 7, "Eski soru?", (), "c", (), "sorular_gorsel/s1.png")]
+    write_questions(p, old)
+    write_questions(p, SAMPLE_QUESTIONS)
+    loaded = load_backup(p)
+    assert [q.soru for q in loaded] == ["Eski soru?"]
+    assert loaded[0].image == str(tmp_path / "sorular_gorsel" / "s1.png")
 
 
 def _assert_not_held_open(path: Path) -> None:
@@ -264,27 +485,40 @@ def _assert_not_held_open(path: Path) -> None:
     os.replace(moved, path)
 
 
-@pytest.mark.parametrize("kind", ["sutun", "bos-soru", "gecerli"])
+@pytest.mark.parametrize("kind", ["sutun", "bos-soru", "gecerli", "yarim-sayfa", "yedek-yarim-sayfa"])
 def test_load_lets_go_of_the_file_on_every_path(tmp_path, kind):
     """read_only çalışma kitabı dosyayı açık tutar; hata wb.close()'dan önce fırlayınca (eksik sütun, boş soru)
     tutamak çöp toplayıcıya dek kalıyordu. Windows'ta bu sürede dosya yeniden adlandırılamaz, Excel'den
-    kaydedilemez, editörün atomik yazımı (os.replace) da düşer (CI: WinError 32). Her yolda dosya bırakılır."""
+    kaydedilemez, editörün atomik yazımı (os.replace) da düşer (CI: WinError 32). Her yolda dosya bırakılır.
+    Q5: sayfa XML'i yarım kalmış dosyada hata okumanın (iter_rows) ortasında fırlar; yedeği okuyan load_backup da."""
     import gc
+    from xml.etree.ElementTree import ParseError
+    from matematigin_mantigi.core.question_loader import load_backup
     path = tmp_path / "sorular_sablon.xlsx"
     if kind == "gecerli":
         write_questions(path, SAMPLE_QUESTIONS)
+    elif kind == "yarim-sayfa":
+        _broken("yarim-sayfa", path)
+    elif kind == "yedek-yarim-sayfa":
+        _broken("yarim-sayfa", path)
+        path.rename(_bak(path))
+        path = _bak(path)
     else:
         wb = openpyxl.Workbook()
-        wb.active.append(["id", "metin"] if kind == "sutun" else ["id", "soru"])
-        wb.active.append(["S1", "Gerçek soru"] if kind == "sutun" else ["S1", None])
-        wb.active.append(["S2", "İkinci"])
+        wb.active.append(["id", "metin"] if kind == "sutun" else list(REQUIRED_COLUMNS))
+        wb.active.append(["S1", "Gerçek soru"] if kind == "sutun" else ["S1", "Konu", 7, "Soru?"])
+        wb.active.append(["S2", "İkinci"] if kind == "sutun" else ["S2", "Konu", 7, None, "ipucu"])   # soru boş
         wb.save(path)
     gc.disable()                                # tutamak çöp toplayıcının şansına bırakılmasın
     try:
         if kind == "gecerli":
             assert load_questions(path)
+        elif kind == "yedek-yarim-sayfa":
+            with pytest.raises(ParseError):
+                load_backup(tmp_path / "sorular_sablon.xlsx")
         else:
-            with pytest.raises(QuestionTemplateError):
+            with pytest.raises(ParseError if kind == "yarim-sayfa" else QuestionTemplateError,
+                               match="Satır 3" if kind == "bos-soru" else None):
                 load_questions(path)
         _assert_not_held_open(path)
     finally:

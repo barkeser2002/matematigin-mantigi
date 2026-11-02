@@ -13,7 +13,7 @@ import errno, json, os, sys, threading
 from pathlib import Path
 from PyQt6 import sip
 from PyQt6.QtCore import QSettings, QTimer
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox
 from matematigin_mantigi import app as app_mod
 from matematigin_mantigi.core.recorder import NullRecorder
 from matematigin_mantigi.core.settings import AppSettings
@@ -27,6 +27,7 @@ watchdog.daemon = True
 watchdog.start()
 real_build = app_mod.build_window
 answered = set()
+stray = []
 
 
 def out(*a):
@@ -110,6 +111,9 @@ def build(args, fam, settings=None):
         win.flow.next_question()
 
     def start():
+        if MODE == "yetim":                     # kapanış yolunun bilmediği, görünür başka bir üst düzey pencere
+            stray.append(QLabel("başıboş pencere"))
+            stray[0].show()
         win.toggle_recording(True)
         QTimer.singleShot(0, boom)
         QTimer.singleShot(0, snapshot_fails)
@@ -118,7 +122,7 @@ def build(args, fam, settings=None):
     def close():
         out("SERIT " + win.toolbar.alert_label.text())
         win.close()                             # kapanış sorusu (gerçek modal) -> 'Durdur ve çık'
-        if MODE == "basari":                    # kayıt bitti ama sonuç pencereye ulaşmadan yoklama kutuyu açtı
+        if MODE != "hata":                      # kayıt bitti ama sonuç pencereye ulaşmadan yoklama kutuyu açtı
             later(lambda: bool(notice_boxes()), rec.release.set)
         else:
             rec.release.set()
@@ -138,16 +142,7 @@ def _text(x) -> str:
     return x.decode("utf-8", "replace") if isinstance(x, bytes) else (x or "")
 
 
-@pytest.mark.parametrize("mode", ["basari", "hata"])
-def test_stop_and_quit_shows_one_summary_and_the_process_exits(tmp_path, mode):
-    """P1 uçtan uca (gerçek app.main): kayıt sırasında iki uyarı birikir (yuvada istisna ve 'Tahta görüntüsü
-    kaydedilemedi'), öğretmen pencereyi kapatıp 'Durdur ve çık' der. Kayıt başarıyla bittiyse eskiden pencere kapanıyor,
-    uyarılar ve mikrofon uyarısı hiç görünmüyordu (kutu da gizli pencerenin çocuğu olarak ekranda kalıyordu); hatayla
-    bittiyse 'Kayıt hatası'nın çocuğu olarak silinen kutu gizli ana pencerenin altında yeniden açılıyor, Qt'nin
-    kuyruktaki çıkışını siliyordu: pencere kapanıyor, SÜREÇ ÇIKMIYORDU (Windows'ta görünmez arka plan süreci). Şimdi
-    kapanış sorusundan sonra TEK pencere: sonuç, ses uyarısı ve iki uyarı; sonra süreç 0 ile çıkar, arkada kutu kalmaz.
-    Özet açıkken gelen uyarı ('hata') özetin üstünde görünür, kapanan pencerenin altında yeniden açılmaz. Uyarılar
-    hatalar.log'da da durur."""
+def _run(tmp_path, mode: str):
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen", XDG_CONFIG_HOME=str(tmp_path / "cfg"))
     try:
         p = subprocess.run([sys.executable, "-c", CHILD, mode], cwd=tmp_path, env=env, capture_output=True,
@@ -158,6 +153,20 @@ def test_stop_and_quit_shows_one_summary_and_the_process_exits(tmp_path, mode):
     lines = p.stdout.splitlines()
     assert "ZAMAN_ASIMI" not in lines and p.returncode == 0, (p.returncode, p.stdout, p.stderr[-2000:])
     assert "EXEC 0" in lines and "CIKISTA_GORUNEN_KUTU 0" in lines, lines
+    return lines
+
+
+@pytest.mark.parametrize("mode", ["basari", "hata"])
+def test_stop_and_quit_shows_one_summary_and_the_process_exits(tmp_path, mode):
+    """P1 uçtan uca (gerçek app.main): kayıt sırasında iki uyarı birikir (yuvada istisna ve 'Tahta görüntüsü
+    kaydedilemedi'), öğretmen pencereyi kapatıp 'Durdur ve çık' der. Kayıt başarıyla bittiyse eskiden pencere kapanıyor,
+    uyarılar ve mikrofon uyarısı hiç görünmüyordu (kutu da gizli pencerenin çocuğu olarak ekranda kalıyordu); hatayla
+    bittiyse 'Kayıt hatası'nın çocuğu olarak silinen kutu gizli ana pencerenin altında yeniden açılıyor, Qt'nin
+    kuyruktaki çıkışını siliyordu: pencere kapanıyor, SÜREÇ ÇIKMIYORDU (Windows'ta görünmez arka plan süreci). Şimdi
+    kapanış sorusundan sonra TEK pencere: sonuç, ses uyarısı ve iki uyarı; sonra süreç 0 ile çıkar, arkada kutu kalmaz.
+    Özet açıkken gelen uyarı ('hata') özetin üstünde görünür, kapanan pencerenin altında yeniden açılmaz. Uyarılar
+    hatalar.log'da da durur."""
+    lines = _run(tmp_path, mode)
     modals = [json.loads(line[len("MODAL "):]) for line in lines if line.startswith("MODAL ")]
     assert len(modals) == 2 and modals[0] == "Kayıt sürüyor, durdurulup çıkılsın mı?", modals
     summary = modals[1]
@@ -170,3 +179,13 @@ def test_stop_and_quit_shows_one_summary_and_the_process_exits(tmp_path, mode):
     log = (tmp_path / "hatalar.log").read_text(encoding="utf-8")
     assert "Tahta görüntüsü kaydedilemedi" in log and "kayıt sırasında yapay yuva hatası" in log, log
     assert mode != "hata" or "özet açıkken gelen yapay hata" in log, log
+
+
+def test_closing_the_main_window_ends_the_process_even_if_another_window_is_left_open(tmp_path):
+    """Ana pencere kapanınca süreç biter. Qt'nin kendi kuralı ('son pencere kapanınca çık') görünür başka bir üst düzey
+    pencere oldukça bekler: kapanış yolunun bilmediği bir pencere (P1'deki uyarı kutusu gibi) pencere kapandıktan sonra
+    süreci açık tutuyordu; ekran dışında ya da gizli pencerenin altında kalınca bu, görünmez arka plan süreci demek.
+    app.main ana pencerenin kapanışında süreci açıkça bitirir; sonuç ve uyarılar yine kapanmadan önce gösterilir."""
+    lines = _run(tmp_path, "yetim")
+    modals = [json.loads(line[len("MODAL "):]) for line in lines if line.startswith("MODAL ")]
+    assert len(modals) == 2 and "kayit_yapay.mp4" in modals[1], modals

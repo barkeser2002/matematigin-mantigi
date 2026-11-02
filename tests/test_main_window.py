@@ -544,6 +544,86 @@ def test_notice_box_open_when_recording_starts_is_not_in_the_first_frame(window,
     assert "duzen.json yazılamadı" in _visible_message_boxes()[0].text() and shown == []
 
 
+def _magenta_share(image) -> float:
+    """Görüntüde macenta (testte kutu bu renge boyanır) piksellerin oranı."""
+    import numpy as np
+    from PyQt6.QtGui import QImage
+    img = image.convertToFormat(QImage.Format.Format_RGB32)
+    ptr = img.constBits()
+    ptr.setsize(img.sizeInBytes())
+    px = np.frombuffer(ptr, np.uint8).reshape(img.height(), img.bytesPerLine() // 4, 4)[:, :img.width(), :3]
+    return float(((px[..., 0] > 200) & (px[..., 1] < 60) & (px[..., 2] > 200)).mean()) if px.size else 0.0
+
+
+def _magenta_notice_box(window, qtbot, monkeypatch):
+    """Pencereye bağlı gerçek uyarı kutusu, kayıttan önce açık; ekranda ayırt edilsin diye macenta. (kutu, yeri)."""
+    from matematigin_mantigi.ui import error_notice
+    notice = _wired_notice(window, monkeypatch)
+    error_notice.post("Beklenmeyen hata", "Ayrıntı: /Users/ogretmen.adi/Documents/Matematiğin Mantığı/hatalar.log",
+                      key="k1")
+    qtbot.waitUntil(lambda: bool(_visible_message_boxes()), timeout=2000)
+    box = _visible_message_boxes()[0]
+    box.setStyleSheet("QMessageBox, QMessageBox * { background: #ff00ff; color: #ff00ff; border: none; }")
+    qtbot.wait(100)                                   # macenta kutu ekrana çizilsin
+    return notice, box.geometry()
+
+
+def test_box_hidden_for_recording_is_off_the_screen_when_the_first_frame_is_grabbed(window, qtbot, monkeypatch):
+    """U6: prepare_recording kutuyu start()'tan önce gizliyordu; ama gizlenen pencere olay döngüsü dönene dek ekranda
+    (exposed) kalıyor, ekran yakalayıcısı onu çizmeye devam ediyordu: kutu (hatalar.log'un yolu, yani kullanıcı adı)
+    gerçek kaydın ilk ~3 karesindeydi (inceleme v02, k001-k003). Qt düzeyindeki görünürlük bunu göstermez: ilk kare
+    (start() içinde, GUI'de) ekrandan piksel düzeyinde alınır, macenta kutu orada çizili olmamalı. Kutu gizlenince
+    dönen olay turunda yoklama ve sıradaki yeni uyarı kutuyu geri getirmez (şeride gider); kayıt bitince ikisi kutuda."""
+    from PyQt6.QtGui import QGuiApplication
+    from matematigin_mantigi.core.recorder import NullRecorder
+    from matematigin_mantigi.ui import error_notice
+    shown = _capture_modals(monkeypatch)
+    notice, area = _magenta_notice_box(window, qtbot, monkeypatch)
+
+    def on_screen() -> float:
+        return _magenta_share(QGuiApplication.primaryScreen().grabWindow(
+            0, area.x(), area.y(), area.width(), area.height()).toImage())
+    assert on_screen() > 0.5                          # ölçü çalışıyor: açık kutu ekranda macenta
+
+    class Rec(NullRecorder):
+        first_frame = None
+
+        def start(self, rect, fps=60):                # gerçek kaydedici ilk kareyi burada, GUI'de yakalar
+            Rec.first_frame = (on_screen(), len(_visible_message_boxes()))
+            super().start(rect, fps)
+    window.recorder = Rec()
+    notice._poll_timer.setInterval(0)                 # yoklama her olay turunda: kutuyu geri getirecekse getirsin
+    error_notice.post("Tahta görüntüsü kaydedilemedi", "S1 sorusunun resmi yazılamadı.", key="k2")      # sırada
+    window.toggle_recording(True)
+    notice._poll_timer.setInterval(error_notice.POLL_MS)
+    strip = window.toolbar.alert_label.text()
+    qtbot.wait(3 * error_notice.POLL_MS)
+    during = (len(_visible_message_boxes()), on_screen())                       # kayıt sürerken de yok
+    window.toggle_recording(False)
+    assert Rec.first_frame == (0.0, 0) and strip == "⚠ 2 uyarı — ayrıntı kayıt bitince", (Rec.first_frame, strip)
+    assert during == (0, 0.0), during
+    qtbot.waitUntil(lambda: bool(_visible_message_boxes()), timeout=2000)        # kayıt bitti: ikisi kutuda
+    text = _visible_message_boxes()[0].text()
+    assert "hatalar.log" in text and "S1 sorusunun resmi" in text and shown == [], (text, shown)
+
+
+def test_box_hidden_for_a_recording_that_does_not_start_comes_back(window, qtbot, monkeypatch):
+    """U6: kayıt başlamazsa (başlatma hatası) start()'tan önce gizlenen kutu geri gelir, şerit temizlenir: uyarı
+    kaybolmaz."""
+    from matematigin_mantigi.core.recorder import NullRecorder, RecorderError
+
+    class Failing(NullRecorder):
+        def start(self, rect, fps=60):
+            raise RecorderError("ffmpeg bulunamadı (yapay)")
+    shown = _capture_modals(monkeypatch)
+    _magenta_notice_box(window, qtbot, monkeypatch)
+    window.recorder = Failing()
+    window.toggle_recording(True)
+    assert len(shown) == 1 and "Kayıt başlamadı" in shown[0][1], shown
+    qtbot.waitUntil(lambda: bool(_visible_message_boxes()), timeout=2000)
+    assert "hatalar.log" in _visible_message_boxes()[0].text() and not window.toolbar.alert_label.isVisible()
+
+
 # --- #2: kayıt kaydedilirken yeni kayıt yok; uyarı araç çubuğunda (denetim app#1, e2e#2) -----------------------
 
 def test_r_while_previous_recording_is_saving_starts_nothing_and_warns_in_toolbar(window, qtbot, tmp_path,

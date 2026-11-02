@@ -26,7 +26,7 @@ import sys
 from typing import Callable, Sequence
 
 from PyQt6 import sip
-from PyQt6.QtCore import QCoreApplication, QObject, QPoint, QRect, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QCoreApplication, QEventLoop, QObject, QPoint, QRect, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QGuiApplication, QWindow
 from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
 
@@ -114,6 +114,7 @@ class ErrorNotice(QObject):
         self._anchor: QWidget | None = None
         self._anchor_window: QWindow | None = None    # çapanın yerel penceresi: görünürlüğü buradan izlenir
         self._released = False                        # uygulama kapanıyor: pencereyle bağ kesildi
+        self._starting = False                        # kayıt başlatılıyor: prepare_recording'den start() dönene dek
         self._avoid: Callable[[], QRect | None] | None = None
         self._keep_clear: Callable[[], QRect | None] | None = None
         self._is_recording: Callable[[], bool] | None = None
@@ -197,15 +198,28 @@ class ErrorNotice(QObject):
     def prepare_recording(self) -> None:
         """Kayıt başlamak üzere (MainWindow.recordingAboutToStart; app.py bağlar): kaydedici ilk kareyi start() içinde,
         hemen yakalar. Görünür kutu ŞİMDİ gizlenir, uyarı şeride geçer; Tamam'a basılmadığı için kayıt bitince yeniden
-        gösterilir. Kayıt başlamazsa (başlatma hatası) yoklama kutuyu hemen geri getirir. Eskiden kutu ancak rozetin
-        ilk tikinde, start() döndükten sonra gizleniyor, kaydın ilk karelerine giriyordu (kutu hatalar.log'un tam
-        yolunu, yani kullanıcı adını taşır). İstisna fırlatmaz."""
+        gösterilir. Eskiden kutu ancak rozetin ilk tikinde, start() döndükten sonra gizleniyor, kaydın ilk karelerine
+        giriyordu (kutu hatalar.log'un tam yolunu, yani kullanıcı adını taşır). Gizlemek de yetmiyordu: gizlenen
+        pencere olay döngüsü dönene dek ekranda (exposed) kalıyor, ekran yakalayıcısı onu ilk ~3 karede çiziyordu
+        (U6). Kutu gizlendiyse olay döngüsü kullanıcı girdisi hariç bir kez döner. O turda ve start() dönene dek
+        (sonraki olay turu) kayıt sürüyor sayılır: yoklama ya da sıradaki yeni uyarı kutuyu geri getirmez, şeride
+        yazar. Kayıt başlamazsa (başlatma hatası) o turda kutu geri gelir. İstisna fırlatmaz."""
+        self._starting = True
         try:
             if self._stash_box():
                 self._update_alert()
+                QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
         except Exception as err:  # noqa: BLE001 - kayıt başlatmayı hiçbir koşulda engellemez
             _to_stderr("Uyarı kutusu", f"gizlenemedi: {err}")
+        QTimer.singleShot(0, self._start_settled)
         self._update_polling()
+
+    def _start_settled(self) -> None:
+        """prepare_recording'den sonraki ilk olay turu: start() döndü, kayıt başladı ya da başlamadı. Başlamadıysa
+        bekleyen uyarılar (gizlenen kutu dahil) hemen kutuyla gelir. İstisna fırlatmaz."""
+        self._starting = False
+        if self._is_recording is not None:
+            self._poll()
 
     def post(self, title: str, text: str, key: str | None = None) -> None:
         """Herhangi bir iş parçacığından güvenle çağrılır; istisna fırlatmaz."""
@@ -241,6 +255,8 @@ class ErrorNotice(QObject):
             pass
 
     def _recording(self) -> bool:
+        if self._starting:                          # kayıt başlatılıyor: ilk kareye kutu girmesin
+            return True
         if self._is_recording is None:
             return False
         try:

@@ -711,3 +711,68 @@ def test_ffmpeg_that_stops_reading_is_killed_and_stop_returns(tmp_path, monkeypa
     if mic:
         wav = rec.last_path.with_suffix(".wav")
         assert wav.exists() and str(wav) in rec.error, rec.error      # ses silinmedi; öğretmen yerini görür
+
+
+class NoMic:
+    """Açılmayan mikrofon: kayıt yalnız video (kapanışta .video.mp4 -> .mp4 adlandırması)."""
+    def __init__(self, device): pass
+    def start(self, path): raise RuntimeError("aygıt yok")
+
+
+@pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
+def test_exception_while_finalizing_is_recorded_and_the_waiting_stop_sees_it(tmp_path, monkeypatch):
+    """Kapanış patlayınca (Windows'ta kullanımdaki dosyanın adlandırılması) istisna yalnız kapatan stop()'a gidiyordu:
+    error boş kalıyor, kapanışı bekleyen ikinci stop() (pencere kapatma) var olmayan dosyanın yolunu istisnasız
+    döndürüyordu. Şimdi sebep oturuma yazılır ('Kayıt kapatılamadı: …' ve kayıt klasörü), kapatan stop() istisnayı
+    yine fırlatır, bekleyen stop() aynı hatayı RecorderError ile görür."""
+    real_replace = Path.replace
+    entered, go = threading.Event(), threading.Event()
+
+    def busy(self, target):
+        if self.name.endswith(".video.mp4"):
+            entered.set()
+            assert go.wait(20)                                        # ikinci stop() FINALIZING'i görsün
+            raise PermissionError(13, "dosya kullanımda", str(self))
+        return real_replace(self, target)
+    rec = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber, out_height=0,
+                            audio_device="Yok", audio_factory=NoMic, clock=stepping_clock())
+    rec.start(RecordRect(0, 0, 160, 120))
+    wait_until(lambda: rec.frames_written >= 3)
+    monkeypatch.setattr(Path, "replace", busy)
+    outcomes: list = [None, None]
+    stoppers = [threading.Thread(target=lambda i=i: outcomes.__setitem__(i, _outcome(rec.stop)), daemon=True)
+                for i in range(2)]
+    stoppers[0].start()
+    try:
+        assert entered.wait(20)
+        stoppers[1].start()
+        stoppers[1].join(0.3)
+        assert stoppers[1].is_alive()                                 # kapanışın bitmesini bekliyor
+    finally:
+        go.set()
+        for t in stoppers:
+            t.join(20)
+    first, second = outcomes
+    assert first[0] == "istisna" and isinstance(first[1], PermissionError), first
+    assert rec.error is not None and rec.error.startswith(
+        "Kayıt kapatılamadı: PermissionError: [Errno 13] dosya kullanımda"), rec.error
+    assert f"Kayıt klasörü: {tmp_path / 'rec'}" in rec.error, rec.error
+    assert second[0] == "istisna" and isinstance(second[1], RecorderError) and str(second[1]) == rec.error, second
+
+
+@posix_only
+def test_ffmpeg_that_dies_at_start_keeps_the_wav_and_says_where_it_is(tmp_path):
+    """Mikrofonlu kayıtta ffmpeg başta ölürse (kodlayıcı açılamadı, disk dolu) ara .video.mp4 hiç oluşmaz. _mux'taki
+    korumasız video.replace FileNotFoundError fırlatıyordu: arayüz ham Errno metnini gösteriyor, sesin durduğunu
+    söylemiyordu. Şimdi stop() istisnasız döner; hata ffmpeg'in sebebini ve sesin yerini söyler, WAV silinmez."""
+    exe = fake_ffmpeg(tmp_path, "echo 'Error while opening encoder: No space left on device' >&2; exit 1")
+    rec = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber, out_height=0,
+                            ffmpeg_exe=str(exe), audio_device="Sahte Mikrofon", audio_factory=FakeAudioCapture,
+                            clock=stepping_clock())
+    rec.start(RecordRect(0, 0, 160, 120))
+    wait_until(lambda: rec.failed)                                    # yazıcı kırık boruyu gördü
+    path = rec.stop()
+    wav = path.with_suffix(".wav")
+    assert wav.exists() and not path.exists() and not path.with_name(path.stem + ".video.mp4").exists()
+    assert "No space left on device" in rec.error and "Video dosyası oluşmadı" in rec.error, rec.error
+    assert str(wav) in rec.error, rec.error

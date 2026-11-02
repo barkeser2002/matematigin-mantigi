@@ -289,6 +289,18 @@ def _joined(*parts: str | None) -> str | None:
     return "; ".join(p for p in parts if p) or None
 
 
+def _with_paragraph(text: str | None, more: str) -> str:
+    """Hata metnine yeni paragraf ekler: önceki sebep silinmesin."""
+    return f"{text}\n\n{more}" if text else more
+
+
+def exception_text(err: BaseException) -> str:
+    """İstisnanın okunur özeti, hiçbir zaman boş değil: 'PermissionError: [Errno 13] … : yol'; mesajsızsa 'OSError()'
+    (str(OSError()) boştur, arayüz hiçbir şey göstermiyordu)."""
+    text = str(err)
+    return f"{type(err).__name__}: {text}" if text else repr(err)
+
+
 def audio_rate_correction(result: AudioResult, min_duration: float = 600.0, min_ppm: float = 100.0) -> int | None:
     """Uzun kayıtta mikrofon saati ile bilgisayar saati arasındaki farkı ölç: örnek sayısı / duvar süresi.
     Kısa kayıtta ölçüm gürültüsü (±30 ms) gerçek kaymadan büyük olduğu için uygulanmaz."""
@@ -408,6 +420,10 @@ class MssFfmpegRecorder:
         if state is RecorderState.RECORDING:
             try:
                 self._finalize(s)
+            except BaseException as err:             # sebep oturuma: arayüz ve kapanışı bekleyen stop() da görsün
+                s.error = _with_paragraph(s.error, f"Kayıt kapatılamadı: {exception_text(err)}\n"
+                                                   f"Kayıt klasörü: {s.final_path.parent}")
+                raise
             finally:                                 # kapanış patlasa da FINALIZING'de takılı kalınmasın
                 with self._lock:
                     self._state = RecorderState.IDLE
@@ -603,13 +619,19 @@ class MssFfmpegRecorder:
         return s.audio_result
 
     def _mux(self, s: _Session, audio: AudioResult) -> None:
-        """Video (kopya) + WAV -> son MP4. Birleştirme başarısızsa yalnız video dosyası sonuç olur. Birleştirme
-        videoyu asla kısaltmaz (#1): eksik ses sessizlikle dolar; ara dosyalar yalnız birleşik dosyanın videonun
+        """Video (kopya) + WAV -> son MP4. Birleştirme başarısızsa yalnız video dosyası sonuç olur; video hiç
+        oluşmadıysa (ffmpeg başta öldü) WAV durur ve hata yerini söyler. Birleştirme videoyu asla kısaltmaz (#1):
+        eksik ses sessizlikle dolar; ara dosyalar yalnız birleşik dosyanın videonun
         tam uzunluğunda olduğu ölçülünce silinir. Mikrofon kesildiyse ya da WAV yazılamadıysa audio_error söyler."""
         exe = self._ffmpeg_exe or find_ffmpeg()
         video, out = s.video_path, s.final_path
         if audio.error:                              # WAV yazıcısı öldü (disk dolu...): o ana dek yazılan ses kalır
             s.audio_error = s.audio_error or f"Ses dosyası yazılamadı: {audio.error}"
+        if not video.exists():                       # ffmpeg kayıt başında öldü: birleştirilecek video yok
+            sound = audio.samples > 0 and audio.path.exists()
+            s.error = _with_paragraph(s.error, "Video dosyası oluşmadı" + (
+                f"; ses ayrı dosyada duruyor (silinmedi):\n{audio.path}" if sound else "; ses de kaydedilemedi."))
+            return
         if not exe or audio.samples <= 0 or not audio.path.exists():
             s.audio_error = s.audio_error or "Ses kaydedilemedi (örnek yok)"
             video.replace(out)
@@ -653,7 +675,7 @@ class MssFfmpegRecorder:
         yerini söyler. Birleşik dosya da kalır; öğretmen hangisini kullanacağını görür."""
         text = (f"{why}: {s.final_path}\nHam video ve ses silinmedi; kaydın tamamı bu dosyalarda:\n"
                 f"{s.video_path}\n{audio.path}")
-        s.error = f"{s.error}\n\n{text}" if s.error else text
+        s.error = _with_paragraph(s.error, text)
 
     def _grab_loop(self, s: _Session, rect: RecordRect, w: int, h: int, fps: int) -> None:
         """Yakalama iş parçacığı: en fazla fps hızında kare alır, en yenisini bırakır."""

@@ -1,6 +1,9 @@
 import itertools
+import os
 import re
+import signal
 import subprocess
+import sys
 import threading
 import time
 import wave
@@ -636,3 +639,75 @@ def test_audio_end_in_video_follows_the_alignment_and_rate_fix():
     assert audio_end_in_video(ten, 0.25) == pytest.approx(9.75)
     assert audio_end_in_video(ten, -0.1) == pytest.approx(10.1)
     assert audio_end_in_video(ten, 0.0, asetrate=48480) == pytest.approx(480000 / 48480)
+
+
+# --- kapanış takılmaz, hatası görünür (bağımsız inceleme F1, F3, F4) ----------------------------------------
+
+posix_only = pytest.mark.skipif(sys.platform == "win32", reason="sahte ffmpeg bir kabuk betiği")
+
+
+def fake_ffmpeg(tmp_path: Path, recording: str, other: str = "exit 1") -> Path:
+    """ffmpeg yerine geçen kabuk betiği: kayıt komutunda (giriş pipe:0) `recording`, diğer çağrılarda (birleştirme,
+    süre ölçümü) `other` koşar. Kayıt sürecinin PID'i ffmpeg.pid'e yazılır (exec ile PID değişmez): test takılı
+    kalan süreci kendisi öldürebilsin."""
+    exe = tmp_path / "sahte-ffmpeg"
+    exe.write_text(f"#!/bin/sh\ncase \"$*\" in\n  *pipe:0*) echo $$ > '{tmp_path / 'ffmpeg.pid'}'; {recording};;\n"
+                   f"  *) {other};;\nesac\n")
+    exe.chmod(0o755)
+    return exe
+
+
+def _outcome(fn):
+    """fn()'in sonucu ('dönüş', değer) ya da ('istisna', hata); iş parçacığından toplanır."""
+    try:
+        return "dönüş", fn()
+    except Exception as err:  # noqa: BLE001
+        return "istisna", err
+
+
+@posix_only
+@pytest.mark.parametrize("mic", [False, True], ids=["mikrofonsuz", "mikrofonlu"])
+def test_ffmpeg_that_stops_reading_is_killed_and_stop_returns(tmp_path, monkeypatch, mic):
+    """ffmpeg stdin'i okumayı bırakıp ölmezse (donan kodlayıcı, takılan disk) yazıcı iş parçacığı write()'ta borunun
+    kilidini tutarak bekler. Kapanıştaki stdin.close() aynı kilidi beklediği için join ve communicate zaman aşımları
+    hiç işlemiyordu: stop() dönmüyor, kaydedici FINALIZING'de, şerit 'Kayıt kaydediliyor…'da, R ve düğme kilitli
+    kalıyordu. Şimdi yazıcı zamanında durmazsa ffmpeg öldürülür; stop() döner, kaydedici IDLE, hata ne olduğunu ve
+    silinmeyen dosyaları söyler. Kapanışı bekleyen ikinci stop() da sınırlı bekler ve hatayı RecorderError ile görür."""
+    from matematigin_mantigi.core import recorder as r
+    from matematigin_mantigi.core.recorder import RecorderState
+    monkeypatch.setattr(r, "WRITER_JOIN_S", 0.5)                    # gerçek sınır 10 sn; test kısa sürsün
+    exe = fake_ffmpeg(tmp_path, "exec sleep 300")                     # stdin'i hiç okumaz, kendiliğinden ölmez
+    kw = dict(audio_device="Sahte Mikrofon", audio_factory=FakeAudioCapture) if mic else {}
+    rec = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber, out_height=0,
+                            ffmpeg_exe=str(exe), clock=stepping_clock(), **kw)
+    rec.start(RecordRect(0, 0, 160, 120))                             # kare 76,8 KB > boru tamponu: write() bekler
+    pid_file = tmp_path / "ffmpeg.pid"
+    wait_until(lambda: pid_file.exists() and pid_file.read_text().strip() != "")
+    pid = int(pid_file.read_text())
+    outcomes: list = [None, None]
+    stoppers = [threading.Thread(target=lambda i=i: outcomes.__setitem__(i, _outcome(rec.stop)), daemon=True)
+                for i in range(2)]
+    try:
+        stoppers[0].start()
+        wait_until(lambda: rec.state is RecorderState.FINALIZING)
+        stoppers[1].start()                                           # pencere kapatma + işçi gibi ikinci stop()
+        for t in stoppers:
+            t.join(15)
+        assert not any(t.is_alive() for t in stoppers), "stop() takılı kaldı"
+    finally:
+        try:
+            os.kill(pid, signal.SIGKILL)                              # (düzeltmesiz kodda takılı stop()'u çöz)
+        except ProcessLookupError:
+            pass
+        for t in stoppers:
+            t.join(10)
+    assert outcomes[0] == ("dönüş", rec.last_path), outcomes
+    assert outcomes[1][0] == "istisna" and isinstance(outcomes[1][1], RecorderError), outcomes
+    assert rec.state is RecorderState.IDLE and rec.error is not None
+    assert rec.error.startswith("ffmpeg yanıt vermedi; kayıt zorla kapatıldı"), rec.error
+    assert str(outcomes[1][1]) == rec.error
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)                                               # öldürüldü ve toplandı (zombi değil)
+    if mic:
+        wav = rec.last_path.with_suffix(".wav")
+        assert wav.exists() and str(wav) in rec.error, rec.error      # ses silinmedi; öğretmen yerini görür

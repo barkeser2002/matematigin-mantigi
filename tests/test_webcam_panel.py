@@ -294,3 +294,20 @@ def test_set_source_factory_keeps_the_not_responding_placeholder_while_at_the_ca
         event.set()                     # bekleyen tüm read()'leri serbest bırak (bkz. üstteki testler)
         for _ in range(20):
             qtbot.wait(100)
+
+
+def test_panel_shows_understandable_message_when_frames_keep_failing(qtbot):
+    """Kamera iş parçacığı bozuk karelerde sessizce ölmesin: panel donuk kare yerine anlaşılır bilgi gösterir."""
+    class Broken:
+        released = False
+        def open(self): return True
+        def read(self):
+            raise ValueError("yapay sürücü hatası")
+        def release(self): Broken.released = True
+    panel = WebcamPanel(FAM, lambda: Broken(), ChromaParams())
+    qtbot.addWidget(panel); panel.show()
+    with qtbot.waitSignal(panel.worker.cameraError, timeout=5000):
+        panel.start()
+    qtbot.waitUntil(lambda: "Kamera görüntüsü alınamadı" in panel.view.placeholder_text, timeout=2000)
+    assert not panel.has_camera and Broken.released
+    panel.shutdown()

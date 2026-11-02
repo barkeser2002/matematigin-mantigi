@@ -58,7 +58,7 @@ class CrashLog:
         self._lock = threading.RLock()          # kanca herhangi bir iş parçacığından çağrılabilir
         self._prev_hooks: tuple | None = None
 
-    def record(self, exc_type, exc, tb, where: str = "") -> tuple[str, int, bool]:
+    def record(self, exc_type, exc, tb, where: str = "", handled: bool = False) -> tuple[str, int, bool]:
         """Hatayı günlüğe ekler; dönüş (anahtar, bu oturumda kaçıncı kez, günlüğe yazıldı mı). Aynı hata ilk kez
         zaman damgası ve traceback'le, sonra yalnız 10., 100. … tekrarında tek satırla yazılır: saniyede 60 kez
         patlayan bir çizim olayı bir saatlik derste diski doldurmasın."""
@@ -71,7 +71,8 @@ class CrashLog:
             try:
                 stamp = self._clock().strftime("%Y-%m-%d %H:%M:%S")
                 if n == 1:
-                    head = f"==== {stamp} · yakalanmamış hata" + (f" ({where})" if where else "") + " ===="
+                    kind = "yakalanan hata" if handled else "yakalanmamış hata"
+                    head = f"==== {stamp} · {kind}" + (f" ({where})" if where else "") + " ===="
                     text = (f"{head}\nMatematiğin Mantığı {__version__} · Python {platform.python_version()} · "
                             f"{platform.platform()}\n" + "".join(traceback.format_exception(exc_type, exc, tb)) + "\n")
                 else:
@@ -125,18 +126,26 @@ class CrashLog:
         self._handle(args.exc_type, args.exc_value, args.exc_traceback, f"iş parçacığı: {name}" if name else "")
 
 
+_active: CrashLog | None = None                    # kurulu günlük (log_handled için); install/uninstall yönetir
+
+
 def install(path: Path, notify: Notify | None = None) -> CrashLog:
     """sys.excepthook ve threading.excepthook'u kurar. Qt'ye dokunmaz: QApplication'dan önce ya da sonra güvenle
     çağrılır; `notify` sonradan (QApplication kurulunca) atanabilir."""
+    global _active
     log = CrashLog(path, notify)
     log._prev_hooks = (sys.excepthook, threading.excepthook)
     sys.excepthook = log.excepthook
     threading.excepthook = log.threading_hook
+    _active = log
     return log
 
 
 def uninstall(log: CrashLog) -> None:
     """Kurulumu geri alır: kancalar hâlâ bu günlüğünse öncekiler geri gelir."""
+    global _active
+    if _active is log:
+        _active = None
     if log._prev_hooks is None:
         return
     prev_sys, prev_thread = log._prev_hooks
@@ -145,3 +154,11 @@ def uninstall(log: CrashLog) -> None:
     if threading.excepthook == log.threading_hook:
         threading.excepthook = prev_thread
     log._prev_hooks = None
+
+
+def log_handled(exc: BaseException, where: str = "") -> None:
+    """Yakalanıp kullanıcıya kendi yolundan bildirilen hatayı da (traceback'iyle, ayrıntı için) günlüğe ekler;
+    uyarı kutusu açmaz. Kanca kurulu değilse (testler, araçlar) bir şey yapmaz; istisna fırlatmaz."""
+    log = _active
+    if log is not None:
+        log.record(type(exc), exc, exc.__traceback__, where, handled=True)

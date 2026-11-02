@@ -130,18 +130,36 @@ def _text(v) -> str:
     return "" if v is None else str(v).strip()
 
 
+def _read_rows(source) -> list[tuple]:
+    """Etkin sayfanın satırları (yalnız değerler). source bir yol ya da ikili kipte açık dosya: openpyxl yolu uzantısına
+    bakıp .bak/.tmp adlı dosyayı reddeder, dosya nesnesinde bakmaz."""
+    wb = openpyxl.load_workbook(source, read_only=True, data_only=True)
+    try:
+        # Satırlar önce belleğe alınır, kitap hemen kapanır: read_only kitap dosyayı açık tutar ve doğrulama hatası
+        # wb.close()'dan önce fırlayınca tutamak çöp toplayıcıya dek kalıyordu. Windows'ta açık tutamak dosyayı
+        # kilitler: öğretmen Excel'den kaydedemez, editörün atomik yazımı (os.replace) da düşer.
+        return list(wb.active.iter_rows(values_only=True))
+    finally:
+        wb.close()
+
+
 def load_questions(path: Path) -> list[Question]:
     path = Path(path)
     if not path.exists():
         raise QuestionTemplateError(f"Şablon bulunamadı: {path}")
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    try:
-        # Satırlar önce belleğe alınır, kitap hemen kapanır: read_only kitap dosyayı açık tutar ve aşağıdaki doğrulama
-        # hatası wb.close()'dan önce fırlayınca tutamak çöp toplayıcıya dek kalıyordu. Windows'ta açık tutamak
-        # dosyayı kilitler: öğretmen Excel'den kaydedemez, editörün atomik yazımı (os.replace) da düşer.
-        all_rows = list(wb.active.iter_rows(values_only=True))
-    finally:
-        wb.close()
+    return _questions_from_rows(_read_rows(path), path.parent)
+
+
+def load_backup(path: Path) -> list[Question]:
+    """Soru dosyasının önceki sürümündeki (<ad>.bak) sorular; görsel yolları soru dosyasının klasörüne göre çözülür.
+    Yedek dosya nesnesi olarak açılır (openpyxl .bak uzantısını reddeder). Yedek yoksa OSError."""
+    path = Path(path)
+    with open(backup_path(path), "rb") as fh:
+        return _questions_from_rows(_read_rows(fh), path.parent)
+
+
+def _questions_from_rows(all_rows: list[tuple], folder: Path) -> list[Question]:
+    """Sayfa satırlarından sorular; göreli görsel yolu folder'a (xlsx'in klasörü) göre çözülür."""
     rows = iter(all_rows)
     header = [_text(c).lower() for c in (next(rows, None) or [])]
     missing = [c for c in REQUIRED_COLUMNS if c not in header]
@@ -172,7 +190,7 @@ def load_questions(path: Path) -> list[Question]:
         image: str | None = None
         if image_raw:
             p = Path(image_raw)
-            image = str(p if p.is_absolute() else (path.parent / p))
+            image = str(p if p.is_absolute() else (folder / p))
         questions.append(Question(qid, cell(cells, "konu"), sinif, soru, hints, cell(cells, "cevap"),
                                   options, image))
     if not questions:

@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from matematigin_mantigi import paths
 from matematigin_mantigi.core import crash_log
-from matematigin_mantigi.core.models import SAMPLE_QUESTIONS
+from matematigin_mantigi.core.models import SAMPLE_QUESTIONS, Question
 from matematigin_mantigi.core.question_loader import backup_path, ensure_template, load_questions
 from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState
 from matematigin_mantigi.core.session_store import SessionStore
@@ -30,13 +30,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return p.parse_args(argv[1:])
 
 
-def load_questions_or_samples(template: Path):
-    """Soru dosyasını yükler (yoksa örnek şablonu yazar). Dosya okunamazsa (bozuk, yarım kalmış, eksik sütun, okunamayan
-    yol; her türlü hata) dosya adı ve sebep söylenir, uygulama örnek sorularla açılır (#17): yalnız
-    QuestionTemplateError yakalandığı için yarım kalmış bir xlsx uygulamayı bir daha hiç açılmaz yapıyordu. Editör
-    böyle bir dosyanın üzerine yazmaz (#4)."""
+def load_questions_or_samples(template: Path) -> tuple[list[Question], bool]:
+    """Soru dosyasını yükler (yoksa örnek şablonu yazar); (sorular, dosyadan_okundu) döner. Dosya okunamazsa (bozuk,
+    yarım kalmış, eksik sütun, okunamayan yol; her türlü hata) dosya adı ve sebep söylenir, uygulama örnek sorularla
+    açılır (#17): yalnız QuestionTemplateError yakalandığı için yarım kalmış bir xlsx uygulamayı bir daha hiç açılmaz
+    yapıyordu. O zaman ikinci değer False: pencere ve editör bunu bilir, editör örnek soruları o dosyanın (ya da
+    yedeğinin) gerçek sorularının üzerine yazmaz; dosya sonradan düzelirse onları yüklemeyi önerir (#4, Q1)."""
     try:
-        return load_questions(ensure_template(template))
+        return load_questions(ensure_template(template)), True
     except Exception as err:  # noqa: BLE001 - açılış hiçbir soru dosyası yüzünden düşmez
         crash_log.log_handled(err, "soru dosyası")
         text = f"Soru dosyası okunamadı: {template.name}\nKlasör: {template.parent}\nSebep: {describe_load_error(err)}"
@@ -44,7 +45,7 @@ def load_questions_or_samples(template: Path):
         if bak.is_file():
             text += f"\n\nÖnceki sürümün yedeği: {bak.name} (adını {template.name} yapıp uygulamayı yeniden açın)."
         QMessageBox.warning(None, "Soru dosyası okunamadı", f"{text}\n\nÖrnek sorularla devam ediliyor.")
-        return list(SAMPLE_QUESTIONS)
+        return list(SAMPLE_QUESTIONS), False
 
 
 def build_window(args: argparse.Namespace, fam: theme.FontFamilies, settings: AppSettings | None = None) -> MainWindow:
@@ -52,7 +53,7 @@ def build_window(args: argparse.Namespace, fam: theme.FontFamilies, settings: Ap
     if paths.is_frozen():
         paths.ensure_user_data()            # .app: ~/Documents/Matematiğin Mantığı (şablon + görseller kopyalanır)
     template = Path(args.sorular) if args.sorular else paths.default_template_path()
-    questions = load_questions_or_samples(template)
+    questions, from_file = load_questions_or_samples(template)
     if args.kamera is not None:
         settings.camera_index = args.kamera
     factory = None if args.kamera_yok else (lambda index: OpenCvSource(index))
@@ -60,7 +61,8 @@ def build_window(args: argparse.Namespace, fam: theme.FontFamilies, settings: Ap
     store = SessionStore()
     recorder = MssFfmpegRecorder(lambda: store.session_dir, fps=settings.record_fps,
                                  audio_device=settings.audio_device or None, out_height=settings.record_height)
-    win = MainWindow(fam, questions, settings, recorder, store, factory, layout_path, questions_path=template)
+    win = MainWindow(fam, questions, settings, recorder, store, factory, layout_path, questions_path=template,
+                     questions_from_file=from_file)
     win.resize(1920, 1080)
     return win
 

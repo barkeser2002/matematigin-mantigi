@@ -15,11 +15,15 @@ from PyQt6.QtWidgets import (QApplication, QDialog, QFileDialog, QFrame, QHBoxLa
 
 from matematigin_mantigi.core import crash_log
 from matematigin_mantigi.core.models import OPTION_LETTERS, Question
-from matematigin_mantigi.core.question_loader import (EmptyTemplateError, QuestionTemplateError, clean_text,
-                                                      load_questions, save_question_image, write_questions)
+from matematigin_mantigi.core.question_loader import (EmptyTemplateError, QuestionTemplateError, backup_path,
+                                                      clean_text, load_backup, load_questions, save_question_image,
+                                                      write_questions)
 from matematigin_mantigi.ui import theme
 from matematigin_mantigi.ui.error_notice import describe_os_error
 from matematigin_mantigi.ui.theme import FontFamilies
+
+# Pencerede örnek sorular varken (uygulama açılışta soru dosyasını okuyamadı) Kaydet'in sorusunun düğmeleri.
+RELOAD_FROM_FILE, LOAD_BACKUP, KEEP_EDITING = "Dosyadan yeniden yükle", "Yedekten yükle", "Kaydetmeden dön"
 
 
 def describe_load_error(err: Exception) -> str:
@@ -53,15 +57,33 @@ def _card(title: str, fam: FontFamilies) -> tuple[QFrame, QVBoxLayout]:
     return f, col
 
 
+def _ask(parent: QWidget, title: str, text: str, accept: str) -> bool:
+    """accept düğmesine basıldı mı? Varsayılan ve Esc 'Kaydetmeden dön': hiçbir şey değişmez. (macOS kutu başlığını
+    göstermez; metin kendi başına anlaşılır olmalı.)"""
+    box = QMessageBox(QMessageBox.Icon.Question, title, text, parent=parent)
+    yes = box.addButton(accept, QMessageBox.ButtonRole.AcceptRole)
+    no = box.addButton(KEEP_EDITING, QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(no)
+    box.setEscapeButton(no)
+    box.exec()
+    chosen = box.clickedButton() is yes
+    box.deleteLater()
+    return chosen
+
+
 class QuestionEditorDialog(QDialog):
     """Soru dosyasının (xlsx) görsel düzenleyicisi. Kaydet, write_questions ile yazar ve saved yayar."""
 
     saved = pyqtSignal(object)      # list[Question]
 
-    def __init__(self, questions: Sequence[Question], questions_path: Path, fam: FontFamilies, parent=None):
+    def __init__(self, questions: Sequence[Question], questions_path: Path, fam: FontFamilies, parent=None, *,
+                 from_file: bool = True):
+        """from_file: sorular questions_path'ten mi okundu. False: uygulama açılışta dosyayı okuyamadı, pencerede örnek
+        sorular var; Kaydet onları dosyadaki ya da yedeğindeki gerçek soruların üzerine yazmaz (Q1)."""
         super().__init__(parent)
         self.fam = fam
         self.questions_path = Path(questions_path)
+        self.from_file = from_file
         self.images_dir = self.questions_path.parent / "sorular_gorsel"
         self.questions: list[Question] = list(questions)
         self._current = -1
@@ -338,14 +360,25 @@ class QuestionEditorDialog(QDialog):
                 QMessageBox.warning(self, "Eksik soru", f"{i + 1}. sıradaki sorunun metni boş; lütfen doldurun.")
                 self.list_widget.setCurrentRow(i)
                 return
-        problem = self._unreadable_target()
-        if problem is not None:
-            name = self.questions_path.name
+        name = self.questions_path.name
+        in_file, problem = self._read_target()
+        if isinstance(problem, str):
             QMessageBox.warning(self, "Kaydedilmedi",
                                 f"{name} okunamıyor: {problem}.\n\nİçindeki sorular kaybolmasın diye üzerine "
                                 f"yazılmadı. Dosyayı Excel'de düzeltin ya da klasöründen kaldırın (önceki sürümün "
                                 f"yedeği varsa {name}.bak), sonra yeniden Kaydet'e basın.\n\nDüzenlemeleriniz bu "
                                 "pencerede duruyor.")
+            return
+        if problem is not None and not self.from_file:
+            # Okunamayan dosyada gerçek sorular olup olmadığı bilinemez; pencerede yalnız örnek sorular var.
+            QMessageBox.warning(self, "Kaydedilmedi",
+                                f"{name} okunamıyor: {describe_os_error(problem)}.\n\nUygulama açılışta bu dosyayı "
+                                "okuyamadığı için örnek sorularla açılmıştı; dosyada gerçek sorularınız olabilir, bu "
+                                "yüzden üzerine örnek sorular yazılmadı. Dosya başka bir programda açıksa kapatın, "
+                                "eşitleniyorsa (iCloud, OneDrive) inmesini bekleyin, sonra yeniden Kaydet'e basın.\n\n"
+                                "Düzenlemeleriniz bu pencerede duruyor.")
+            return
+        if not self.from_file and self._offer_real_questions(in_file):
             return
         try:
             write_questions(self.questions_path, self.questions)
@@ -358,19 +391,60 @@ class QuestionEditorDialog(QDialog):
         self.saved.emit(list(self.questions))
         self.accept()
 
-    def _unreadable_target(self) -> str | None:
-        """Kaydedilecek dosya var ama içeriği okunamıyorsa sebebi (#4). Açılışta okunamayıp uygulamanın örnek
-        sorularla açıldığı bir dosyanın üzerine yazılmaz: öğretmenin gerçek soruları onda olabilir. Boş şablon
-        okunabilir sayılır; okuma sırasındaki dosya hatası (ör. kilit) içerik sorunu değildir, yazım yolu bildirir."""
+    def _read_target(self) -> tuple[list[Question], str | OSError | None]:
+        """Kaydedilecek dosyanın şimdiki hâli: (içindeki sorular, sorun). Dosya yoksa ya da boş şablonsa ([], None):
+        üzerine yazmak güvenli. İçeriği okunamıyorsa sorun öğretmenin anlayacağı sebeptir; o dosyanın üzerine yazılmaz,
+        gerçek sorular onda olabilir (#4). Okurken dosya hatası (kilit, izin) olursa sorun OSError'ın kendisidir:
+        içerik sorunu değildir, yazım yolu bildirir (pencerede örnek sorular varsa hiç yazılmaz)."""
         if not self.questions_path.exists():
-            return None
+            return [], None
         try:
-            load_questions(self.questions_path)
-        except (EmptyTemplateError, OSError):
-            return None
+            return load_questions(self.questions_path), None
+        except EmptyTemplateError:
+            return [], None
+        except OSError as err:
+            return [], err
         except Exception as err:  # noqa: BLE001 - içeriği okunamayan her dosya korunur
-            return describe_load_error(err)
-        return None
+            return [], describe_load_error(err)
+
+    def _offer_real_questions(self, in_file: list[Question]) -> bool:
+        """Pencerede örnek sorular var (uygulama açılışta soru dosyasını okuyamadı). Dosya artık okunabiliyorsa onun,
+        dosya yok ya da boşken yedeği okunabiliyorsa yedeğin soruları örneklerle ezilmez (yedek de bir sonraki Kaydet'te
+        değişirdi): o soruları bu pencereye yüklemeyi önerir. True: gerçek sorular var, Kaydet hiçbir şey yazmadan
+        durur."""
+        name = self.questions_path.name
+        if in_file:
+            found, accept, title = in_file, RELOAD_FROM_FILE, "Soru dosyası okunabiliyor"
+            where = f"{name} artık okunabiliyor: içinde {len(found)} soru var."
+            risk = "Kaydet dosyadaki soruların yerine onları yazacağı için hiçbir şey yazılmadı."
+            after = "sonra düzenleyip Kaydet'e basın."
+        else:
+            try:
+                found = load_backup(self.questions_path)
+            except Exception:  # noqa: BLE001 - yedek yok, boş ya da okunamıyor: korunacak soru yok
+                return False
+            accept, title = LOAD_BACKUP, "Soru dosyasının yedeği var"
+            state = "boş" if self.questions_path.exists() else "klasörde yok"
+            where = (f"{name} {state}, ama önceki sürümün yedeği {backup_path(self.questions_path).name} "
+                     f"okunabiliyor: içinde {len(found)} soru var.")
+            risk = ("Onlar kaydedilirse bir sonraki Kaydet yedeği de değiştirir, yedekteki sorular kaybolur; bu yüzden "
+                    "hiçbir şey yazılmadı.")
+            after = (f"Kaydet onları {name} olarak yazar. Yedeği kullanmayacaksanız onu klasörden kaldırıp yeniden "
+                     "Kaydet'e basın.")
+        text = (f"{where}\n\nUygulama açılışta soru dosyasını okuyamadığı için örnek sorularla açılmıştı; bu "
+                f"penceredeki sorular o örnekler. {risk}\n\n'{accept}' o soruları bu pencereye getirir (örnek "
+                f"sorulara yaptığınız değişiklikler bırakılır); {after}")
+        if _ask(self, title, text, accept):
+            self._use_questions(found)
+        return True
+
+    def _use_questions(self, questions: list[Question]) -> None:
+        """Pencereyi dosyadan/yedekten okunan sorularla yeniden doldurur; artık örnek sorular değil, Kaydet yazar."""
+        self.questions = list(questions)
+        self.from_file = True
+        self._current = -1                # eski formu yeni modele yazma
+        self._reload_list()
+        self.list_widget.setCurrentRow(0)
 
     def _save_error_text(self, err: Exception) -> str:
         head = f"Soru dosyası kaydedilemedi: {self.questions_path.name}"

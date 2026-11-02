@@ -229,7 +229,8 @@ def _broken(kind: str, p: Path) -> None:
 def test_unreadable_question_file_opens_with_samples_and_names_the_file(tmp_path, monkeypatch, kind):
     """#17: açılış yalnız QuestionTemplateError'ı yakalıyordu; yarım kalmış xlsx (KeyError), xlsx olmayan dosya
     (BadZipFile) ya da okunamayan yol uygulamayı açılmaz yapıyordu (çıkış 1, pencere yok). Her hatada dosya adı ve
-    sebep söylenir, uygulama örnek sorularla açılır; yedek varsa nerede olduğu da söylenir."""
+    sebep söylenir, uygulama örnek sorularla açılır; yedek varsa nerede olduğu da söylenir. Sorular dosyadan
+    okunmadığı da söylenir (Q1): editör örnekleri o dosyanın üzerine yazmasın."""
     from PyQt6.QtWidgets import QMessageBox
     from matematigin_mantigi import app as app_mod
     shown = []
@@ -238,11 +239,38 @@ def test_unreadable_question_file_opens_with_samples_and_names_the_file(tmp_path
     p = tmp_path / "sorular.xlsx"
     _broken(kind, p)
     _bak(p).write_bytes(b"onceki")
-    assert app_mod.load_questions_or_samples(p) == list(SAMPLE_QUESTIONS)
+    assert app_mod.load_questions_or_samples(p) == (list(SAMPLE_QUESTIONS), False)
     assert len(shown) == 1 and "sorular.xlsx" in shown[0][1] and "Sebep:" in shown[0][1]
     assert "sorular.xlsx.bak" in shown[0][1] and "Örnek sorularla" in shown[0][1]
     if kind in ("yarim", "metin"):
         assert "bozuk" in shown[0][1]
+
+
+@pytest.mark.parametrize("kind", ["var", "yok"])
+def test_readable_question_file_opens_from_the_file(tmp_path, monkeypatch, kind):
+    """Okunabilen (ya da yokken örnek şablonla yazılan) soru dosyası: sorular dosyadan, uyarı yok."""
+    from PyQt6.QtWidgets import QMessageBox
+    from matematigin_mantigi import app as app_mod
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: shown.append(a)))
+    p = tmp_path / "sorular.xlsx"
+    if kind == "var":
+        write_questions(p, SAMPLE_QUESTIONS[:2])
+    questions, from_file = app_mod.load_questions_or_samples(p)
+    assert from_file is True and shown == [] and len(questions) == (2 if kind == "var" else 3)
+
+
+def test_load_backup_reads_the_previous_version(tmp_path):
+    """Yedek (<ad>.bak) okunabilir: openpyxl .bak uzantısını reddeder, yedek akış olarak açılır; görsel yolları soru
+    dosyasının klasörüne göre çözülür."""
+    from matematigin_mantigi.core.question_loader import load_backup
+    p = tmp_path / "sorular.xlsx"
+    old = [Question("S1", "K", 7, "Eski soru?", (), "c", (), "sorular_gorsel/s1.png")]
+    write_questions(p, old)
+    write_questions(p, SAMPLE_QUESTIONS)
+    loaded = load_backup(p)
+    assert [q.soru for q in loaded] == ["Eski soru?"]
+    assert loaded[0].image == str(tmp_path / "sorular_gorsel" / "s1.png")
 
 
 def _assert_not_held_open(path: Path) -> None:

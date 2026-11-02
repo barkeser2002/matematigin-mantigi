@@ -87,7 +87,9 @@ Kaydet önce dosyanın o anki hâlini yanına `sorular_sablon.xlsx.bak` olarak k
 yazar ve ancak yazım tamamlanınca yerine koyar: disk dolsa, USB çıkarılsa ya da dosya Excel'de açık olsa da soru
 dosyası yarım kalmaz (mesaj dosyanın değişmediğini söyler). Bir önceki sürüme dönmek için uygulama kapalıyken `.bak`
 dosyasının adını `sorular_sablon.xlsx` yapın. Soru dosyası okunamazsa uygulama dosya adını ve sebebi söyleyip örnek
-sorularla açılır; editör böyle bir dosyanın üzerine yazmaz (önce düzeltilmeli ya da klasörden kaldırılmalı).
+sorularla açılır; editör böyle bir dosyanın üzerine yazmaz (önce düzeltilmeli ya da klasörden kaldırılmalı). Örnek
+sorular hiçbir zaman gerçek soruların yerine yazılmaz: dosya uygulama açıkken düzelirse Kaydet önce dosyadaki soruları
+editöre yüklemeyi önerir; dosya yoksa ya da boşsa ama `.bak` yedeğinde sorular varsa yedekten yüklemeyi önerir.
 `duzen.json` da aynı yolla (geçici dosya + yerine koyma) yazılır.
 
 ## Hatalar ve uyarılar

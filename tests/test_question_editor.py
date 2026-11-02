@@ -14,10 +14,23 @@ from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
 from matematigin_mantigi.core.models import Question, SAMPLE_QUESTIONS
 from matematigin_mantigi.core.question_loader import load_questions, save_question_image, write_questions
+from matematigin_mantigi.ui import question_editor as qe
 from matematigin_mantigi.ui.question_editor import QuestionEditorDialog, _display_id
 from matematigin_mantigi.ui.theme import FontFamilies
 
 FAM = FontFamilies("Arial", "Arial", False)
+
+
+@pytest.fixture(autouse=True)
+def no_modal_box_blocks(monkeypatch):
+    """Yanlış davranışta (gerileme, mutasyon) açılan gerçek modal kutu offscreen'de exec()'te sonsuza dek bekler: test
+    kırmızı yerine DONAR. Kutu beklemeyen testte açılırsa kaydedilir, 'Kaydetmeden dön' seçilmiş sayılır ve test sonda
+    düşer. Kutuyu bekleyen testler _capture_warnings / _answer ile bunun üstüne yazar."""
+    unexpected = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda _p, title, text, *a, **k: unexpected.append(text)))
+    monkeypatch.setattr(QMessageBox, "exec", lambda box: unexpected.append(box.text()) or 0)
+    yield
+    assert not unexpected, f"beklenmeyen kutu: {unexpected}"
 
 
 def _dialog(qtbot, tmp_path, questions=None):
@@ -412,6 +425,179 @@ def test_save_fills_an_empty_template(qtbot, tmp_path, monkeypatch):
     d, _ = _dialog(qtbot, tmp_path)
     d.save_button.click()
     assert shown == [] and len(load_questions(path)) == 3
+
+
+# --- örnek sorularla açılmış uygulama gerçek soruları ezmez (Q1) --------------------------------------------------
+REAL = [Question(f"G{i}", "gerçek", 8, f"Öğretmenin gerçek sorusu {i}", ("i1",), "c", (), None) for i in range(1, 6)]
+REAL_TEXTS = [q.soru for q in REAL]
+
+
+def _answer(monkeypatch, label: str) -> list:
+    """Editörün sorusunu (QMessageBox.exec) label yazılı düğmeyle yanıtlar; sorulan metinler listede birikir."""
+    asked = []
+
+    def exec_(box):
+        asked.append(box.text())
+        next(b for b in box.buttons() if b.text() == label).click()
+        return 0
+    monkeypatch.setattr(QMessageBox, "exec", exec_)
+    return asked
+
+
+def _samples_dialog(qtbot, path: Path):
+    """Uygulama soru dosyasını açılışta okuyamamış: pencerede örnek sorular."""
+    d = QuestionEditorDialog(list(SAMPLE_QUESTIONS), path, FAM, from_file=False)
+    qtbot.addWidget(d)
+    d.show()
+    return d
+
+
+def _texts(path: Path) -> list[str]:
+    return [q.soru for q in load_questions(path)]
+
+
+def _bak_texts(path: Path) -> list[str]:
+    from matematigin_mantigi.core.question_loader import load_backup
+    return [q.soru for q in load_backup(path)]
+
+
+def test_samples_are_not_saved_over_a_question_file_that_became_readable(qtbot, tmp_path, monkeypatch):
+    """Q1: açılışta okunamayan soru dosyası (yarım satır, iCloud'da inmemiş, eşitleme kilidi) uygulama açıkken düzelince
+    editör 3 örnek soruyu gerçek dosyanın üzerine uyarısız yazıyor, ikinci Kaydet yedeği de örneklerle değiştiriyordu:
+    gerçek sorular hiçbir yerde kalmıyordu. Artık yazılmaz; dosyadaki soruları yüklemek önerilir, öğretmen istemezse
+    dosya da yedek de değişmez."""
+    from matematigin_mantigi.core.question_loader import backup_path
+    path = write_questions(tmp_path / "sorular_sablon.xlsx", REAL)
+    before = path.read_bytes()
+    asked = _answer(monkeypatch, qe.KEEP_EDITING)
+    d = _samples_dialog(qtbot, path)
+    saved = []
+    d.saved.connect(saved.append)
+    d.save_button.click()
+    d.save_button.click()
+    assert len(asked) == 2 and "sorular_sablon.xlsx" in asked[0] and "5 soru" in asked[0], asked
+    assert path.read_bytes() == before and not backup_path(path).exists()
+    assert saved == [] and d.isVisible() and [q.id for q in d.questions] == ["S1", "S2", "S3"]
+
+
+def test_reloading_the_fixed_file_then_saving_keeps_the_real_questions(qtbot, tmp_path, monkeypatch):
+    """Q1: 'Dosyadan yeniden yükle' dosyadaki soruları pencereye getirir (hiçbir şey yazılmaz); sonraki Kaydet onları
+    yazar: dosya da yedek de gerçek sorularla kalır."""
+    path = write_questions(tmp_path / "sorular_sablon.xlsx", REAL)
+    asked = _answer(monkeypatch, qe.RELOAD_FROM_FILE)
+    d = _samples_dialog(qtbot, path)
+    saved = []
+    d.saved.connect(saved.append)
+    before = path.read_bytes()
+    d.save_button.click()
+    assert len(asked) == 1 and saved == [] and d.isVisible() and path.read_bytes() == before
+    assert [d.list_widget.item(i).text() for i in range(d.list_widget.count())] == [
+        f"G0{i} · gerçek" for i in range(1, 6)]
+    assert d.soru_edit.toPlainText() == REAL_TEXTS[0]
+    d.soru_edit.setPlainText("Öğretmenin gerçek sorusu 1 (düzenlendi)")
+    d.save_button.click()
+    assert len(asked) == 1 and saved
+    assert _texts(path) == ["Öğretmenin gerçek sorusu 1 (düzenlendi)"] + REAL_TEXTS[1:]
+    assert _bak_texts(path) == REAL_TEXTS
+
+
+@pytest.mark.parametrize("state", ["yok", "bos"])
+@pytest.mark.parametrize("answer", ["dön", "yedekten"])
+def test_samples_are_not_saved_while_the_backup_holds_the_questions(qtbot, tmp_path, monkeypatch, state, answer):
+    """Q1, yedek döngüsü: öğretmen okunamayan dosyayı klasörden kaldırdıysa (ya da boşalttıysa) örnek sorular yazılınca
+    bir sonraki Kaydet önceki sürümün yedeğini (gerçek sorular) da örneklerle değiştirirdi. Yedekte sorular varken
+    örnekler yazılmaz, yedekteki soruları yüklemek önerilir; yüklenince Kaydet onları soru dosyası olarak yazar."""
+    from matematigin_mantigi.core.question_loader import backup_path, write_template
+    path = tmp_path / "sorular_sablon.xlsx"
+    write_questions(path, REAL)
+    write_questions(path, REAL)                             # yedekte de gerçek sorular
+    path.unlink()
+    if state == "bos":
+        write_template(path, with_samples=False)
+    bak_before = backup_path(path).read_bytes()
+    asked = _answer(monkeypatch, qe.KEEP_EDITING if answer == "dön" else qe.LOAD_BACKUP)
+    d = _samples_dialog(qtbot, path)
+    saved = []
+    d.saved.connect(saved.append)
+    d.save_button.click()
+    assert len(asked) == 1 and "sorular_sablon.xlsx.bak" in asked[0] and "5 soru" in asked[0], asked
+    assert saved == [] and d.isVisible() and backup_path(path).read_bytes() == bak_before
+    assert path.exists() == (state == "bos")
+    if answer == "yedekten":
+        assert d.soru_edit.toPlainText() == REAL_TEXTS[0]
+        d.save_button.click()
+        assert saved and _texts(path) == REAL_TEXTS and len(asked) == 1
+        if state == "yok":
+            assert backup_path(path).read_bytes() == bak_before
+    else:
+        d.save_button.click()
+        assert len(asked) == 2 and saved == [] and backup_path(path).read_bytes() == bak_before
+
+
+@pytest.mark.parametrize("state", ["yok", "bos"])
+def test_samples_fill_a_missing_or_empty_question_file(qtbot, tmp_path, monkeypatch, state):
+    """Korunacak soru yoksa (dosya yok ya da boş şablon, yedek yok) örnek sorularla açılmış editör yazabilir."""
+    from matematigin_mantigi.core.question_loader import write_template
+    path = tmp_path / "sorular_sablon.xlsx"
+    if state == "bos":
+        write_template(path, with_samples=False)
+    d = _samples_dialog(qtbot, path)
+    saved = []
+    d.saved.connect(saved.append)
+    d.save_button.click()
+    assert saved and [q.id for q in load_questions(path)] == ["S1", "S2", "S3"]
+
+
+def test_samples_are_not_saved_over_a_file_that_cannot_be_read(qtbot, tmp_path, monkeypatch):
+    """Örnek sorular tutan editör dosyayı okuyamıyorsa (kilit, izin, inmemiş iCloud dosyası) içinde gerçek sorular olup
+    olmadığını bilemez: yazmaz, sebebi söyler."""
+    path = write_questions(tmp_path / "sorular_sablon.xlsx", REAL)
+    before = path.read_bytes()
+
+    def locked(p):
+        raise PermissionError(errno.EACCES, "Permission denied", str(p))
+    monkeypatch.setattr(qe, "load_questions", locked)
+    shown = _capture_warnings(monkeypatch)
+    d = _samples_dialog(qtbot, path)
+    d.save_button.click()
+    assert len(shown) == 1 and shown[0][0] == "Kaydedilmedi" and "örnek sorular" in shown[0][1]
+    assert "erişim izni yok" in shown[0][1] and "sorular_sablon.xlsx" in shown[0][1]
+    assert path.read_bytes() == before and d.isVisible()
+
+
+def test_window_opened_with_samples_keeps_the_editor_off_the_real_file(qtbot, tmp_path, monkeypatch, ini_settings,
+                                                                      dead_camera):
+    """Q1, pencere yolu: örnek sorularla açılan pencere bunu editöre söyler. Dosyadaki sorular yüklenip kaydedilince
+    tahta onları gösterir ve pencere artık dosyadan okunmuş sayılır (sonraki açılışta soru sorulmaz)."""
+    from matematigin_mantigi.core.models import PenSettings
+    from matematigin_mantigi.core.recorder import NullRecorder
+    from matematigin_mantigi.core.session_store import SessionStore
+    from matematigin_mantigi.ui.main_window import MainWindow
+    path = write_questions(tmp_path / "sorular_sablon.xlsx", REAL)
+    ini_settings.set_pen(PenSettings(reading_ms=0))
+    win = MainWindow(FAM, list(SAMPLE_QUESTIONS), ini_settings, NullRecorder(), SessionStore(tmp_path / "o"),
+                     lambda index: dead_camera, tmp_path / "d.json", questions_path=path, questions_from_file=False)
+    qtbot.addWidget(win)
+    asked = _answer(monkeypatch, qe.RELOAD_FROM_FILE)
+    rounds = []
+
+    def run(dlg):                         # modal exec yerine: Kaydet (yükleme önerisi), Kaydet (yazım)
+        rounds.append(dlg.from_file)
+        dlg.show()
+        dlg.save_button.click()
+        if dlg.isVisible():
+            dlg.save_button.click()
+        if dlg.isVisible():
+            dlg.reject()
+        return dlg.result()
+    monkeypatch.setattr(QuestionEditorDialog, "exec", run)
+    win.open_editor()
+    assert rounds == [False] and len(asked) == 1
+    assert [q.soru for q in win.flow.questions] == REAL_TEXTS and win.questions_from_file
+    assert _texts(path) == REAL_TEXTS and _bak_texts(path) == REAL_TEXTS
+    win.open_editor()
+    assert rounds == [False, True] and len(asked) == 1
+    assert _texts(path) == REAL_TEXTS and _bak_texts(path) == REAL_TEXTS
 
 
 # Kaydet'in gerçek hâli: yazımın ORTASINDA işletim sistemi hatası (RLIMIT_FSIZE, write() EFBIG). Ayrı süreçte.

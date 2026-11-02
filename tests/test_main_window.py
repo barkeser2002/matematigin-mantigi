@@ -403,6 +403,7 @@ def test_microphone_cut_warning_reaches_the_notice_box_not_the_board(window, qtb
     sd = FakeSoundDevice(blocks=15)                                       # 0,3 sn ses, sonra mikrofon susar
     monkeypatch.setattr(ac, "_sd", lambda: sd)
     window.settings.audio_device = "USB Mikrofon"
+    window.settings.record_fps = 30                   # 60 fps'te kodlayıcı yüklü makinede geri kalıp görüntü uyarısı verir
     rec = window.recorder = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber,
                                               out_height=0, audio_device="USB Mikrofon", clock=stepping_clock())
     tb = window.toolbar
@@ -413,7 +414,10 @@ def test_microphone_cut_warning_reaches_the_notice_box_not_the_board(window, qtb
     assert rec.audio_error and "Mikrofon kayıt sırasında kesildi" in rec.audio_error, rec.audio_error
     text = window.work_area.status_label.text()
     assert text.startswith(f"Kayıt kaydedildi: {rec.last_path}") and rec.audio_error not in text, text
-    assert len(posted) == 1 and rec.audio_error in posted[0][1] and str(rec.last_path) in posted[0][1], posted
+    sound = [p for p in posted if rec.audio_error in p[1]]
+    assert len(sound) == 1 and str(rec.last_path) in sound[0][1], posted
+    # Kodlayıcı yine de geri kaldıysa görüntü uyarısı kendi kutusunda gelir (ses uyarısına karışmaz).
+    assert len(posted) == 1 + bool(rec.video_warning), posted
     assert shown == [] and rec.last_path.exists() and not list(rec.last_path.parent.glob("*.video.mp4"))
 
 

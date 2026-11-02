@@ -7,7 +7,7 @@ from typing import Callable, Sequence
 
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QKeySequence, QShortcut
-from PyQt6.QtWidgets import QHBoxLayout, QMainWindow, QMessageBox, QWidget
+from PyQt6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QMessageBox, QToolTip, QWidget
 
 from matematigin_mantigi.core import crash_log
 from matematigin_mantigi.core import layout_model as lm
@@ -58,22 +58,51 @@ WEBCAM_HIDE_TIMEOUT_MS = 400   # apply_ui_settings'in "webcam" görünürlüğü
 SAVING_KEY = "kayit-kaydediliyor"        # araç çubuğu uyarı şeridinde bu kaynağın anahtarı
 SAVING_ALERT = "Kayıt kaydediliyor…"   # kapanış (ffmpeg + ses birleştirme) sürerken araç çubuğundaki uyarı
 CLOSING_ALERT = "Kayıt kaydediliyor… bitince pencere kapanacak"     # pencere kapatılmak istendi, kayıt bekleniyor
+# Kapanış beklenirken editör/ayarlar düğmesine basılınca düğmenin yanında görünen kısa neden.
+CLOSING_NO_DIALOG = "Kayıt kaydediliyor; bitince pencere kapanacak. Bu pencere şimdi açılmaz."
 STOP_AND_QUIT, KEEP_RECORDING = "Durdur ve çık", "Kayda devam et"   # kayıt sürerken kapatma sorusunun düğmeleri
 # Kayıt pencerelerinin metni kendi başına anlaşılır olmalı: Qt macOS'ta QMessageBox başlığını göstermez.
 START_FAILED = "Kayıt başlamadı."
 RECORD_FAILED = "Kayıt düzgün tamamlanamadı."
+# Kapanış özetinin ayrıntı düğmesi: Qt'nin kendi etiketi çevirisiz İngilizce ('Show Details...').
+DETAILS_SHOW, DETAILS_HIDE = "Ayrıntılar", "Ayrıntıları gizle"
 
 
 def _sound_text(audio_err: str) -> str:
     return f"Kaydın sesinde sorun var: {audio_err}"
 
 
-def _record_error_text(err: str, audio_err: str | None) -> str:
-    """Kayıt hatası penceresinin metni: kaydedicinin hatası ve (atılmadan) ses uyarısı."""
+def _video_text(video_warn: str) -> str:
+    """Kaydedicinin görüntü uyarısı (video_warning: kodlayıcı kayda yetişemedi) kendi önekiyle: ses uyarısı değil."""
+    return f"Kaydın görüntüsünde sorun var: {video_warn}"
+
+
+def _record_error_text(err: str, audio_err: str | None, video_warn: str | None = None) -> str:
+    """Kayıt hatası penceresinin metni: kaydedicinin hatası ve (atılmadan) ses ve görüntü uyarıları."""
     text = f"{RECORD_FAILED}\n{err}"
     if audio_err and audio_err not in err:
         text += f"\n\n{_sound_text(audio_err)}"
+    if video_warn and video_warn not in err:
+        text += f"\n\n{_video_text(video_warn)}"
     return text
+
+
+def _turkish_details_button(box: QMessageBox) -> None:
+    """setDetailedText'in eklediği düğmeye Türkçe etiket. Qt etiketi her tıklamada kendisi değiştirir; bu bağlantı
+    Qt'ninkinden sonra kurulduğu için ondan sonra çalışır. Genişlik Qt'nin İngilizce etiketlerinden hesaplanıyor: Türkçe
+    etiket kesilmesin."""
+    for button in box.buttons():
+        if box.buttonRole(button) != QMessageBox.ButtonRole.ActionRole:
+            continue
+        shown = [False]                         # ayrıntı başta kapalı
+
+        def relabel(_checked=False, button=button, shown=shown):
+            shown[0] = not shown[0]
+            button.setText(DETAILS_HIDE if shown[0] else DETAILS_SHOW)
+        button.setText(DETAILS_SHOW)
+        button.clicked.connect(relabel)
+        button.setMinimumWidth(max(button.sizeHint().width(),
+                                   button.fontMetrics().horizontalAdvance(DETAILS_HIDE) + 32))
 
 
 class MainWindow(QMainWindow):
@@ -407,19 +436,44 @@ class MainWindow(QMainWindow):
         self.toolbar.record_button.setEnabled(True)
         self.toolbar.set_recording(False)
         closing, self._close_after_save = self._close_after_save, False
+        # Başka bir modal pencere açıksa (ör. 'Durdur ve çık'tan önce açılmış soru editörü) pencere kapanmaz: kapanınca
+        # süreç biter, o pencerenin exec döngüsü de biter, içindeki kaydedilmemiş iş sorulmadan kaybolurdu (U3).
+        blocker = self._open_dialog_title() if closing else None
         try:
             if closing:
-                self._show_closing_summary(path, exc)
+                self._show_closing_summary(path, exc, blocker)
             else:
                 self._report_record_result(path, exc)
         finally:
-            if closing:                      # pencere kapatılmak istenmişti: kayıt bitti, sonuç ve uyarılar gösterildi
+            if closing and blocker is None:  # pencere kapatılmak istenmişti: kayıt bitti, sonuç ve uyarılar gösterildi
                 self.close()
 
-    def _record_problems(self, exc: str | None) -> tuple[str | None, str | None]:
-        """(hata, ses uyarısı). Önce kaydedicinin anlamlı hatası (sebep, dosyaların yeri); işçinin ham istisna metni
-        yalnız yedek."""
-        return getattr(self.recorder, "error", None) or exc, getattr(self.recorder, "audio_error", None)
+    def _open_dialog_title(self) -> str | None:
+        """Açık bir modal pencere varsa başlığı (başlıksızsa boş metin); yoksa None."""
+        dialog = QApplication.activeModalWidget()
+        return None if dialog is None else dialog.windowTitle()
+
+    def _refuse_while_closing(self, button: QWidget) -> bool:
+        """Pencere kayıt kaydedilince kendisi kapanacak ('Durdur ve çık'): soru editörü, Ayarlar ve kalem ayarları
+        açılmaz. Açılsaydı pencere kapanınca exec döngüsüyle birlikte biter, içindeki kaydedilmemiş iş (editörde
+        yazılan sorular) sorulmadan kaybolurdu (U3). Neden tıklanan düğmenin yanında kısa ipucuyla söylenir (şeritte
+        zaten 'bitince pencere kapanacak' yazıyor); modal kutu açılmaz."""
+        if not self._close_after_save:
+            return False
+        try:
+            QToolTip.showText(button.mapToGlobal(button.rect().center()), CLOSING_NO_DIALOG, button, button.rect(),
+                              4000)
+        except Exception:  # noqa: BLE001 - ipucu gösterilemezse de pencere açılmaz
+            pass
+        return True
+
+    def _record_problems(self, exc: str | None) -> tuple[str | None, str | None, str | None]:
+        """(hata, ses uyarısı, görüntü uyarısı). Önce kaydedicinin anlamlı hatası (sebep, dosyaların yeri); işçinin ham
+        istisna metni yalnız yedek. Görüntü uyarısı (kodlayıcı kayda yetişemedi) kaydedicinin ayrı alanında
+        (video_warning): eskiden audio_error'daydı ve 'Kaydın sesinde sorun var' diye gösteriliyordu (U7). Alanı
+        olmayan kaydedicide None."""
+        return (getattr(self.recorder, "error", None) or exc, getattr(self.recorder, "audio_error", None),
+                getattr(self.recorder, "video_warning", None))
 
     def _record_details(self) -> list[str]:
         cap = getattr(self.recorder, "capture_fps", 0.0)
@@ -432,51 +486,67 @@ class MainWindow(QMainWindow):
             parts.append(f"ses taşması {res.overflows + res.dropped_blocks}")
         return parts
 
-    def _show_closing_summary(self, path, exc: str | None) -> None:
+    def _show_closing_summary(self, path, exc: str | None, blocked_by: str | None = None) -> None:
         """'Durdur ve çık': pencere kendisi kapanmadan önce TEK pencerede kaydın sonucu (dosya ya da hata, ses uyarısı)
         ve görülmemiş bütün uyarılar (kayıt sırasında biriken, Tamam'a basılmamış); o an kayıt yok. Eskiden başarıda
         sonuç durum satırına yazılıp pencere hemen kapanıyor, uyarılar hiç görünmüyordu; hatada uyarı kutusu 'Kayıt
         hatası'nın çocuğu olup onunla siliniyor, gizlenen pencerenin altında yeniden açılıp Qt'nin otomatik çıkışını
-        iptal ediyordu (pencere kapanır, süreç çıkmazdı). Uyarılar kutudan alınır: pencere kapanırken açılmazlar."""
-        err, audio_err = self._record_problems(exc)
+        iptal ediyordu (pencere kapanır, süreç çıkmazdı). Uyarılar kutudan alınır: pencere kapanırken açılmazlar.
+        Uyarıların ayrıntısı kaydırılabilir ayrıntı bölümünde, ana metinde yalnız sayıları: hepsi ana metinde olunca
+        özet MacBook Air'de 1138 px boyla ekrandan taşıyor, Tamam ekranın dışında kalıyordu (U4). blocked_by: pencere
+        kapanmıyor, şu başlıklı modal pencere hâlâ açık (U3; başlıksızsa boş metin): özet bunu da söyler."""
+        err, audio_err, video_warn = self._record_problems(exc)
         parts: list[str] = []
         if err:
-            parts.append(_record_error_text(err, audio_err))
+            parts.append(_record_error_text(err, audio_err, video_warn))
         else:
             if path is not None:
                 details = self._record_details()
                 parts.append(f"Kayıt kaydedildi: {path}" + ("\n" + " · ".join(details) if details else ""))
             if audio_err:
                 parts.append(_sound_text(audio_err))
+            if video_warn:
+                parts.append(_video_text(video_warn))
         notices = error_notice.take_all()
         if notices:
-            head = "Uyarı:" if len(notices) == 1 else f"{len(notices)} uyarı:"
-            parts.append(f"{head}\n\n{error_notice.summary_text(notices)}")
+            parts.append(f"{len(notices)} uyarı var: ayrıntısı aşağıda ('{DETAILS_SHOW}' düğmesi) ve hatalar.log'da.")
+        if blocked_by is not None:
+            which = f"'{blocked_by}' penceresi" if blocked_by else "Başka bir pencere"
+            parts.append(f"Pencere kapanmadı: {which} hâlâ açık; kapansaydı içindeki kaydedilmemiş değişiklikler "
+                         "kaybolurdu. Onu kapattıktan sonra uygulamayı yeniden kapatın.")
         if not parts:
             return
-        text = "\n\n".join(parts)
-        if err or audio_err or notices:
-            QMessageBox.warning(self, "Kayıt sonucu", text)
-        else:
-            QMessageBox.information(self, "Kayıt kaydedildi", text)
+        warn = bool(err or audio_err or video_warn or notices or blocked_by is not None)
+        box = QMessageBox(QMessageBox.Icon.Warning if warn else QMessageBox.Icon.Information,
+                          "Kayıt sonucu" if warn else "Kayıt kaydedildi", "\n\n".join(parts),
+                          QMessageBox.StandardButton.Ok, self)
+        if notices:
+            box.setDetailedText(error_notice.summary_text(notices))
+            _turkish_details_button(box)
+        box.exec()
+        box.deleteLater()
 
     def _report_record_result(self, path, exc: str | None) -> None:
-        """Hata pencerede (o an kayıt yok), ses uyarısıyla birlikte. Başarı durum satırında; başarılı kaydın ses uyarısı
-        (mikrofon kesildi) uyarı kutusunda: durum satırı sahnede, sonraki kayda girer ve uyarı taşımaz (Temel ilke).
+        """Hata pencerede (o an kayıt yok), ses ve görüntü uyarılarıyla birlikte. Başarı durum satırında; başarılı
+        kaydın ses uyarısı (mikrofon kesildi) ve görüntü uyarısı (kodlayıcı kayda yetişemedi) uyarı kutusunda, her biri
+        kendi başlığı, öneki ve anahtarıyla: durum satırı sahnede, sonraki kayda girer ve uyarı taşımaz (Temel ilke).
         Eskiden hata varken ses uyarısı atılıyordu (ffmpeg kayıt ortasında ölünce yalnız 'ffmpeg borusu kapandı'
         görünüyordu); başarıda da yalnız durum satırındaydı."""
-        err, audio_err = self._record_problems(exc)
+        err, audio_err, video_warn = self._record_problems(exc)
         if err:
-            QMessageBox.warning(self, "Kayıt hatası", _record_error_text(err, audio_err))
+            QMessageBox.warning(self, "Kayıt hatası", _record_error_text(err, audio_err, video_warn))
             return
         if path is not None:
             details = self._record_details()
             self.work_area.set_status(f"Kayıt kaydedildi: {path}" + (" · " + " · ".join(details) if details else ""))
+        # Her kaydın uyarısı kendi anahtarıyla: aynı anahtar oturumda bir kez gösterilir.
+        where = f"Kayıt kaydedildi: {path}\n" if path is not None else ""
         if audio_err:
-            # Her kaydın uyarısı kendi anahtarıyla: aynı anahtar oturumda bir kez gösterilir.
-            where = f"Kayıt kaydedildi: {path}\n" if path is not None else ""
             error_notice.post("Kayıtta ses sorunu", f"{where}{_sound_text(audio_err)}",
                               key=f"kayit-sesi:{path if path is not None else audio_err}")
+        if video_warn:
+            error_notice.post("Kayıtta görüntü sorunu", f"{where}{_video_text(video_warn)}",
+                              key=f"kayit-goruntu:{path if path is not None else video_warn}")
 
     def _check_recorder(self, _seconds: int) -> None:
         """Yazıcı borusu koptuysa (ffmpeg çöktü) kaydı hemen kapat ve kullanıcıya söyle."""
@@ -484,6 +554,8 @@ class MainWindow(QMainWindow):
             self.toggle_recording(False)
 
     def open_pen_settings(self) -> None:
+        if self._refuse_while_closing(self.toolbar.pen_settings_button):
+            return
         dlg = PenSettingsDialog(self.settings.pen(), self.canvas.color, self.canvas.base_width, self.fam, self)
         dlg.applied.connect(self._apply_pen_settings)
         dlg.exec()
@@ -493,11 +565,15 @@ class MainWindow(QMainWindow):
         self.question_zone.set_reading_ms(p.reading_ms)
 
     def open_settings(self) -> None:
+        if self._refuse_while_closing(self.toolbar.settings_button):
+            return
         dlg = SettingsDialog(self.settings, self.fam, self)
         dlg.applied.connect(self.apply_settings_values)
         dlg.exec()
 
     def open_editor(self) -> None:
+        if self._refuse_while_closing(self.toolbar.editor_button):
+            return
         if self.questions_path is None:
             QMessageBox.information(self, "Soru editörü", "Soru dosyası tanımlı değil.")
             return

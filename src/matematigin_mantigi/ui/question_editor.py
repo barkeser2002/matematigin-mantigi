@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (QApplication, QDialog, QFileDialog, QFrame, QHBoxLa
                              QListWidget, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QVBoxLayout,
                              QWidget)
 
+from matematigin_mantigi import paths
 from matematigin_mantigi.core import crash_log
 from matematigin_mantigi.core.models import OPTION_LETTERS, Question
 from matematigin_mantigi.core.question_loader import (EmptyTemplateError, QuestionTemplateError, UnreadableWriteError,
@@ -369,6 +370,15 @@ class QuestionEditorDialog(QDialog):
                 self.list_widget.setCurrentRow(i)
                 return
         name = self.questions_path.name
+        if not self.from_file and self._only_in_icloud():
+            # Asıl dosya iCloud'da (yer tutucusu klasörde): bu ada yazılan örnekler iCloud'daki gerçek dosyayla çakışır.
+            QMessageBox.warning(self, "Kaydedilmedi",
+                                f"{name} bu bilgisayara henüz inmemiş: iCloud Drive'da duruyor.\n\nUygulama açılışta "
+                                "onu okuyamadığı için örnek sorularla açılmıştı; örnekler iCloud'daki gerçek soruların "
+                                "yerine geçmesin diye hiçbir şey yazılmadı. Finder'da dosyayı açıp inmesini bekleyin, "
+                                "sonra yeniden Kaydet'e basın (editör dosyadaki soruları yüklemeyi önerir).\n\n"
+                                "Düzenlemeleriniz bu pencerede duruyor.")
+            return
         in_file, problem = self._read_target()
         if isinstance(problem, str):
             QMessageBox.warning(self, "Kaydedilmedi",
@@ -398,6 +408,13 @@ class QuestionEditorDialog(QDialog):
             return
         self.saved.emit(list(self.questions))
         self.accept()
+
+    def _only_in_icloud(self) -> bool:
+        """Soru dosyası klasörde yok, iCloud yer tutucusu var (macOS 13 ve öncesi: dosya bu Mac'e inmemiş; U2)."""
+        try:
+            return not self.questions_path.exists() and paths.icloud_placeholder(self.questions_path).exists()
+        except OSError:
+            return False
 
     def _read_target(self) -> tuple[list[Question], str | OSError | None]:
         """Kaydedilecek dosyanın şimdiki hâli: (içindeki sorular, sorun). Dosya yoksa ya da boş şablonsa ([], None):
@@ -429,8 +446,14 @@ class QuestionEditorDialog(QDialog):
         else:
             try:
                 found = load_backup(self.questions_path)
-            except Exception:  # noqa: BLE001 - yedek yok, boş ya da okunamıyor: korunacak soru yok
-                return False
+            except (FileNotFoundError, EmptyTemplateError):
+                return False                    # yedek yok ya da boş şablon: korunacak soru yok
+            except Exception as err:  # noqa: BLE001 - okunamayan yedekte gerçek sorular olabilir: hiçbir şey yazılmaz
+                # Eskiden her hata 'yedek yok' sayılıyordu: o an okunamayan (iCloud çevrimdışı, eşitleme kilidi, yarım
+                # inmiş) gerçek yedek örnek sorularla eziliyordu (U5).
+                crash_log.log_handled(err, "soru dosyasının yedeği")
+                QMessageBox.warning(self, "Kaydedilmedi", self._unreadable_backup_text(err))
+                return True
             accept, title = LOAD_BACKUP, "Soru dosyasının yedeği var"
             state = "boş" if self.questions_path.exists() else "klasörde yok"
             where = (f"{name} {state}, ama önceki sürümün yedeği {backup_path(self.questions_path).name} "
@@ -445,6 +468,16 @@ class QuestionEditorDialog(QDialog):
         if _ask(self, title, text, accept):
             self._use_questions(found)
         return True
+
+    def _unreadable_backup_text(self, err: Exception) -> str:
+        name, bak = self.questions_path.name, backup_path(self.questions_path).name
+        state = "boş" if self.questions_path.exists() else "klasörde yok"
+        return (f"Kaydedilmedi: önceki sürümün yedeği {bak} şu an okunamıyor ({describe_load_error(err)}).\n\n{name} "
+                f"{state}; uygulama açılışta soru dosyasını okuyamadığı için örnek sorularla açılmıştı. Yedekte gerçek "
+                "sorularınız olabilir: örnek sorular onların yerine geçmesin diye hiçbir şey yazılmadı. Yedek "
+                "eşitleniyorsa (iCloud, OneDrive) inmesini bekleyin, başka bir programda açıksa kapatın, sonra yeniden "
+                "Kaydet'e basın. Yedeğe ihtiyacınız yoksa onu klasörden kaldırın.\n\nDüzenlemeleriniz bu pencerede "
+                "duruyor.")
 
     def _use_questions(self, questions: list[Question]) -> None:
         """Pencereyi dosyadan/yedekten okunan sorularla yeniden doldurur; artık örnek sorular değil, Kaydet yazar."""

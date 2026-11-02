@@ -13,15 +13,17 @@ def close_question_never_blocks(monkeypatch):
     exec() sonsuza dek bekler: hatalı kod (mutasyon, gerileme) kırmızı yerine DONAR. Soruyu kendisi yanıtlamayan
     testte soru açılırsa kayıt eşzamanlı durdurulur (arka plan kapanışının QThread'i pencereyle silinmesin), 'Durdur
     ve çık' seçilir ve test teardown'da hatayla biter. Soruyu bekleyen testler _answer_close_question ile bunun
-    üstüne yazar. Statik QMessageBox pencereleri (warning, information...) de aynı nedenle gerçek modal açmaz: test
-    kendisi yakalamıyorsa çağrı kaydedilir ve test teardown'da hatayla biter."""
+    üstüne yazar. Statik QMessageBox pencereleri (warning, information...) ve başka kutuların exec'i (kapanış özeti)
+    de aynı nedenle gerçek modal açmaz: test kendisi yakalamıyorsa çağrı kaydedilir ve test teardown'da hatayla
+    biter."""
     from PyQt6.QtWidgets import QMessageBox
     from matematigin_mantigi.ui.main_window import STOP_AND_QUIT
-    real_exec, unexpected, statics = QMessageBox.exec, [], []
+    unexpected, statics = [], []
 
     def exec_(box):
         if box.text() != "Kayıt sürüyor, durdurulup çıkılsın mı?":
-            return real_exec(box)
+            statics.append(("exec", box.windowTitle(), box.text()))
+            return QMessageBox.StandardButton.Ok
         unexpected.append(box.text())
         try:
             box.parent().recorder.stop()
@@ -470,6 +472,98 @@ def test_record_error_window_also_tells_what_happened_to_the_sound(window, qtbot
     assert "Ses birleştirilemedi: yapay sebep; ses ayrı dosyada duruyor" in text, text
 
 
+VIDEO_LAG = "Görüntü kodlayıcısı kayda yetişemedi: video 4 sn erken bitiyor (yapay)"
+
+
+def test_video_warning_of_a_saved_recording_has_its_own_notice(window, monkeypatch):
+    """U7: kaydedicinin görüntü uyarısı (video_warning: kodlayıcı kayda yetişemedi) eskiden audio_error'daydı ve
+    'Kaydın sesinde sorun var' önekiyle gösteriliyordu. Başarılı kayıtta kendi uyarısı: 'Kayıtta görüntü sorunu', ses
+    uyarısından ayrı anahtar ve önekle; ses uyarısı da ayrıca gelir. Durum satırında (sahnede, sonraki kayda girer)
+    ikisi de yok."""
+    from pathlib import Path
+    from matematigin_mantigi.core.recorder import NullRecorder
+
+    class Lagging(NullRecorder):                      # anında durur; sonuç alanları bu testin kendi metni
+        audio_error = video_warning = None
+
+        def stop(self):
+            super().stop()
+            self.audio_error = "Mikrofon kayıt sırasında kesildi (yapay)"
+            self.video_warning = VIDEO_LAG
+            return Path("oturum") / "kayit_goruntu.mp4"
+    shown = _capture_modals(monkeypatch)
+    posted = _capture_notices(monkeypatch)
+    window.recorder = Lagging()
+    window.toggle_recording(True)
+    window.toggle_recording(False)
+    status = window.work_area.status_label.text()
+    assert "kayit_goruntu.mp4" in status and "kodlayıcı" not in status and "Mikrofon" not in status, status
+    assert shown == [] and len(posted) == 2, posted
+    by_title = {title: (text, key) for title, text, key in posted}
+    assert set(by_title) == {"Kayıtta ses sorunu", "Kayıtta görüntü sorunu"}, posted
+    video_text, video_key = by_title["Kayıtta görüntü sorunu"]
+    assert video_text.startswith(f"Kayıt kaydedildi: {Path('oturum') / 'kayit_goruntu.mp4'}"), video_text
+    assert f"Kaydın görüntüsünde sorun var: {VIDEO_LAG}" in video_text and "sesinde" not in video_text, video_text
+    sound_text, sound_key = by_title["Kayıtta ses sorunu"]
+    assert "kodlayıcı" not in sound_text and video_key != sound_key, posted
+
+
+def test_video_warning_alone_is_not_shown_as_a_sound_problem(window, monkeypatch):
+    """U7: yalnız görüntü uyarısı varsa (ses sağlam) tek uyarı gelir, metninde ses sözü geçmez. Her kaydın görüntü
+    uyarısı kendi anahtarıyla: oturumun ikinci kaydının uyarısı da gösterilir."""
+    from pathlib import Path
+    from matematigin_mantigi.core.recorder import NullRecorder
+
+    class Lagging(NullRecorder):
+        audio_error = video_warning = None
+        count = 0
+
+        def stop(self):
+            super().stop()
+            Lagging.count += 1
+            self.video_warning = f"{VIDEO_LAG} {Lagging.count}"
+            return Path("oturum") / f"kayit_{Lagging.count}.mp4"
+    shown = _capture_modals(monkeypatch)
+    posted = _capture_notices(monkeypatch)
+    window.recorder = Lagging()
+    for _ in range(2):
+        window.toggle_recording(True)
+        window.toggle_recording(False)
+    assert shown == [] and [p[0] for p in posted] == ["Kayıtta görüntü sorunu"] * 2, posted
+    assert posted[0][2] != posted[1][2], posted
+    for i, (_title, text, _key) in enumerate(posted, start=1):
+        assert f"{VIDEO_LAG} {i}" in text and f"kayit_{i}.mp4" in text and "sesinde" not in text, text
+
+
+def test_record_error_window_also_tells_the_video_warning(window, qtbot, monkeypatch):
+    """U7: kayıt hatayla bittiyse görüntü uyarısı da 'Kayıt hatası' penceresinde, kendi önekiyle (ses uyarısının
+    önekiyle değil); ses uyarısı da yerinde."""
+    from matematigin_mantigi.core.recorder import NullRecorder
+
+    class PipeDied(NullRecorder):                     # kapanış _StopWorker'da; kendi metinleri (kaydedicininki değil)
+        stop_is_quick = False
+        error = audio_error = video_warning = None
+
+        def stop(self):
+            super().stop()
+            self.error = "yapay boru hatası: ayrıntı yok"
+            self.audio_error = "Ses birleştirilemedi: yapay sebep; ses ayrı dosyada duruyor"
+            self.video_warning = VIDEO_LAG
+            return None
+    shown = _capture_modals(monkeypatch)
+    window.recorder = PipeDied()
+    tb = window.toolbar
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=10000)
+    assert len(shown) == 1, shown
+    text = shown[0][1]
+    assert text.startswith(RECORD_FAILED) and "yapay boru hatası: ayrıntı yok" in text, text
+    assert f"Kaydın görüntüsünde sorun var: {VIDEO_LAG}" in text, text
+    assert f"Kaydın sesinde sorun var: {VIDEO_LAG}" not in text, text
+    assert "Kaydın sesinde sorun var: Ses birleştirilemedi: yapay sebep" in text, text
+
+
 def _screen_pixels(widget, width: int):
     """Ekranda (offscreen: pencerelerin son çizilmiş hâli) widget'ın sol üstünden başlayan `width` genişliğindeki
     bant: kaydedicinin ilk karesinde ne göründüğü. Bant sabit genişlikte: yazı uzayıp kısalsa da aynı yer ölçülür."""
@@ -540,6 +634,86 @@ def test_notice_box_open_when_recording_starts_is_not_in_the_first_frame(window,
     assert first_frame == [0] and strip == "⚠ Düzen kaydedilemedi — ayrıntı kayıt bitince", (first_frame, strip)
     qtbot.waitUntil(lambda: bool(_visible_message_boxes()), timeout=2000)        # kayıt bitti: kutu geri geldi
     assert "duzen.json yazılamadı" in _visible_message_boxes()[0].text() and shown == []
+
+
+def _magenta_share(image) -> float:
+    """Görüntüde macenta (testte kutu bu renge boyanır) piksellerin oranı."""
+    import numpy as np
+    from PyQt6.QtGui import QImage
+    img = image.convertToFormat(QImage.Format.Format_RGB32)
+    ptr = img.constBits()
+    ptr.setsize(img.sizeInBytes())
+    px = np.frombuffer(ptr, np.uint8).reshape(img.height(), img.bytesPerLine() // 4, 4)[:, :img.width(), :3]
+    return float(((px[..., 0] > 200) & (px[..., 1] < 60) & (px[..., 2] > 200)).mean()) if px.size else 0.0
+
+
+def _magenta_notice_box(window, qtbot, monkeypatch):
+    """Pencereye bağlı gerçek uyarı kutusu, kayıttan önce açık; ekranda ayırt edilsin diye macenta. (kutu, yeri)."""
+    from matematigin_mantigi.ui import error_notice
+    notice = _wired_notice(window, monkeypatch)
+    error_notice.post("Beklenmeyen hata", "Ayrıntı: /Users/ogretmen.adi/Documents/Matematiğin Mantığı/hatalar.log",
+                      key="k1")
+    qtbot.waitUntil(lambda: bool(_visible_message_boxes()), timeout=2000)
+    box = _visible_message_boxes()[0]
+    box.setStyleSheet("QMessageBox, QMessageBox * { background: #ff00ff; color: #ff00ff; border: none; }")
+    qtbot.wait(100)                                   # macenta kutu ekrana çizilsin
+    return notice, box.geometry()
+
+
+def test_box_hidden_for_recording_is_off_the_screen_when_the_first_frame_is_grabbed(window, qtbot, monkeypatch):
+    """U6: prepare_recording kutuyu start()'tan önce gizliyordu; ama gizlenen pencere olay döngüsü dönene dek ekranda
+    (exposed) kalıyor, ekran yakalayıcısı onu çizmeye devam ediyordu: kutu (hatalar.log'un yolu, yani kullanıcı adı)
+    gerçek kaydın ilk ~3 karesindeydi (inceleme v02, k001-k003). Qt düzeyindeki görünürlük bunu göstermez: ilk kare
+    (start() içinde, GUI'de) ekrandan piksel düzeyinde alınır, macenta kutu orada çizili olmamalı. Kutu gizlenince
+    dönen olay turunda yoklama ve sıradaki yeni uyarı kutuyu geri getirmez (şeride gider); kayıt bitince ikisi kutuda."""
+    from PyQt6.QtGui import QGuiApplication
+    from matematigin_mantigi.core.recorder import NullRecorder
+    from matematigin_mantigi.ui import error_notice
+    shown = _capture_modals(monkeypatch)
+    notice, area = _magenta_notice_box(window, qtbot, monkeypatch)
+
+    def on_screen() -> float:
+        return _magenta_share(QGuiApplication.primaryScreen().grabWindow(
+            0, area.x(), area.y(), area.width(), area.height()).toImage())
+    assert on_screen() > 0.5                          # ölçü çalışıyor: açık kutu ekranda macenta
+
+    class Rec(NullRecorder):
+        first_frame = None
+
+        def start(self, rect, fps=60):                # gerçek kaydedici ilk kareyi burada, GUI'de yakalar
+            Rec.first_frame = (on_screen(), len(_visible_message_boxes()))
+            super().start(rect, fps)
+    window.recorder = Rec()
+    notice._poll_timer.setInterval(0)                 # yoklama her olay turunda: kutuyu geri getirecekse getirsin
+    error_notice.post("Tahta görüntüsü kaydedilemedi", "S1 sorusunun resmi yazılamadı.", key="k2")      # sırada
+    window.toggle_recording(True)
+    notice._poll_timer.setInterval(error_notice.POLL_MS)
+    strip = window.toolbar.alert_label.text()
+    qtbot.wait(3 * error_notice.POLL_MS)
+    during = (len(_visible_message_boxes()), on_screen())                       # kayıt sürerken de yok
+    window.toggle_recording(False)
+    assert Rec.first_frame == (0.0, 0) and strip == "⚠ 2 uyarı — ayrıntı kayıt bitince", (Rec.first_frame, strip)
+    assert during == (0, 0.0), during
+    qtbot.waitUntil(lambda: bool(_visible_message_boxes()), timeout=2000)        # kayıt bitti: ikisi kutuda
+    text = _visible_message_boxes()[0].text()
+    assert "hatalar.log" in text and "S1 sorusunun resmi" in text and shown == [], (text, shown)
+
+
+def test_box_hidden_for_a_recording_that_does_not_start_comes_back(window, qtbot, monkeypatch):
+    """U6: kayıt başlamazsa (başlatma hatası) start()'tan önce gizlenen kutu geri gelir, şerit temizlenir: uyarı
+    kaybolmaz."""
+    from matematigin_mantigi.core.recorder import NullRecorder, RecorderError
+
+    class Failing(NullRecorder):
+        def start(self, rect, fps=60):
+            raise RecorderError("ffmpeg bulunamadı (yapay)")
+    shown = _capture_modals(monkeypatch)
+    _magenta_notice_box(window, qtbot, monkeypatch)
+    window.recorder = Failing()
+    window.toggle_recording(True)
+    assert len(shown) == 1 and "Kayıt başlamadı" in shown[0][1], shown
+    qtbot.waitUntil(lambda: bool(_visible_message_boxes()), timeout=2000)
+    assert "hatalar.log" in _visible_message_boxes()[0].text() and not window.toolbar.alert_label.isVisible()
 
 
 # --- #2: kayıt kaydedilirken yeni kayıt yok; uyarı araç çubuğunda (denetim app#1, e2e#2) -----------------------
@@ -1321,18 +1495,42 @@ def test_badge_stays_right_anchored_after_font_scale_change_with_real_content(wi
 STOP_AND_QUIT, KEEP_RECORDING = "Durdur ve çık", "Kayda devam et"
 
 
-def _answer_close_question(monkeypatch, button: str) -> list:
+def _answer_close_question(monkeypatch, button: str, on_other=None) -> list:
     """Kapanış sorusunu (QMessageBox.exec) `button` yazılı düğmeyle yanıtlar; sorulan metinleri döndürür. Başlık
-    bakılmaz: Qt macOS'ta QMessageBox başlığını yok sayar (setWindowTitle boş kalır), kullanıcı yalnız metni görür."""
+    bakılmaz: Qt macOS'ta QMessageBox başlığını yok sayar (setWindowTitle boş kalır), kullanıcı yalnız metni görür.
+    O düğmesi olmayan başka bir kutu (kapanış özeti) on_other(kutu) verilmişse ona gider ve Tamam'la kapanır;
+    verilmemişse test düşer (StopIteration)."""
     from PyQt6.QtWidgets import QMessageBox
     asked: list = []
 
     def exec_(box):
+        choice = [b for b in box.buttons() if b.text() == button]
+        if not choice and on_other is not None:
+            on_other(box)
+            return QMessageBox.StandardButton.Ok
         asked.append(box.text())
-        next(b for b in box.buttons() if b.text() == button).click()
+        next(iter(choice)).click()
         return 0
     monkeypatch.setattr(QMessageBox, "exec", exec_)
     return asked
+
+
+def _box_text(box) -> str:
+    """Kutunun kullanıcıya gösterdiği metin: ana metin ve (varsa) ayrıntı bölümü."""
+    return box.text() + (f"\n\n{box.detailedText()}" if box.detailedText() else "")
+
+
+def _answer_with_summary(monkeypatch, button: str | None = None) -> tuple[list, list]:
+    """Kapanış sorusu `button` (varsayılan 'Durdur ve çık') ile yanıtlanır; kapanış özeti (QMessageBox.exec) ve statik
+    pencereler (warning, information) gerçek modal açmadan (başlık, metin + ayrıntı) olarak toplanır.
+    (sorulanlar, gösterilenler) döner."""
+    shown: list = []
+    asked = _answer_close_question(monkeypatch, button or STOP_AND_QUIT,
+                                   on_other=lambda box: shown.append((box.windowTitle(), _box_text(box))))
+    from PyQt6.QtWidgets import QMessageBox
+    for name in ("warning", "information"):
+        monkeypatch.setattr(QMessageBox, name, staticmethod(lambda *a, **k: shown.append(a[1:3])))
+    return asked, shown
 
 
 def _spy_shutdown(window, monkeypatch) -> tuple[list, list]:
@@ -1390,18 +1588,15 @@ def test_closing_while_recording_saves_in_background_then_the_window_closes_itse
     gösterilir, sonra pencere kendisi kapanır; kamera ve ayarlar ancak o zaman kapanır. Eskiden kapanış GUI iş
     parçacığında senkron koşuyordu; sonra da sonuç durum satırına yazılıp pencereyle birlikte kayboluyordu."""
     import pytest
-    from PyQt6.QtWidgets import QMessageBox
     from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState, find_ffmpeg
     from matematigin_mantigi.ui.main_window import CLOSING_ALERT
     from tests.test_recorder import FakeAudioCapture, SlowMux, stepping_clock, synthetic_grabber, wait_until
     if find_ffmpeg() is None:
         pytest.skip("ffmpeg yok")
-    asked = _answer_close_question(monkeypatch, STOP_AND_QUIT)
-    shut, synced = _spy_shutdown(window, monkeypatch)
     shown = []                                                        # (metin, pencere açık mı, kamera kapandı mı)
-    for name in ("warning", "information"):
-        monkeypatch.setattr(QMessageBox, name, staticmethod(
-            lambda parent, title, text, *a, **k: shown.append((text, window.isVisible(), bool(shut)))))
+    asked = _answer_close_question(monkeypatch, STOP_AND_QUIT, on_other=lambda box: shown.append(
+        (_box_text(box), window.isVisible(), bool(shut))))
+    shut, synced = _spy_shutdown(window, monkeypatch)
     mux = SlowMux(monkeypatch)
     window.settings.audio_device = "Sahte Mikrofon"
     rec = window.recorder = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber,
@@ -1440,8 +1635,7 @@ def test_closing_while_saving_waits_without_asking_and_closes_when_saved(window,
     from tests.test_recorder import FakeAudioCapture, SlowMux, stepping_clock, synthetic_grabber, wait_until
     if find_ffmpeg() is None:
         pytest.skip("ffmpeg yok")
-    shown = _capture_modals(monkeypatch)
-    asked = _answer_close_question(monkeypatch, STOP_AND_QUIT)
+    asked, shown = _answer_with_summary(monkeypatch)
     shut, synced = _spy_shutdown(window, monkeypatch)
     mux = SlowMux(monkeypatch)
     window.settings.audio_device = "Sahte Mikrofon"
@@ -1494,7 +1688,6 @@ def test_window_closed_while_the_result_is_shown_does_not_close_a_second_time(wi
     kapanırsa (QApplication.quit, close()) kapanış bir kez olur: kamera kapatma ve ayar yazma bir kez koşar.
     (_on_record_stopped sonradan yine close() çağırır; Qt kabul edilen kapanışta platform penceresini yok ettiği
     için o çağrı olay göndermez. Bu kilit, kapanış akışı değişirse ikinci kapanışı yakalar.)"""
-    from PyQt6.QtWidgets import QMessageBox
     from matematigin_mantigi.core.recorder import NullRecorder
 
     class FailingBackgroundStop(NullRecorder):                        # kapanış _StopWorker'da, hatayla biter
@@ -1502,11 +1695,10 @@ def test_window_closed_while_the_result_is_shown_does_not_close_a_second_time(wi
         error = "ffmpeg hata kodu 1: disk dolu"
     shown = []
 
-    def warning(parent, title, text, *a, **k):
-        shown.append(text)
+    def summary(box):
+        shown.append(box.text())
         window.close()                                                # sonuç penceresi açıkken çıkış
-    monkeypatch.setattr(QMessageBox, "warning", staticmethod(warning))
-    _answer_close_question(monkeypatch, STOP_AND_QUIT)
+    _answer_close_question(monkeypatch, STOP_AND_QUIT, on_other=summary)
     shut, synced = _spy_shutdown(window, monkeypatch)
     window.recorder = FailingBackgroundStop()
     window.toggle_recording(True)
@@ -1540,25 +1732,25 @@ def test_stop_and_quit_shows_the_result_and_the_waiting_notices_in_one_window_th
     """P1: 'Durdur ve çık'tan sonra kayıt başarıyla biterse pencere kapanıyor, mikrofon uyarısı ve kayıt sırasında
     biriken uyarılar ('Tahta görüntüsü kaydedilemedi') hiç görünmüyordu; hatayla biterse uyarı kutusu 'Kayıt hatası'
     penceresinin çocuğu olup onunla siliniyor, gizlenen ana pencerenin altında yeniden açılıyordu. Şimdi pencere
-    kapanmadan önce TEK pencerede: kaydın sonucu (dosya ya da hata), ses uyarısı ve bütün bekleyen uyarılar. Sonra
-    pencere kapanır; arkada kutu, şerit, yoklama kalmaz."""
+    kapanmadan önce TEK pencerede: kaydın sonucu (dosya ya da hata), ses uyarısı, görüntü uyarısı (U7, kendi önekiyle)
+    ve bütün bekleyen uyarılar. Sonra pencere kapanır; arkada kutu, şerit, yoklama kalmaz."""
     from pathlib import Path
     from matematigin_mantigi.core.recorder import NullRecorder
     from matematigin_mantigi.ui import error_notice
 
     class BackgroundStop(NullRecorder):               # kapanış _StopWorker'da; sonuç alanları bu testin kendi metni
         stop_is_quick = False
-        error = audio_error = None
+        error = audio_error = video_warning = None
 
         def stop(self):
             super().stop()
             if outcome == "hata":
                 self.error = "yapay kapanış hatası, ham dosyalar silinmedi"
             self.audio_error = "Mikrofon kayıt sırasında kesildi (yapay)"
+            self.video_warning = VIDEO_LAG
             return Path("oturum") / "kayit_yapay.mp4"
     notice = _wired_notice(window, monkeypatch)
-    shown = _capture_modals(monkeypatch)
-    asked = _answer_close_question(monkeypatch, STOP_AND_QUIT)
+    asked, shown = _answer_with_summary(monkeypatch)
     window.recorder = BackgroundStop()
     window.toggle_recording(True)
     error_notice.post("Tahta görüntüsü kaydedilemedi", "S1 sorusunun tahta resmi kaydedilemedi: diskte yer kalmadı.",
@@ -1569,12 +1761,93 @@ def test_stop_and_quit_shows_the_result_and_the_waiting_notices_in_one_window_th
     assert len(shown) == 1, shown                                     # tek özet penceresi
     text = shown[0][1]
     assert "S1 sorusunun tahta resmi kaydedilemedi" in text and "Mikrofon kayıt sırasında kesildi (yapay)" in text, text
+    assert f"Kaydın görüntüsünde sorun var: {VIDEO_LAG}" in text, text
+    assert f"Kaydın sesinde sorun var: {VIDEO_LAG}" not in text, text
     if outcome == "hata":
         assert "yapay kapanış hatası, ham dosyalar silinmedi" in text, text
     else:
         assert str(Path("oturum") / "kayit_yapay.mp4") in text, text
     qtbot.wait(3 * error_notice.POLL_MS)                              # kapanıştan sonra hiçbir yoldan kutu açılmaz
     assert _visible_message_boxes() == [] and not notice._poll_timer.isActive() and not notice._pending
+
+
+def test_dialogs_do_not_open_while_the_window_waits_to_close(window, qtbot, tmp_path, monkeypatch):
+    """U3: 'Durdur ve çık'tan sonra kayıt kaydedilirken açılan soru editörü (Ayarlar, kalem ayarları da) pencere
+    kendisi kapanınca exec döngüsüyle birlikte bitiyordu: editörde yazılmış ama kaydedilmemiş sorular sorulmadan
+    kayboluyordu (inceleme v30 editor). Kapanış beklenirken bu pencereler açılmaz; tıklanan düğmenin yanında kısa
+    neden görünür (araç çubuğunun şeridinde zaten 'bitince pencere kapanacak' yazıyor)."""
+    import threading
+    from pathlib import Path
+    from PyQt6.QtWidgets import QToolTip
+    from matematigin_mantigi.core.question_loader import write_questions
+    from matematigin_mantigi.core.recorder import NullRecorder
+    from matematigin_mantigi.ui import pen_settings as ps
+    from matematigin_mantigi.ui import settings_dialog as sd
+    from matematigin_mantigi.ui.main_window import CLOSING_ALERT
+    from matematigin_mantigi.ui.question_editor import QuestionEditorDialog
+    release = threading.Event()
+
+    class HeldStop(NullRecorder):                     # kapanış _StopWorker'da; test bırakana dek sürer
+        stop_is_quick = False
+
+        def stop(self):
+            super().stop()
+            release.wait(20)
+            return Path("oturum") / "kayit.mp4"
+    opened, tips = [], []
+    for cls in (QuestionEditorDialog, sd.SettingsDialog, ps.PenSettingsDialog):
+        monkeypatch.setattr(cls, "exec", lambda self, name=cls.__name__: opened.append(name) or 0)
+    # İpucu çağrısı kaydedilir: görünürlüğü platforma bağlı (macOS'ta solarak açılır, isVisible() hemen True olmaz).
+    monkeypatch.setattr(QToolTip, "showText", staticmethod(lambda pos, text, w=None, *a: tips.append((text, w))))
+    asked, shown = _answer_with_summary(monkeypatch)
+    window.questions_path = write_questions(tmp_path / "sorular.xlsx", list(SAMPLE_QUESTIONS))
+    window.toolbar.editor_button.setEnabled(True)     # fikstür penceresi soru dosyasız kuruldu (düğme kapalıydı)
+    window.recorder = HeldStop()
+    window.toggle_recording(True)
+    tb = window.toolbar
+    try:
+        assert window.close() is False and tb.alert_label.text() == CLOSING_ALERT and len(asked) == 1
+        for open_dialog, button in ((window.open_editor, tb.editor_button), (window.open_settings, tb.settings_button),
+                                    (window.open_pen_settings, tb.pen_settings_button)):
+            tips.clear()
+            open_dialog()
+            assert opened == [] and len(tips) == 1 and tips[0][1] is button, tips
+            assert "bitince pencere kapanacak" in tips[0][0], tips
+        qtbot.mouseClick(tb.editor_button, Qt.MouseButton.LeftButton)          # düğmeden de aynı yol
+        assert opened == [] and window.isVisible() and len(tips) == 2
+    finally:
+        release.set()
+    qtbot.waitUntil(lambda: not window.isVisible(), timeout=10000)
+    assert opened == [] and len(shown) == 1 and "kayit.mp4" in shown[0][1], shown
+
+
+def test_window_stays_open_if_a_dialog_is_still_open_when_the_recording_is_saved(window, qtbot, monkeypatch):
+    """U3: kapanış anında (kayıt kaydedildi, pencere kendisi kapanacak) başka bir modal pencere açıksa (ör. 'Durdur ve
+    çık'tan önce açılmış soru editörü) pencere kapanmaz: kapansaydı süreç biter, o pencerenin exec döngüsü de biter,
+    içindeki kaydedilmemiş iş sorulmadan kaybolurdu. Özet bunu ve açık pencerenin adını söyler; kamera ve ayarlar
+    kapanmaz. O pencere kapatılınca uygulama yeniden kapatılabilir."""
+    from PyQt6.QtWidgets import QApplication, QDialog
+    from matematigin_mantigi.core.recorder import NullRecorder
+
+    class BackgroundStop(NullRecorder):               # kapanış _StopWorker'da
+        stop_is_quick = False
+    asked, shown = _answer_with_summary(monkeypatch)
+    shut, synced = _spy_shutdown(window, monkeypatch)
+    window.recorder = BackgroundStop()
+    window.toggle_recording(True)
+    dlg = QDialog(window)
+    dlg.setWindowTitle("Soru editörü")
+    dlg.setModal(True)
+    dlg.show()
+    qtbot.waitUntil(lambda: QApplication.activeModalWidget() is dlg, timeout=2000)
+    assert window.close() is False and len(asked) == 1                # 'Durdur ve çık': kayıt arka planda
+    qtbot.waitUntil(lambda: window._stop_worker is None, timeout=10000)
+    qtbot.wait(50)
+    assert window.isVisible() and shut == [] and synced == [], (shut, synced)
+    assert len(shown) == 1 and "Pencere kapanmadı" in shown[0][1] and "Soru editörü" in shown[0][1], shown
+    assert not window.toolbar.alert_label.isVisible() and window.toolbar.record_button.isEnabled()
+    dlg.close()
+    assert window.close() is True and not window.isVisible() and shut == [()] and synced == [1]
 
 
 CLOSE_CHILD = r'''
@@ -1617,9 +1890,14 @@ class BrokenStop(NullRecorder):
         raise OSError(13, "Permission denied", "kayit.mp4")
 
 
-def answer(box):                                      # kapanış sorusu: "Durdur ve çık"
+def answer(box):                                      # kapanış sorusu: "Durdur ve çık"; kapanış özeti: Tamam
+    stop = [b for b in box.buttons() if b.text() == "Durdur ve çık"]
+    if not stop:
+        kind = "BILGI" if box.icon() == QMessageBox.Icon.Information else "UYARI"
+        out(kind, (box.text() + " " + box.detailedText()).strip().replace("\n", " "))
+        return QMessageBox.StandardButton.Ok
     out("SORU", box.text())
-    next(b for b in box.buttons() if b.text() == "Durdur ve çık").click()
+    stop[0].click()
     return 0
 
 

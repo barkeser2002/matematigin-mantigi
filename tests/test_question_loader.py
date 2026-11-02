@@ -129,6 +129,23 @@ def test_write_that_cannot_be_read_back_changes_nothing(tmp_path, bad):
     assert _leftovers(tmp_path, "sorular.xlsx", "sorular.xlsx.bak") == []
 
 
+def test_write_that_reads_back_fewer_questions_changes_nothing(tmp_path):
+    """Q2: geri okumada soru SAYISI da karşılaştırılır. Yazılan bir soru geri okunurken boş satır sayılırsa (bütün
+    hücreleri boşluk; okuyucu boş satırı atlar) dosya hatasız okunur ama bir soru eksiktir: bu sürüm yerine konsaydı
+    soru sessizce kaybolurdu. Yerine konmaz: soru dosyası da önceki yedek de bayt bayt aynı kalır, geçici dosya
+    kalmaz."""
+    from matematigin_mantigi.core.question_loader import UnreadableWriteError
+    p = tmp_path / "sorular.xlsx"
+    write_questions(p, SAMPLE_QUESTIONS)
+    write_questions(p, SAMPLE_QUESTIONS[:2])
+    before, bak_before = p.read_bytes(), _bak(p).read_bytes()
+    blank = Question(" ", " ", None, "  ", (" ",), " ", (" ",), None)      # geri okunurken boş satır
+    with pytest.raises(UnreadableWriteError, match="2 soru yazıldı, 1 soru geri okundu"):
+        write_questions(p, [SAMPLE_QUESTIONS[0], blank])
+    assert p.read_bytes() == before and _bak(p).read_bytes() == bak_before
+    assert _leftovers(tmp_path, "sorular.xlsx", "sorular.xlsx.bak") == []
+
+
 # --- yazım yarıda kalırsa soru dosyası bozulmaz; önceki sürüm .bak'ta (#29, B-2) ------------------------------
 def _bak(p: Path) -> Path:
     return p.with_name(p.name + ".bak")

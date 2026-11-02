@@ -35,8 +35,11 @@ def load_questions_or_samples(template: Path) -> tuple[list[Question], bool]:
     yarım kalmış, eksik sütun, okunamayan yol; her türlü hata) dosya adı ve sebep söylenir, uygulama örnek sorularla
     açılır (#17): yalnız QuestionTemplateError yakalandığı için yarım kalmış bir xlsx uygulamayı bir daha hiç açılmaz
     yapıyordu. O zaman ikinci değer False: pencere ve editör bunu bilir, editör örnek soruları o dosyanın (ya da
-    yedeğinin) gerçek sorularının üzerine yazmaz; dosya sonradan düzelirse onları yüklemeyi önerir (#4, Q1)."""
+    yedeğinin) gerçek sorularının üzerine yazmaz; dosya sonradan düzelirse onları yüklemeyi önerir (#4, Q1). Dosya
+    yok ama yedeği ya da iCloud yer tutucusu duruyorsa örnek şablon yazılmaz (U2, _samples_for_missing_file)."""
     try:
+        if not template.exists() and paths.missing_file_traces(template):
+            return _samples_for_missing_file(template)
         return load_questions(ensure_template(template)), True
     except Exception as err:  # noqa: BLE001 - açılış hiçbir soru dosyası yüzünden düşmez
         crash_log.log_handled(err, "soru dosyası")
@@ -48,10 +51,31 @@ def load_questions_or_samples(template: Path) -> tuple[list[Question], bool]:
         return list(SAMPLE_QUESTIONS), False
 
 
+def _samples_for_missing_file(template: Path) -> tuple[list[Question], bool]:
+    """Soru dosyası klasörde yok ama gerçek soruları başka yerde: önceki sürümün yedeği (öğretmen bozuk dosyayı
+    kaldırdı ya da taşıdı) ya da iCloud yer tutucusu (macOS 13 ve öncesinde iCloud dosyayı bu Mac'ten kaldırdı).
+    Eskiden yerine örnek şablon sessizce yazılıyor (paketlide gömülü şablon kopyalanıyor) ve dosya 'okundu'
+    sayılıyordu: editörün ilk Kaydet'i yedeği örneklerle eziyordu, gerçek sorular kayboluyordu (U2). Hiçbir şey
+    yazılmaz; uygulama örnek sorularla açılır, sorular dosyadan okunmamış sayılır: editör yedeği yüklemeyi önerir."""
+    lines = [f"Soru dosyası bulunamadı: {template.name}", f"Klasör: {template.parent}"]
+    if paths.icloud_placeholder(template).exists():
+        lines.append("Dosya bu bilgisayara henüz inmemiş, iCloud Drive'da duruyor: Finder'da açıp inmesini bekleyin, "
+                     "sonra uygulamayı yeniden açın.")
+    bak = backup_path(template)
+    if bak.exists():
+        lines.append(f"Önceki sürümün yedeği var: {bak.name} (adını {template.name} yapıp uygulamayı yeniden açın; "
+                     "soru editörü de yedekteki soruları yüklemeyi önerir).")
+    QMessageBox.warning(None, "Soru dosyası bulunamadı", "\n".join(lines) + "\n\nÖrnek sorularla devam ediliyor; "
+                        "örnekler gerçek soruların yerine yazılmaz.")
+    return list(SAMPLE_QUESTIONS), False
+
+
 def build_window(args: argparse.Namespace, fam: theme.FontFamilies, settings: AppSettings | None = None) -> MainWindow:
     settings = settings or AppSettings()
     if paths.is_frozen():
-        paths.ensure_user_data()            # .app: ~/Documents/Matematiğin Mantığı (şablon + görseller kopyalanır)
+        # .app: ~/Documents/Matematiğin Mantığı (şablon + görseller kopyalanır; şablon yalnız soru dosyasının yedeği ya
+        # da iCloud yer tutucusu da yokken)
+        paths.ensure_user_data()
     template = Path(args.sorular) if args.sorular else paths.default_template_path()
     questions, from_file = load_questions_or_samples(template)
     if args.kamera is not None:
@@ -95,7 +119,8 @@ def _toolbar_bottom(win: MainWindow) -> QRect:
 def _wire_notice(notice: error_notice.ErrorNotice, win: MainWindow) -> None:
     """Uyarı kutusunu pencereye bağlar: kayıt dışında sahneye ve araç çubuğunun altına değmeyen yere konur; kayıt
     sürerken (kaydedilirken de) hiç açılmaz, araç çubuğunun şeridine yazar, kayıt bitince açılır. Kaydedici
-    testlerde/ayarlarda değişebildiği için durum her seferinde pencereden okunur."""
+    testlerde/ayarlarda değişebildiği için durum her seferinde pencereden okunur. Uygulama kapanırken (aboutToQuit)
+    kutu pencereyle bütün bağı keser: yorumlayıcı sonlanırken silinen pencere kutunun Python koduna uğramaz (U1)."""
     notice.set_anchor(win, avoid=lambda: _recorded_rect(win), keep_clear=lambda: _toolbar_bottom(win))
     notice.set_recording_route(is_recording=lambda: win.recorder.state is not RecorderState.IDLE,
                                show_alert=lambda text: win.toolbar.set_alert(error_notice.ALERT_KEY, text))
@@ -104,6 +129,7 @@ def _wire_notice(notice: error_notice.ErrorNotice, win: MainWindow) -> None:
     # Kayıt rozeti kayıt başlar başlamaz (sonra saniyede bir) tik atar: kayıt başlangıcı ve bitişi yoklamayı
     # beklemeden de görülür.
     win.badge.ticked.connect(lambda _seconds: notice.recording_changed())
+    QApplication.instance().aboutToQuit.connect(notice.release)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -123,11 +149,11 @@ def main(argv: list[str] | None = None) -> int:
     app.setFont(theme.font(fam, 13))            # varsayılan aile; stil sayfası font-family kullanmaz
     app.setStyleSheet(theme.build_stylesheet(fam))
     win = build_window(parse_args(argv), fam)
-    _wire_notice(notice, win)
     # Ana pencere kapanınca süreç biter. Qt'nin kendi çıkışı (son pencere kapandı) kuyruğa konan bir olaydır; o
     # işlenmeden gösterilen herhangi bir pencere onu kuyruktan siler: 'Durdur ve çık'tan sonra gizli ana pencerenin
     # çocuğu olarak yeniden açılan uyarı kutusu pencereyi kapatıp süreci görünmez bırakıyordu (Windows'ta arka plan
     # süreci). exit() pencere sormaz; kamera ve ayarlar closeEvent'te kapandı.
     win.closed.connect(lambda: QTimer.singleShot(0, lambda: app.exit(0)))
     win.show()
+    _wire_notice(notice, win)          # gösterildikten sonra: kutu pencerenin (artık kurulu) görünürlüğünü izler
     return app.exec()

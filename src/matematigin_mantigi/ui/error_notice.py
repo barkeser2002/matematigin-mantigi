@@ -12,9 +12,12 @@ Kayıt dışında kutu, kayda giren sahneyle en az çakışan ve araç çubuğun
 örtmeyen yere konur.
 
 Ana pencere kapanınca (gizlenince) kutu da kapanır ve o sürede hiçbir pencere açılmaz: gizli ana pencerenin çocuğu
-olarak gösterilen kutu Qt'nin otomatik çıkışını kuyruktan siliyordu, pencere kapanıyor ama süreç çıkmıyordu. Pencere
-kendisi kapanmadan önce ('Durdur ve çık') görülmemiş uyarılar `take_all()` ile kapanış özetine alınır. Modül düzeyindeki
-`post()` ile gelen her uyarı başlığı ve metniyle hatalar.log'a da yazılır (core/crash_log).
+olarak gösterilen kutu Qt'nin otomatik çıkışını kuyruktan siliyordu, pencere kapanıyor ama süreç çıkmıyordu. Pencerenin
+görünürlüğü Qt'nin kendi sinyaliyle (QWindow.visibleChanged) izlenir; Python'da yazılmış olay süzgeci uzun ömürlü
+pencerede kalınca yorumlayıcı sonlanırken çağrılıp süreci ara sıra SIGSEGV ile düşürüyordu. Uygulama kapanırken
+(aboutToQuit) `release()` pencereyle bütün bağı keser. Pencere kendisi kapanmadan önce ('Durdur ve çık') görülmemiş
+uyarılar `take_all()` ile kapanış özetine alınır. Modül düzeyindeki `post()` ile gelen her uyarı başlığı ve metniyle
+hatalar.log'a da yazılır (core/crash_log).
 """
 from __future__ import annotations
 
@@ -23,8 +26,8 @@ import sys
 from typing import Callable, Sequence
 
 from PyQt6 import sip
-from PyQt6.QtCore import QCoreApplication, QEvent, QObject, QPoint, QRect, QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtCore import QCoreApplication, QEventLoop, QObject, QPoint, QRect, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QGuiApplication, QWindow
 from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from matematigin_mantigi.core import crash_log
@@ -40,6 +43,8 @@ _OS_REASONS = {
     errno.EROFS: "disk salt okunur",
     errno.ENOENT: "klasör ya da dosya bulunamadı",
     errno.ENOTDIR: "yolda klasör yerine bir dosya var",
+    # macOS: iCloud'un indiremediği (çevrimdışı) ya da eşitlemenin kilitlediği dosyayı okuma
+    errno.EDEADLK: "dosya şu an okunamıyor; bu bilgisayara inmemiş ya da eşitleme tarafından kilitli olabilir",
 }
 
 Items = dict[str, tuple[str, str]]          # anahtar -> (başlık, metin); sıra geliş sırası
@@ -107,6 +112,9 @@ class ErrorNotice(QObject):
         self._current: Items = {}                     # görünen kutunun içeriği; Tamam'a basılınca boşalır
         self._pending: Items = {}                     # kayıt sürerken gelenler: kayıt bitince gösterilir
         self._anchor: QWidget | None = None
+        self._anchor_window: QWindow | None = None    # çapanın yerel penceresi: görünürlüğü buradan izlenir
+        self._released = False                        # uygulama kapanıyor: pencereyle bağ kesildi
+        self._starting = False                        # kayıt başlatılıyor: prepare_recording'den start() dönene dek
         self._avoid: Callable[[], QRect | None] | None = None
         self._keep_clear: Callable[[], QRect | None] | None = None
         self._is_recording: Callable[[], bool] | None = None
@@ -119,14 +127,60 @@ class ErrorNotice(QObject):
                    keep_clear: Callable[[], QRect | None] | None = None) -> None:
         """widget: kutunun sahibi (ana pencere; tam ekranda kutu onun üstünde kalsın). avoid: kayda giren dikdörtgen,
         keep_clear: kutunun örtmemesi gereken yer (araç çubuğunun altı); ikisi de ekran koordinatında. Ana pencere
-        kapanınca (gizlenince) kutu da kapanır; pencere gizliyken kutu açılmaz (olay süzgeci)."""
-        old = self._live(self._anchor)
-        if old is not None:
-            old.removeEventFilter(self)
+        kapanınca (gizlenince) kutu da kapanır; pencere gizliyken kutu açılmaz. Görünürlük pencerenin kendi
+        sinyaliyle izlenir (QWindow.visibleChanged), olay süzgeciyle değil: Python'da yazılmış süzgeç pencerede
+        kalınca yorumlayıcı sonlanırken çağrılıyor, süreç ara sıra SIGSEGV (-11) ile ölüyordu (U1). None: bağ kesilir."""
+        self._unwatch_anchor()
         self._anchor, self._avoid, self._keep_clear = widget, avoid, keep_clear
+        self._watch_anchor(widget)
+
+    def release(self) -> None:
+        """Uygulama kapanıyor (QApplication.aboutToQuit; app.py bağlar): ana pencereyle bütün bağ kesilir (görünürlük
+        bağlantısı, pencereyi yakalayan çapa ve kayıt yolu lambdaları), kutu silinir, yoklama durur; sonra gelen uyarı
+        pencere açmaz (stderr'e, günlükte zaten var). Pencere yorumlayıcı sonlanırken silindiğinde kutunun hiçbir
+        Python kodu çağrılmaz. İstisna fırlatmaz."""
+        self._released = True
+        try:
+            self.set_anchor(None)
+            self.set_recording_route(None, None)
+            self._poll_timer.stop()
+        except Exception:  # noqa: BLE001 - çıkış hiçbir koşulda düşmez
+            pass
+        box, self.box = self._live(self.box), None
+        if box is None:
+            return
+        for signal, slot in ((box.finished, self._on_box_finished), (box.destroyed, self._on_box_destroyed)):
+            try:
+                signal.disconnect(slot)
+            except (TypeError, RuntimeError):   # bağlantı zaten yok
+                pass
+        try:
+            box.hide()
+            sip.delete(box)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _watch_anchor(self, widget: QWidget | None) -> None:
         live = self._live(widget)
-        if live is not None:
-            live.installEventFilter(self)
+        if live is None:
+            return
+        top = live.window()
+        handle = top.windowHandle()
+        if handle is None:                  # pencere henüz gösterilmedi: yerel pencere (ve tutamağı) şimdi kurulur
+            top.winId()
+            handle = top.windowHandle()
+        if handle is not None:
+            handle.visibleChanged.connect(self._on_anchor_visibility)
+            self._anchor_window = handle
+
+    def _unwatch_anchor(self) -> None:
+        handle, self._anchor_window = self._anchor_window, None
+        if handle is None or sip.isdeleted(handle):
+            return
+        try:
+            handle.visibleChanged.disconnect(self._on_anchor_visibility)
+        except (TypeError, RuntimeError):   # bağlantı zaten yok
+            pass
 
     def set_recording_route(self, is_recording: Callable[[], bool] | None,
                             show_alert: Callable[[str | None], None] | None) -> None:
@@ -144,15 +198,28 @@ class ErrorNotice(QObject):
     def prepare_recording(self) -> None:
         """Kayıt başlamak üzere (MainWindow.recordingAboutToStart; app.py bağlar): kaydedici ilk kareyi start() içinde,
         hemen yakalar. Görünür kutu ŞİMDİ gizlenir, uyarı şeride geçer; Tamam'a basılmadığı için kayıt bitince yeniden
-        gösterilir. Kayıt başlamazsa (başlatma hatası) yoklama kutuyu hemen geri getirir. Eskiden kutu ancak rozetin
-        ilk tikinde, start() döndükten sonra gizleniyor, kaydın ilk karelerine giriyordu (kutu hatalar.log'un tam
-        yolunu, yani kullanıcı adını taşır). İstisna fırlatmaz."""
+        gösterilir. Eskiden kutu ancak rozetin ilk tikinde, start() döndükten sonra gizleniyor, kaydın ilk karelerine
+        giriyordu (kutu hatalar.log'un tam yolunu, yani kullanıcı adını taşır). Gizlemek de yetmiyordu: gizlenen
+        pencere olay döngüsü dönene dek ekranda (exposed) kalıyor, ekran yakalayıcısı onu ilk ~3 karede çiziyordu
+        (U6). Kutu gizlendiyse olay döngüsü kullanıcı girdisi hariç bir kez döner. O turda ve start() dönene dek
+        (sonraki olay turu) kayıt sürüyor sayılır: yoklama ya da sıradaki yeni uyarı kutuyu geri getirmez, şeride
+        yazar. Kayıt başlamazsa (başlatma hatası) o turda kutu geri gelir. İstisna fırlatmaz."""
+        self._starting = True
         try:
             if self._stash_box():
                 self._update_alert()
+                QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
         except Exception as err:  # noqa: BLE001 - kayıt başlatmayı hiçbir koşulda engellemez
             _to_stderr("Uyarı kutusu", f"gizlenemedi: {err}")
+        QTimer.singleShot(0, self._start_settled)
         self._update_polling()
+
+    def _start_settled(self) -> None:
+        """prepare_recording'den sonraki ilk olay turu: start() döndü, kayıt başladı ya da başlamadı. Başlamadıysa
+        bekleyen uyarılar (gizlenen kutu dahil) hemen kutuyla gelir. İstisna fırlatmaz."""
+        self._starting = False
+        if self._is_recording is not None:
+            self._poll()
 
     def post(self, title: str, text: str, key: str | None = None) -> None:
         """Herhangi bir iş parçacığından güvenle çağrılır; istisna fırlatmaz."""
@@ -168,33 +235,28 @@ class ErrorNotice(QObject):
         """Çapa (ana pencere) verilmiş ama kapandı, gizli ya da silindi; ya da uygulama kapanıyor: pencere açılmaz.
         Gizli ana pencerenin çocuğu olarak gösterilen kutu Qt'nin kuyruktaki otomatik çıkışını siliyordu ('Durdur ve
         çık'tan sonra pencere kapanıyor, süreç görünmez kalıyordu; Tamam'dan sonra da çıkmıyordu)."""
-        if QCoreApplication.closingDown():
+        if self._released or QCoreApplication.closingDown():
             return True
         if self._anchor is None:
             return False
         anchor = self._live(self._anchor)
-        return anchor is None or not anchor.isVisible()
+        # isHidden: kapanırken pencere gizli sayılır ama isVisible() bir an daha True kalır (visibleChanged o arada).
+        return anchor is None or anchor.isHidden() or not anchor.isVisible()
 
-    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+    def _on_anchor_visibility(self, visible: bool) -> None:
         """Ana pencere kapanınca (gizlenince) görünen kutu da kapanır; içeriği Tamam'a basılmadığı için bekleyenlere
-        geçer, yoklama durur. Pencere yeniden gösterilirse bekleyenler gelir. Olayı hiçbir zaman yutmaz."""
+        geçer, yoklama durur. Pencere yeniden gösterilirse bekleyenler gelir (QWindow.visibleChanged yuvası; simge
+        durumunda yayılmaz). İstisna fırlatmaz."""
         try:
-            if obj is self._anchor:
-                kind = event.type()
-                if kind == QEvent.Type.Hide and not self._anchor_visible():     # kendiliğinden (simge) değil
-                    self._stash_box()
-                    self._update_polling()
-                elif kind == QEvent.Type.Show:
-                    self._update_polling()
-        except Exception:  # noqa: BLE001 - olay süzgeci hiçbir koşulda istisna fırlatmaz
+            if not visible:
+                self._stash_box()
+            self._update_polling()
+        except Exception:  # noqa: BLE001 - yuva hiçbir koşulda istisna fırlatmaz
             pass
-        return False
-
-    def _anchor_visible(self) -> bool:
-        anchor = self._live(self._anchor)
-        return anchor is not None and anchor.isVisible()
 
     def _recording(self) -> bool:
+        if self._starting:                          # kayıt başlatılıyor: ilk kareye kutu girmesin
+            return True
         if self._is_recording is None:
             return False
         try:

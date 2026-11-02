@@ -32,15 +32,34 @@ def data_dir() -> Path:
 
 
 def ensure_user_data(target: Path | None = None) -> Path:
-    """Paketlenmiş uygulamada ilk açılışta gömülü şablonu ve görselleri veri klasörüne kopyalar."""
+    """Paketlenmiş uygulamada ilk açılışta gömülü şablonu ve görselleri veri klasörüne kopyalar. Soru dosyası yok ama
+    yedeği ya da iCloud yer tutucusu duruyorsa şablon kopyalanmaz: örnek sorular gerçek soruların yerine geçmesin (U2,
+    missing_file_traces)."""
     target = Path(target) if target is not None else data_dir()
     target.mkdir(parents=True, exist_ok=True)
     src = bundle_dir()
-    if not (target / TEMPLATE_NAME).exists() and (src / TEMPLATE_NAME).exists() and src != target:
-        shutil.copy2(src / TEMPLATE_NAME, target / TEMPLATE_NAME)
+    template = target / TEMPLATE_NAME
+    if not template.exists() and not missing_file_traces(template) and (src / TEMPLATE_NAME).exists() \
+            and src != target:
+        shutil.copy2(src / TEMPLATE_NAME, template)
     if not (target / IMAGES_DIR_NAME).exists() and (src / IMAGES_DIR_NAME).is_dir() and src != target:
         shutil.copytree(src / IMAGES_DIR_NAME, target / IMAGES_DIR_NAME)
     return target
+
+
+def icloud_placeholder(path: Path) -> Path:
+    """macOS'ta (13 ve öncesi) iCloud Drive'ın bu bilgisayara indirmediği dosyanın yer tutucusu: aynı klasörde
+    '.<ad>.icloud'. Asıl ad klasörde yoktur; dosya iCloud'da durur."""
+    path = Path(path)
+    return path.with_name(f".{path.name}.icloud")
+
+
+def missing_file_traces(path: Path) -> list[Path]:
+    """Soru dosyası klasörde YOKKEN gerçek sorularının başka yerde durduğunu gösteren dosyalar (var olanlar): önceki
+    sürümün yedeği (<ad>.bak; öğretmen dosyayı kaldırdı ya da taşıdı) ve iCloud yer tutucusu. Biri varsa yerine örnek
+    şablon yazılmaz/kopyalanmaz: yazılırsa dosya 'okundu' sayılıyor, editörün ilk Kaydet'i yedeği örneklerle eziyordu."""
+    from matematigin_mantigi.core.question_loader import backup_path     # openpyxl paths'le birlikte yüklenmesin
+    return [p for p in (backup_path(path), icloud_placeholder(path)) if p.exists()]
 
 
 def default_template_path() -> Path:

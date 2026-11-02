@@ -150,6 +150,50 @@ def test_slow_encoder_that_keeps_reading_is_not_killed_and_the_file_opens(tmp_pa
 
 
 @needs_ffmpeg
+def test_stopped_writer_still_writing_to_a_slow_reader_is_not_killed_after_one_window(tmp_path, monkeypatch):
+    """K1: öldürme ölçüsü 'yazıcı iş parçacığı hâlâ canlı' değil 'bu pencerede tek kare okunmadı'. Durdurulan yazıcı
+    küçük borcu yavaş ama okuyan ffmpeg'e yazarken ilk WRITER_JOIN_S penceresi dolar (iş parçacığı canlı): ffmpeg kare
+    okuduğu için öldürülmez, ikinci pencerede yazıcı biter, dosya açılır. Durdurma burada yazıcının bir yığının son
+    yazımında beklediği ana denk gelir: eskiden o yoldan borç hesaba girmeden çıkılıyordu (atlanan 0, uyarı yok)."""
+    from matematigin_mantigi.core import recorder as r
+    monkeypatch.setattr(r, "WRITER_JOIN_S", 1.0)                        # gerçek sınır 10 sn
+    fps = 20
+    pipes = slow_pipes(monkeypatch)
+    rec = MssFfmpegRecorder(lambda: tmp_path, fps=fps, grabber=synthetic_grabber, out_height=0,
+                            clock=stepping_clock())
+    kills: list = []
+    real_kill = rec._kill
+    rec._kill = lambda proc: (kills.append(proc), real_kill(proc))
+    rec.start(RecordRect(0, 0, 160, 120))
+    wait_until(lambda: rec.frames_written >= 5)
+    pipe = pipes[0]
+    pipe.hold()
+    wait_until(lambda: pipe.waits >= 1 and debt(rec, fps) >= 1.5 * fps)  # küçük borç (STOP_DEBT_S = 2 sn)
+    joins: list = []
+    thread = rec._session.thread
+    real_join = thread.join
+    thread.join = lambda timeout=None: (joins.append(timeout), real_join(timeout))[1]
+    reading = threading.Event()
+
+    def slow_reader():                                                  # ffmpeg saniyede ~10 kare okuyor
+        while not reading.is_set():
+            pipe.allow()
+            reading.wait(0.1)
+    pacer = threading.Thread(target=slow_reader, daemon=True)
+    pacer.start()
+    try:
+        path = rec.stop()
+    finally:
+        reading.set()
+        pacer.join(5)
+    assert len(joins) >= 2, joins                                       # ilk pencere doldu, yazıcı hâlâ yazıyordu
+    assert kills == [] and rec.error is None, (kills, rec.error)
+    assert media_duration(find_ffmpeg(), path) is not None               # moov yazıldı, dosya açılıyor
+    assert rec._session.frames_skipped > 0                              # yazılamayan borç hesapta ...
+    assert "Görüntü kodlayıcısı kayda yetişemedi" in (rec.audio_error or ""), rec.audio_error    # ... ve uyarıda
+
+
+@needs_ffmpeg
 def test_short_encoder_hiccup_is_still_written_and_the_video_reaches_the_stop(tmp_path, monkeypatch):
     """Kısa takılmada (borç STOP_DEBT_S'den az: kodlayıcı bir an geride kaldı, ffmpeg yeni açıldı) durdurma borcu
     yazılır: video düğmeye basılan ana dek sürer, birleştirme her zamanki -shortest yolundan geçer, uyarı yok. Borcun

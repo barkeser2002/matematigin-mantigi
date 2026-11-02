@@ -1011,20 +1011,24 @@ class MssFfmpegRecorder:
         grabber.start()
         t0 = time.monotonic()
         s.video_t0 = t0
+        data = s.latest
         try:
             while not s.stop_event.is_set():
                 with s.latest_lock:
                     data = s.latest
                 due = int((time.monotonic() - t0) * fps) - s.frames_written
                 for _ in range(max(1, due)):
-                    if s.stop_event.is_set():       # durduruldu: yalnız küçük borç, sonra son ekran
-                        self._settle_on_stop(s, t0, fps, data)
-                        return
+                    if s.stop_event.is_set():
+                        break
                     if not self._put_frame(s, data):
-                        return
+                        return                      # ffmpeg öldü: sebep oturumda (failed)
                 delay = (t0 + s.frames_written * period) - time.monotonic()
                 if delay > 0:
-                    time.sleep(delay)
+                    s.stop_event.wait(delay)
+            # Durduruldu (yazıcı nerede olursa olsun: borç yazarken, bir yazımın içinde, tempoyu beklerken): yalnız
+            # küçük borç, sonra son ekran. Durdurma bir yığının son yazımına denk gelince eskiden doğrudan çıkılıyordu:
+            # borç hesaba girmiyor (frames_skipped 0), uyarı çıkmıyor, sesin ucu -shortest ile kesiliyordu.
+            self._settle_on_stop(s, t0, fps, data)
         finally:
             s.stop_event.set()
             grabber.join(timeout=5)

@@ -286,6 +286,25 @@ def test_capture_records_when_the_last_sample_arrived(tmp_path, monkeypatch):
     assert res.tail_gap >= 0.3 - 0.02
 
 
+def test_sample_times_follow_the_drivers_clock_not_the_callback(monkeypatch):
+    """O1: saat kayması ilk ile son örnek arasında ölçülür. İkisi de sürücünün ADC zamanından: geri çağrı bloğu
+    alındıktan sonra gelir (Bluetooth/USB'de 0,1-0,3 sn). Son örnek geri çağrının anı sayılsaydı ölçülen süre o kadar
+    uzar, 10 dakikalık derste ~500 ppm'lik sahte kayma 'düzeltilir'di (asetrate: ton ve senkron kayar)."""
+    from types import SimpleNamespace
+    now = {"t": 1000.0}
+    monkeypatch.setattr(ac, "time", SimpleNamespace(monotonic=lambda: now["t"]))
+
+    class Late:                                                        # blok geri çağrıdan 0,3 sn önce alındı
+        inputBufferAdcTime, currentTime = 50.0, 50.3
+    cap = ac.AudioCapture("USB Mikrofon")
+    block = np.zeros((960, 1), np.int16)                               # 20 ms
+    cap._callback(block, 960, Late(), None)                            # ilk blok 1000,0'da geldi
+    now["t"] = 1600.0
+    cap._callback(block, 960, Late(), None)                            # son blok 1600,0'da geldi
+    assert cap.first_sample_monotonic == pytest.approx(999.7)
+    assert cap.last_sample_monotonic == pytest.approx(1599.72)         # son bloğun sonu, geri çağrının anı değil
+
+
 # --- k1/k2: sürücü takılınca kapanış sınırlı, yarım açılış iz bırakmaz ---------------------------------------
 
 def _wav_frames(path) -> int:

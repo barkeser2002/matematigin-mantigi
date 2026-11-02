@@ -3,6 +3,7 @@ dosyalar kalır, mikrofon kapanışı sınırlı (son inceleme K1, O3, k1, k2).
 
 Sahte ffmpeg'ler Python betiği (python_ffmpeg): kabuk betiği yalnız posix'te koşuyordu, bu testler Windows CI'da da
 koşar. Yavaş kodlayıcı gerçek ffmpeg + SlowPipe ile: kare yazımı test izin verdikçe geçer (olayla, uyumadan)."""
+import contextlib
 import re
 import subprocess
 import threading
@@ -82,6 +83,29 @@ def slow_pipes(monkeypatch) -> list:
 def debt(rec, fps: int) -> int:
     """Duvar saatine göre yazılması gereken ama henüz yazılamamış kare sayısı (kodlayıcının birikimi)."""
     return int((time.monotonic() - rec.video_t0) * fps) - rec.frames_written
+
+
+@contextlib.contextmanager
+def reading_slowly(pipe: SlowPipe, every: float = 0.1):
+    """Durdurma sürerken yavaş okuyan ffmpeg: her `every` sn'de bir kare geçer; çıkışta boru serbest kalır."""
+    done = threading.Event()
+    feeder = threading.Thread(target=lambda: [pipe.allow() for _ in iter(lambda: done.wait(every), True)],
+                              daemon=True)
+    feeder.start()
+    try:
+        yield
+    finally:
+        done.set()
+        pipe.release()
+        feeder.join(5)
+
+
+def counted_kills(monkeypatch, rec) -> list:
+    """Kaydedicinin ffmpeg'i öldürdüğü anlar (monotonic); öldürme yine gerçekten yapılır."""
+    kills: list = []
+    real = rec._kill
+    monkeypatch.setattr(rec, "_kill", lambda proc: (kills.append(time.monotonic()), real(proc))[1])
+    return kills
 
 
 TRY_LOWER = " (30 kare/sn ya da daha düşük çözünürlük deneyin)"
@@ -240,16 +264,8 @@ def test_lag_that_starts_mid_lesson_says_from_which_minute(tmp_path, monkeypatch
     held = time.monotonic()
     pipe.hold()                                                         # sonra geride kaldı
     wait_until(lambda: pipe.waits >= 1 and debt(rec, fps) >= 2.5 * fps)
-    feeding = threading.Event()
-    feeder = threading.Thread(target=lambda: [pipe.allow() for _ in iter(lambda: feeding.wait(0.1), True)],
-                              daemon=True)
-    feeder.start()
-    try:
+    with reading_slowly(pipe):
         rec.stop()
-    finally:
-        feeding.set()
-        pipe.release()
-        feeder.join(5)
     lag_from = rec._session.on_time_at - rec.video_t0
     assert 0.5 < lag_from and abs(lag_from - (held - rec.video_t0)) < 0.3, (lag_from, held - rec.video_t0)
     assert rec.error is None and rec.audio_error is None, (rec.error, rec.audio_error)
@@ -286,6 +302,202 @@ def test_short_encoder_hiccup_is_still_written_and_the_video_reaches_the_stop(tm
     assert abs(_stream_seconds(exe, path, "-an") - (t_stop - rec.video_t0)) < 0.15     # video durdurmaya dek
     mux = [a for a in runs if "-c:a" in a]
     assert len(mux) == 1 and "-shortest" in mux[0] and "-t" not in mux[0], mux
+
+
+@needs_ffmpeg
+def test_ffmpeg_that_reads_a_little_after_stop_then_hangs_is_killed(tmp_path, monkeypatch):
+    """K1'in öbür yüzü: öldürme ölçüsü PENCERE BAŞINA ilerleme. ffmpeg durdurmadan sonra birkaç kare okuyup takılırsa
+    (kodlayıcı dondu) bir pencere sonra öldürülür, stop() döner. Ölçü toplam ilerleme olsaydı (durdurmadan beri hiç
+    kare okundu mu) bir kez ilerleyen ffmpeg hiç öldürülmez, kaydedici sonsuza dek 'kaydediliyor'da kalırdı."""
+    from matematigin_mantigi.core import recorder as r
+    monkeypatch.setattr(r, "WRITER_JOIN_S", 0.5)                        # gerçek sınır 10 sn
+    fps = 20
+    pipes = slow_pipes(monkeypatch)
+    rec = MssFfmpegRecorder(lambda: tmp_path, fps=fps, grabber=synthetic_grabber, out_height=0,
+                            clock=stepping_clock())
+    kills = counted_kills(monkeypatch, rec)
+    rec.start(RecordRect(0, 0, 160, 120))
+    wait_until(lambda: rec.frames_written >= 5)
+    pipe = pipes[0]
+    pipe.hold()
+    wait_until(lambda: pipe.waits >= 1 and debt(rec, fps) >= 0.5 * fps)  # küçük borç: durdurmada yazılır
+    joins: list = []
+    thread = rec._session.thread
+    real_join = thread.join
+    thread.join = lambda timeout=None: (joins.append(timeout), real_join(timeout))[1]
+    done: list = []
+    stopper = threading.Thread(target=lambda: done.append(_outcome(rec.stop)), daemon=True)
+    stopper.start()
+    wait_until(lambda: joins)                                           # kapanış ilk pencereyi bekliyor
+    for _ in range(3):                                                  # durdurmadan sonra 3 kare okur ...
+        n = pipe.waits
+        pipe.allow()
+        wait_until(lambda: pipe.waits > n)
+    stopper.join(10)                                                    # ... sonra takılır
+    alive, error = stopper.is_alive(), rec.error
+    pipe.release()                       # (bırakılan yazıcı ölü boruya yazıp hatayı ezer: hata önce okundu)
+    stopper.join(10)
+    assert not alive, "ilerleyip takılan ffmpeg öldürülmedi: stop() dönmüyor"
+    assert len(kills) == 1 and (error or "").startswith("ffmpeg yanıt vermedi"), (kills, error)
+
+
+GROWS_ONCE = """
+with open(out, "wb") as f:
+    while stdin.read(65536):
+        pass
+    while not os.path.exists(out + ".olculdu"):     # kaydedici EOF'tan sonraki ilk boyu ölçtü
+        time.sleep(0.01)
+    f.write(b"\\0" * 4096); f.flush()               # bir kez yazdı ...
+    time.sleep(300)                                 # ... sonra takıldı
+"""
+
+GROWS_FOREVER = """
+with open(out, "wb") as f:
+    while stdin.read(65536):
+        pass
+    while True:                                     # EOF'tan sonra durmadan yazıyor (bitmeyen döngü)
+        f.write(b"\\0" * 4096); f.flush()
+        time.sleep(0.05)
+"""
+
+
+@pytest.mark.parametrize("body, cap, limit", [(GROWS_ONCE, 30.0, 6.0), (GROWS_FOREVER, 3.0, 9.0)],
+                         ids=["bir-kez", "hep"])
+def test_ffmpeg_that_writes_after_eof_but_never_exits_is_killed(tmp_path, monkeypatch, body, cap, limit):
+    """EOF'tan sonraki bekleme ilerlemeye bağlı ama sınırlı. Dosyaya bir kez yazıp takılan ffmpeg bir pencere sonra
+    öldürülür: ölçü her pencerede yenilenmese (ilk boya göre) ilk yazımdan sonra hep 'büyüdü' görünür, FFMPEG_EXIT_MAX_S
+    (gerçekte 10 dk) beklenirdi. Dosyayı durmadan büyüten (bitmeyen döngü) ffmpeg o tavanda öldürülür: tavan olmasa
+    stop() hiç dönmezdi. Sahte ffmpeg ilk boy ölçülünce yazar (olayla): ölçümden önce yazsa fark görünmezdi."""
+    from matematigin_mantigi.core import recorder as r
+    monkeypatch.setattr(r, "FFMPEG_EXIT_S", 1.0)                        # gerçek pencere 60 sn
+    monkeypatch.setattr(r, "FFMPEG_EXIT_MAX_S", cap)
+    real_size = r._file_size
+
+    def file_size(path):
+        n = real_size(path)
+        Path(str(path) + ".olculdu").touch()
+        return n
+    monkeypatch.setattr(r, "_file_size", file_size)
+    procs = python_ffmpeg(monkeypatch, tmp_path, body)
+    rec = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber, out_height=0,
+                            ffmpeg_exe="sahte-ffmpeg", clock=stepping_clock())
+    rec.start(RecordRect(0, 0, 160, 120))
+    wait_until(lambda: rec.frames_written >= 3)
+    done: list = []
+    stopper = threading.Thread(target=lambda: done.append(_outcome(rec.stop)), daemon=True)
+    t = time.monotonic()
+    stopper.start()
+    stopper.join(limit + 2)
+    took = time.monotonic() - t
+    for p in procs:
+        if p.poll() is None:
+            p.kill()                                                    # (düzeltmesiz kodda takılı stop()'u çöz)
+    stopper.join(10)
+    assert done and took < limit, f"stop() {took:.1f} sn'de döndü (sınır {limit})"
+    assert (rec.error or "").startswith("ffmpeg yanıt vermedi"), rec.error
+    assert len(procs) == 1 and procs[0].returncode is not None          # öldürüldü ve toplandı
+
+
+@needs_ffmpeg
+def test_last_frame_of_a_lagging_recording_is_the_newest_screen(tmp_path, monkeypatch):
+    """K1: kodlayıcı geride kalınca büyük borç yazılmaz; son kare durdurma anının ekranıdır (tahtanın son hâli, çoğu
+    derste çözümün kendisi) ve sesin ucu boyunca ekranda kalır. Son kare yazılmasa video yazıcının elindeki bayat
+    kareyle (borç yığınının başındaki ekran) biterdi."""
+    from matematigin_mantigi.core import recorder as r
+    monkeypatch.setattr(r, "WRITER_JOIN_S", 1.0)
+    monkeypatch.setattr(r, "STOP_DEBT_S", 1.0)
+    fps, marker = 20, {"v": 0}
+
+    def grabber(rect):                                                  # ekranın tamamı tek renk: o anki işaret
+        return np.full((rect.height, rect.width, 4), (marker["v"], marker["v"], marker["v"], 255), np.uint8)
+    pipes = slow_pipes(monkeypatch)
+    rec = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=fps, grabber=grabber, out_height=0,
+                            audio_device="Sahte Mikrofon", audio_factory=FakeAudioCapture, clock=stepping_clock())
+    rec.start(RecordRect(0, 0, 160, 120))
+    wait_until(lambda: rec.frames_written >= 5)
+    pipe = pipes[0]
+    pipe.hold()
+    wait_until(lambda: pipe.waits >= 1 and debt(rec, fps) >= 2.5 * fps)
+    marker["v"] = 250                                                   # durdurmadan hemen önce ekran beyaz
+    wait_until(lambda: rec._session.latest[:1] == bytes([250]))
+    with reading_slowly(pipe):
+        path = rec.stop()
+    raw = subprocess.run([find_ffmpeg(), "-hide_banner", "-loglevel", "error", "-i", str(path), "-an", "-f",
+                          "rawvideo", "-pix_fmt", "gray", "-"], capture_output=True).stdout
+    size = 160 * 120
+    first, last = raw[:size], raw[-size:]
+    assert rec.error is None and "son kare ses bitene dek ekranda kalıyor" in (rec.video_warning or ""), \
+        (rec.error, rec.video_warning)
+    assert len(raw) >= 2 * size and first[size // 2] < 50, len(raw)    # baştaki kareler siyah ...
+    assert last[size // 2] > 200, last[size // 2]                       # ... son kare durdurma anının ekranı
+
+
+@needs_ffmpeg
+def test_audio_tail_ends_at_the_stop_even_when_the_writer_and_the_microphone_stop_later(tmp_path, monkeypatch):
+    """K1: video erken bittiyse birleştirme sesin ucunu korur, ama en çok durdurma anına dek. Yazıcı durdurmayı bir kare
+    yazımının içinde geç görebilir (kodlayıcı o kareyi geç okudu), ses sürücüsü de akışı geç kapatabilir: ikisi de
+    düğmeden sonraki sesi birleşik dosyaya taşırdı. Dosya durdurma anında biter."""
+    from matematigin_mantigi.core import recorder as r
+    monkeypatch.setattr(r, "WRITER_JOIN_S", 5.0)                        # geç kalan yazıcı öldürülmesin
+    monkeypatch.setattr(r, "STOP_DEBT_S", 1.0)
+    fps, late = 20, 1.5
+    mic_go = threading.Event()
+
+    class LateMic(FakeAudioCapture):                                    # akış geç kapandı: ses o ana dek sürdü
+        def stop(self):
+            assert mic_go.wait(30)
+            return super().stop()
+    pipes = slow_pipes(monkeypatch)
+    rec = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=fps, grabber=synthetic_grabber, out_height=0,
+                            audio_device="Sahte Mikrofon", audio_factory=LateMic, clock=stepping_clock())
+    rec.start(RecordRect(0, 0, 160, 120))
+    wait_until(lambda: rec.frames_written >= 5)
+    pipe = pipes[0]
+    pipe.hold()
+    wait_until(lambda: pipe.waits >= 1 and debt(rec, fps) >= 2.5 * fps)
+    done: list = []
+    stopper = threading.Thread(target=lambda: done.append(_outcome(rec.stop)), daemon=True)
+    stopper.start()
+    try:
+        wait_until(lambda: rec._session.stopped_at > 0)                 # durdurma anı ölçüldü
+        time.sleep(late)                                                # yazıcı ve mikrofon durdurmayı geç görüyor
+    finally:
+        pipe.release()                                                  # yazıcı bekleyen kareyi yazıp durur
+        mic_go.set()
+        stopper.join(30)
+    s = rec._session
+    stop_s = s.stopped_at - s.video_t0
+    assert done == [("dönüş", rec.last_path)] and rec.error is None, (done, rec.error)
+    assert s.tail_kept and rec.audio_result.duration > stop_s + late - 0.3     # ses durdurmadan sonra da sürdü
+    assert media_duration(find_ffmpeg(), rec.last_path) == pytest.approx(stop_s, abs=0.25)    # dosya durdurmada biter
+
+
+@needs_ffmpeg
+def test_mux_that_drops_the_audio_tail_keeps_the_raw_files(tmp_path, monkeypatch):
+    """K1: video erken bittiyse birleşik dosyanın olması gereken süresi sesin ucu (end_s), videonun süresi değil.
+    Birleştirme ucu kaybederse (ileride ffmpeg -t'yi başka işlerse, komut değişirse) dosya videonun boyunda çıkar:
+    doğrulama yalnız videoya bakarsa bu 'tam' sayılıp ham WAV silinir, dersin son sözleri kaybolurdu. Şimdi ham
+    dosyalar kalır, hata ikisinin yerini söyler."""
+    from matematigin_mantigi.core import recorder as r
+    monkeypatch.setattr(r, "WRITER_JOIN_S", 1.0)
+    monkeypatch.setattr(r, "STOP_DEBT_S", 1.0)
+    real_mux_args = r.mux_args
+    monkeypatch.setattr(r, "mux_args", lambda *a, **k: real_mux_args(*a, **{**k, "end_s": None}))  # uç kaybolur
+    fps = 20
+    pipes = slow_pipes(monkeypatch)
+    rec = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=fps, grabber=synthetic_grabber, out_height=0,
+                            audio_device="Sahte Mikrofon", audio_factory=FakeAudioCapture, clock=stepping_clock())
+    rec.start(RecordRect(0, 0, 160, 120))
+    wait_until(lambda: rec.frames_written >= 5)
+    pipe = pipes[0]
+    pipe.hold()                                                         # kodlayıcı geride kaldı: 2,5 sn'lik borç
+    wait_until(lambda: pipe.waits >= 1 and debt(rec, fps) >= 2.5 * fps)
+    with reading_slowly(pipe):
+        path = rec.stop()
+    video, wav = _raw_files(path)
+    assert video.exists() and wav.exists(), rec.error                   # sesin ucu ham dosyada
+    err = rec.error or ""
+    assert "kısa çıktı" in err and str(video) in err and str(wav) in err, err
 
 
 @pytest.mark.parametrize("fake", ["okumayi-birakan", "eofta-kapanmayan"])
@@ -510,6 +722,15 @@ def test_failed_mux_does_not_move_the_raw_video_and_names_both_files(tmp_path, m
     assert re.search(re.escape(f"{video} (video ") + r"0:0\d\)", err), err
     assert re.search(re.escape(f"{wav} (ses sağlam, ") + r"0:0\d\)", err), err
     assert abs(_stream_seconds(find_ffmpeg(), video, "-an") - rec.frames_written / 20) < 0.15    # video tam
+
+
+def test_mux_timeout_grows_with_the_lesson():
+    """Birleştirmenin zaman aşımı kayıt süresiyle büyür: 60 dk'lık derste 7 GB'ın kopyası + faststart yavaş harici
+    diskte dakikalar sürer. Sabit (en kısa) sınır uzun dersin birleştirmesini düşürürdü: ham dosyalar kalır ama ders
+    tek dosya olmaz, 'Kayıt hatası' çıkar. Kısa kayıtta en az MUX_MIN_S."""
+    from matematigin_mantigi.core.recorder import MUX_MIN_S, _mux_timeout
+    assert _mux_timeout(3600) == 7200
+    assert _mux_timeout(30) == MUX_MIN_S == 120
 
 
 # --- k1/k2: mikrofonun kapanışı sınırlı, yarım açılan mikrofon iz bırakmaz -----------------------------------

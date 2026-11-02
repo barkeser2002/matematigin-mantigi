@@ -249,7 +249,9 @@ class ErrorNotice(QObject):
 
     def _display(self, items: Items) -> None:
         box = self._ensure_box()
-        self._current = dict(items)
+        # Görünür kutuya gelen uyarı öncekilere eklenir: Tamam'a basılmamış uyarılar silinmesin (anahtarları
+        # 'gösterildi' sayıldığından bir daha hiç gelmezlerdi). Yeni kutu yalnız yeni içerikle açılır.
+        self._current = {**self._current, **items} if box.isVisible() else dict(items)
         title, text = _compose(self._current)
         box.setWindowTitle(title)
         box.setText(text)

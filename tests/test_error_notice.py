@@ -38,7 +38,8 @@ def _box_shown(notice):
 
 def test_post_shows_a_single_non_modal_box_without_a_window_storm(qtbot):
     """Aynı hata art arda yüzlerce kez gelse de tek, modal olmayan bir kutu: ders ve kayıt sürer, pencere yağmuru
-    olmaz. Farklı bir hata aynı kutunun metnini değiştirir; kapatılan bir uyarı aynı hatayla yeniden açılmaz."""
+    olmaz. Farklı bir hata aynı kutuya eklenir (Tamam'a basılmamış önceki silinmez); kapatılan bir uyarı aynı hatayla
+    yeniden açılmaz."""
     notice, _ = _notice(qtbot)
     for _ in range(200):
         notice.post("Beklenmeyen hata", "aynı hata", "k1")
@@ -48,12 +49,39 @@ def test_post_shows_a_single_non_modal_box_without_a_window_storm(qtbot):
     assert not notice.box.isModal() and notice.box.windowModality() == Qt.WindowModality.NonModal
     assert notice.box.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)    # kalemden odağı çalmaz
     notice.post("Düzen kaydedilemedi", "farklı hata", "k2")
-    qtbot.waitUntil(lambda: notice.box.text() == "farklı hata", timeout=2000)
-    assert _visible_boxes() == [notice.box]
+    qtbot.waitUntil(lambda: "farklı hata" in notice.box.text(), timeout=2000)
+    assert _visible_boxes() == [notice.box] and "aynı hata" in notice.box.text()
     if sys.platform != "darwin":                 # Qt macOS'ta QMessageBox başlığını yok sayar; metin kendi başına yeter
-        assert notice.box.windowTitle() == "Düzen kaydedilemedi"
+        assert notice.box.windowTitle() == "2 uyarı"
     notice.box.button(QMessageBox.StandardButton.Ok).click()
     notice.post("Beklenmeyen hata", "aynı hata", "k1")
+    qtbot.wait(50)
+    assert _visible_boxes() == []
+
+
+def test_new_notice_on_a_visible_box_keeps_the_unacknowledged_ones(qtbot):
+    """P5: kayıttan sonra açılan '2 uyarı' kutusu Tamam'a basılmadan yeni (farklı) bir uyarı gelince tek uyarıya
+    iniyordu; eskiler 'gösterildi' sayıldığı için bir daha hiç gelmiyordu (v13). Görünür kutuya gelen uyarı
+    öncekilere eklenir; Tamam hepsini görülmüş sayar."""
+    notice, _ = _notice(qtbot)
+    rec, alerts = _route(notice)
+    rec[0] = True
+    notice.post("Beklenmeyen hata", "kayıt sırasında birinci", "k1")
+    notice.post("Düzen kaydedilemedi", "kayıt sırasında ikinci", "k2")
+    qtbot.waitUntil(lambda: alerts[-1:] == ["⚠ 2 uyarı — ayrıntı kayıt bitince"], timeout=2000)
+    rec[0] = False
+    qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)
+    qtbot.addWidget(notice.box)
+    notice.post("Tahta görüntüsü kaydedilemedi", "kayıttan sonra üçüncü", "k3")
+    qtbot.waitUntil(lambda: "kayıttan sonra üçüncü" in notice.box.text(), timeout=2000)
+    text = notice.box.text()
+    assert "kayıt sırasında birinci" in text and "kayıt sırasında ikinci" in text, text
+    assert _visible_boxes() == [notice.box]
+    if sys.platform != "darwin":
+        assert notice.box.windowTitle() == "3 uyarı"
+    notice.box.button(QMessageBox.StandardButton.Ok).click()
+    for key in ("k1", "k2", "k3"):
+        notice.post("Beklenmeyen hata", "yeniden", key)
     qtbot.wait(50)
     assert _visible_boxes() == []
 
@@ -202,7 +230,7 @@ def test_growing_box_is_moved_back_onto_the_screen(qtbot):
     qtbot.addWidget(notice.box)
     long_text = "\n".join(f"{i}. satır: kutuyu büyüten uzun uyarı metni" for i in range(16))
     notice.post("Beklenmeyen hata", long_text, "k2")
-    qtbot.waitUntil(lambda: notice.box.text() == long_text, timeout=2000)
+    qtbot.waitUntil(lambda: long_text in notice.box.text(), timeout=2000)
     assert notice.box.screen().availableGeometry().contains(notice.box.frameGeometry())
 
 
@@ -329,7 +357,7 @@ def test_box_never_activates_or_raises_itself(qtbot, monkeypatch):
     qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)
     qtbot.addWidget(notice.box)
     notice.post("Düzen kaydedilemedi", "ikinci", "k2")
-    qtbot.waitUntil(lambda: notice.box.text() == "ikinci", timeout=2000)
+    qtbot.waitUntil(lambda: "ikinci" in notice.box.text(), timeout=2000)
     rec[0] = True
     qtbot.waitUntil(lambda: _visible_boxes() == [], timeout=2000)
     rec[0] = False

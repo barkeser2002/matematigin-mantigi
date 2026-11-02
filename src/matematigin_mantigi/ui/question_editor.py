@@ -17,9 +17,9 @@ from PyQt6.QtWidgets import (QApplication, QDialog, QFileDialog, QFrame, QHBoxLa
 
 from matematigin_mantigi.core import crash_log
 from matematigin_mantigi.core.models import OPTION_LETTERS, Question
-from matematigin_mantigi.core.question_loader import (EmptyTemplateError, QuestionTemplateError, backup_path,
-                                                      clean_text, load_backup, load_questions, save_question_image,
-                                                      write_questions)
+from matematigin_mantigi.core.question_loader import (EmptyTemplateError, QuestionTemplateError, UnreadableWriteError,
+                                                      backup_path, clean_text, load_backup, load_questions,
+                                                      save_question_image, write_questions)
 from matematigin_mantigi.ui import theme
 from matematigin_mantigi.ui.error_notice import describe_os_error
 from matematigin_mantigi.ui.theme import FontFamilies
@@ -457,6 +457,10 @@ class QuestionEditorDialog(QDialog):
     def _save_error_text(self, err: Exception) -> str:
         head = f"Soru dosyası kaydedilemedi: {self.questions_path.name}"
         kept = "Dosyadaki sorular değişmedi; düzenlemeleriniz bu pencerede duruyor"
+        if isinstance(err, UnreadableWriteError):      # yeni sürüm yazıldı ama geri okunamadı: yerine konmadı (Q2)
+            return (f"{head}\nSebep: yeni sürüm yazıldı ama geri okunamadı, bu yüzden dosyanın yerine konmadı (metinde "
+                    f"Excel'in saklayamadığı bir karakter olabilir).\n\n{kept}; metni gözden geçirip yeniden Kaydet'e "
+                    "basın. Ayrıntı hatalar.log dosyasında.")
         if isinstance(err, PermissionError):     # Windows'ta Excel dosyayı açık tuttukça kilitler
             return (f"{head}\n\nDosya Excel'de (ya da başka bir programda) açıksa kapatıp yeniden Kaydet'e basın; "
                     f"açık değilse bu klasöre yazma izni yok.\n\n{kept}, hiçbiri kaybolmadı.")

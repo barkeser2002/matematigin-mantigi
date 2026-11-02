@@ -308,6 +308,35 @@ def test_pasted_control_characters_are_cleaned_and_save_succeeds(qtbot, tmp_path
     assert q.hints[0] == "ipucu bir" and q.konu == "Konu"
 
 
+def test_text_xml_cannot_hold_is_cleaned_and_the_file_stays_readable(qtbot, tmp_path):
+    """Q2 (inceleme v15): U+FFFF içeren metinle Kaydet sessizce başarılı oluyor, dosya bir daha okunamıyordu
+    (ParseError; sonraki açılış örnek sorularla, Q1'in kapısı). Karakter atılır, kayıt okunabilir kalır."""
+    d, path = _dialog(qtbot, tmp_path)
+    d.soru_edit.setPlainText("PDF'den kopyalanan metin \uffff\ufffe devam")
+    d.hint_edits[0].setText("ipucu \ud800 bir")
+    d.save_button.click()
+    q = load_questions(path)[0]
+    assert q.soru == "PDF'den kopyalanan metin  devam" and q.hints[0] == "ipucu  bir"
+
+
+def test_save_whose_new_version_cannot_be_read_back_keeps_the_file(qtbot, tmp_path, monkeypatch):
+    """Q2: yeni sürüm yazılıp geri okunamazsa (temizlikten kaçan bir karakter) yerine konmaz: dosya değişmez, mesaj
+    bunu ve sebebi söyler, düzenlemeler pencerede durur."""
+    path, before = _existing(tmp_path)
+    monkeypatch.setattr(qe, "clean_text", lambda s: s)            # temizlik devre dışı: \\uffff modele geçer
+    shown = _capture_warnings(monkeypatch)
+    d, _ = _dialog(qtbot, tmp_path)
+    saved = []
+    d.saved.connect(saved.append)
+    d.soru_edit.setPlainText("Kopyalanan metin \uffff devam")
+    d.save_button.click()
+    assert len(shown) == 1 and shown[0][0] == "Kaydedilemedi", shown
+    assert "geri okunamadı" in shown[0][1] and "değişmedi" in shown[0][1], shown[0][1]
+    assert "beklenmeyen" not in shown[0][1] and "ParseError" not in shown[0][1], shown[0][1]
+    assert path.read_bytes() == before and d.isVisible() and saved == []
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["sorular_sablon.xlsx"]
+
+
 def test_image_copy_error_shows_message_and_keeps_previous_image(qtbot, tmp_path, monkeypatch):
     """Görsel sorular_gorsel'e kopyalanamazsa (izin, dolu disk) yuva patlamaz; mesaj gösterilir, eski görsel kalır."""
     import shutil
@@ -666,7 +695,7 @@ d.show()
 rnd = random.Random(0)
 d.soru_edit.setPlainText("Yeni düzenleme: " + "".join(rnd.choice(string.ascii_letters) for _ in range(6000)))
 soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
-resource.setrlimit(resource.RLIMIT_FSIZE, (len(before) + 1500, hard))     # yedek sığar, yeni dosya sığmaz
+resource.setrlimit(resource.RLIMIT_FSIZE, (len(before) + 1500, hard))     # yeni (büyük) dosya sığmaz
 d.save_button.click()
 resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
 try:
@@ -683,7 +712,7 @@ print("SONUC " + json.dumps(res, ensure_ascii=False), flush=True)
 def test_disk_full_mid_save_keeps_the_question_file_loadable(tmp_path):
     """B-2 uçtan uca (inceleme s03): Kaydet yazımın ortasında EFBIG alınca soru dosyası yarım kalıyor (5575 -> 2289
     bayt) ve uygulama bir daha açılmıyordu. Artık dosya bayt bayt aynı ve yüklenebilir, geçici dosya kalmaz, mesaj
-    dosyanın değişmediğini söyler, düzenlemeler pencerede durur."""
+    dosyanın değişmediğini söyler, düzenlemeler pencerede durur. Yedek yeni sürüm sağlam yazılmadan alınmaz (Q2)."""
     script = tmp_path / "calistir.py"
     script.write_text(_SAVE_DISK_FULL, encoding="utf-8")
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen", XDG_CONFIG_HOME=str(tmp_path / "cfg"))
@@ -694,4 +723,4 @@ def test_disk_full_mid_save_keeps_the_question_file_loadable(tmp_path):
     res = json.loads(line[len("SONUC "):])
     assert res["ayni"] and res["yuklenen"] == 3 and res["acik"], res
     assert len(res["uyari"]) == 1 and res["uyari"][0][0] == "Kaydedilemedi" and "değişmedi" in res["uyari"][0][1]
-    assert res["dosyalar"] == ["calistir.py", "sorular_sablon.xlsx", "sorular_sablon.xlsx.bak"], res
+    assert res["dosyalar"] == ["calistir.py", "sorular_sablon.xlsx"], res

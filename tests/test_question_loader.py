@@ -91,6 +91,42 @@ def test_empty_file_raises(tmp_path):
         load_questions(p)
 
 
+# --- Excel'in saklayamadığı metin dosyayı okunamaz yapmaz (Q2) ------------------------------------------------
+def test_clean_text_drops_characters_xml_cannot_hold():
+    """Q2: clean_text yalnız C0 denetim karakterlerini atıyordu; U+FFFE, U+FFFF ve tek başına vekil (U+D800-U+DFFF)
+    Kaydet'ten geçip dosyayı okunamaz kılıyordu (ParseError; sonraki açılış örnek sorularla). Hepsi atılır; sekme,
+    satır sonu ve geçerli BMP dışı karakterler (𝑥, emoji) korunur."""
+    from matematigin_mantigi.core.question_loader import clean_text
+    assert clean_text("a\ufffeb\uffffc\ud800d\udfffe\x03f") == "abcdef"
+    assert clean_text("x\ty\nz \U0001d465 \U0001f600") == "x\ty\nz \U0001d465 \U0001f600"
+    assert clean_text("Word\x0bsatırı") == "Word\nsatırı"
+
+
+def test_text_starting_with_equals_or_error_code_stays_text(tmp_path):
+    """'=' ile başlayan metni openpyxl formül olarak yazıyordu: okurken boş geliyordu (ipucu ve şık sessizce
+    kayboluyor, soru metni 'soru boş' hatasıyla dosyayı okunamaz yapıyordu); '#N/A' gibi metin hata hücresi oluyordu.
+    Hepsi metin olarak yazılır ve aynen geri okunur."""
+    q = Question("S1", "Konu", 7, "=2+3 kaçtır?", ("= 5 olur", "#DIV/0! değil"), "#N/A", ("=A", "b"), None)
+    p = write_questions(tmp_path / "sorular.xlsx", [q])
+    back = load_questions(p)[0]
+    assert (back.soru, back.hints, back.cevap, back.options) == (q.soru, q.hints, q.cevap, q.options)
+
+
+@pytest.mark.parametrize("bad", ["\uffff", "\ufffe", "\ud800"], ids=["FFFF", "FFFE", "vekil"])
+def test_write_that_cannot_be_read_back_changes_nothing(tmp_path, bad):
+    """Q2: yeni sürüm geçici dosyaya yazılıp geri okunur; okunamazsa (temizlenmemiş metin, başka bir çağıran) yerine
+    konmaz: soru dosyası da önceki yedek de bayt bayt aynı kalır, geçici dosya kalmaz, hata çağırana gider."""
+    from matematigin_mantigi.core.question_loader import UnreadableWriteError
+    p = tmp_path / "sorular.xlsx"
+    write_questions(p, SAMPLE_QUESTIONS)
+    write_questions(p, SAMPLE_QUESTIONS[:2])
+    before, bak_before = p.read_bytes(), _bak(p).read_bytes()
+    with pytest.raises(UnreadableWriteError):
+        write_questions(p, [Question("S1", "K", 7, f"Kopyalanan metin {bad} devam", (), "c", ())])
+    assert p.read_bytes() == before and _bak(p).read_bytes() == bak_before
+    assert _leftovers(tmp_path, "sorular.xlsx", "sorular.xlsx.bak") == []
+
+
 # --- yazım yarıda kalırsa soru dosyası bozulmaz; önceki sürüm .bak'ta (#29, B-2) ------------------------------
 def _bak(p: Path) -> Path:
     return p.with_name(p.name + ".bak")
@@ -114,10 +150,12 @@ def test_write_keeps_the_previous_version_as_bak(tmp_path):
 def test_failed_write_leaves_the_question_file_intact_and_no_temp_file(tmp_path, monkeypatch):
     """B-2: wb.save doğrudan hedefe yazıyordu; yazımın ortasındaki hata (dolu disk, çıkarılan USB) dosyayı yarım
     bırakıyordu (5575 -> 2289 bayt, açılışta KeyError). Yazım aynı klasörde geçici dosyaya yapılır, yalnız tamamlanınca
-    os.replace ile yerine konur; hatada geçici dosya silinir, soru dosyası eski hâliyle kalır."""
+    os.replace ile yerine konur; hatada geçici dosya silinir, soru dosyası eski hâliyle kalır. Yeni sürüm yazılamadıysa
+    önceki yedeğe de dokunulmaz (Q2: yedek yeni sürüm sağlam çıktıktan sonra alınır)."""
     p = tmp_path / "sorular.xlsx"
+    write_questions(p, SAMPLE_QUESTIONS[:2])
     write_questions(p, SAMPLE_QUESTIONS)
-    before = p.read_bytes()
+    before, bak_before = p.read_bytes(), _bak(p).read_bytes()
 
     def half_written(self, filename):
         Path(filename).write_bytes(b"PK\x03\x04 yarim kalan zip")
@@ -125,7 +163,7 @@ def test_failed_write_leaves_the_question_file_intact_and_no_temp_file(tmp_path,
     monkeypatch.setattr(openpyxl.Workbook, "save", half_written)
     with pytest.raises(OSError):
         write_questions(p, SAMPLE_QUESTIONS[:1])
-    assert p.read_bytes() == before and len(load_questions(p)) == 3
+    assert p.read_bytes() == before and len(load_questions(p)) == 3 and _bak(p).read_bytes() == bak_before
     assert _leftovers(tmp_path, "sorular.xlsx", "sorular.xlsx.bak") == []
 
 
@@ -174,19 +212,30 @@ _DISK_FULL = textwrap.dedent('''
             return type(err).__name__
 
     path, bak = Path("sorular.xlsx"), Path("sorular.xlsx.bak")
-    write_questions(path, SAMPLE_QUESTIONS)
-    write_questions(path, SAMPLE_QUESTIONS[:2])
-    v2, old_bak = path.read_bytes(), bak.read_bytes()
     rnd = random.Random(0)
-    big = [Question(f"S{i}", "Konu", 7, "".join(rnd.choice(string.ascii_letters) for _ in range(3000)), (), "", ())
-           for i in range(5)]
+
+    def big(n):
+        return [Question(f"S{i}", "Konu", 7, "".join(rnd.choice(string.ascii_letters) for _ in range(3000)), (), "",
+                         ()) for i in range(n)]
+    write_questions(path, big(5))
+    write_questions(path, big(5))
+    v2, old_bak = path.read_bytes(), bak.read_bytes()
+    small = SAMPLE_QUESTIONS[:2]
+    probe = Path("olcu.xlsx")
+    write_questions(probe, small)
+    small_size = probe.stat().st_size
+    probe.unlink()
     res = {}
-    # 1) yedek kopyası yarıda kalır: ne soru dosyası ne önceki yedek bozulur
-    res["yedekte_hata"] = limited(len(v2) // 2, lambda: write_questions(path, big))
+    # 1) yeni (küçük) sürüm yazılıp doğrulanır, ardından alınan yedek kopyası (büyük dosya) yarıda kalır: ne soru
+    #    dosyası ne önceki yedek bozulur
+    limit = (small_size + len(v2)) // 2
+    res["olculer"] = [small_size, limit, len(v2)]
+    res["yedekte_hata"] = limited(limit, lambda: write_questions(path, small))
     res["yedekte_dosya_ayni"], res["yedekte_onceki_yedek_ayni"] = path.read_bytes() == v2, bak.read_bytes() == old_bak
-    # 2) yeni çalışma kitabının yazımı yarıda kalır (yedek sığar, büyük yeni dosya sığmaz)
-    res["yazimda_hata"] = limited(max(len(v2), len(old_bak)) + 1000, lambda: write_questions(path, big))
+    # 2) yeni (büyük) çalışma kitabının yazımı yarıda kalır: yedek o sürüm sağlam yazılmadan alınmadığı için o da aynı
+    res["yazimda_hata"] = limited(len(v2) + 1000, lambda: write_questions(path, big(8)))
     res["yazimda_dosya_ayni"], res["yazimda_yuklenen"] = path.read_bytes() == v2, loads(path)
+    res["yazimda_onceki_yedek_ayni"] = bak.read_bytes() == old_bak
     res["dosyalar"] = sorted(p.name for p in Path(".").iterdir())
     print("SONUC " + json.dumps(res))
 ''')
@@ -206,11 +255,13 @@ def _run_script(tmp_path, source: str) -> dict:
 @pytest.mark.skipif(sys.platform == "win32", reason="RLIMIT_FSIZE yalnız POSIX'te")
 def test_disk_full_in_the_middle_of_a_write_keeps_the_file_and_the_backup(tmp_path):
     """B-2'nin gerçek hâli (yazım ortasında EFBIG): ne yedek kopyası ne yeni çalışma kitabı yarıda kalınca soru
-    dosyası ya da önceki yedek bozulur; geçici dosya kalmaz."""
+    dosyası ya da önceki yedek bozulur; geçici dosya kalmaz. Q2: yedek yeni sürüm yazılıp geri okunduktan sonra
+    alındığı için yeni sürüm yarıda kalınca önceki yedek de değişmez."""
     res = _run_script(tmp_path, _DISK_FULL)
     assert res["yedekte_hata"] == errno.EFBIG and res["yazimda_hata"] == errno.EFBIG, res
+    assert res["olculer"][0] < res["olculer"][1] < res["olculer"][2], res
     assert res["yedekte_dosya_ayni"] and res["yedekte_onceki_yedek_ayni"], res
-    assert res["yazimda_dosya_ayni"] and res["yazimda_yuklenen"] == 2, res
+    assert res["yazimda_dosya_ayni"] and res["yazimda_yuklenen"] == 5 and res["yazimda_onceki_yedek_ayni"], res
     assert res["dosyalar"] == ["calistir.py", "sorular.xlsx", "sorular.xlsx.bak"], res
 
 

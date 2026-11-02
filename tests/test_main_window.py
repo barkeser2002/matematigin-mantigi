@@ -6,6 +6,32 @@ from matematigin_mantigi.core import layout_model as lm
 from matematigin_mantigi.core.models import SAMPLE_QUESTIONS, HintMaskMode, QuestionStatus, Tool
 
 
+@pytest.fixture(autouse=True)
+def close_question_never_blocks(monkeypatch):
+    """pytest-qt pencereyi teardown'da kapatır; kayıt açık kalmışsa kapanış sorusu gerçek modal açar ve offscreen'de
+    exec() sonsuza dek bekler: hatalı kod (mutasyon, gerileme) kırmızı yerine DONAR. Soruyu kendisi yanıtlamayan
+    testte soru açılırsa kayıt eşzamanlı durdurulur (arka plan kapanışının QThread'i pencereyle silinmesin), 'Durdur
+    ve çık' seçilir ve test teardown'da hatayla biter. Soruyu bekleyen testler _answer_close_question ile bunun
+    üstüne yazar."""
+    from PyQt6.QtWidgets import QMessageBox
+    from matematigin_mantigi.ui.main_window import STOP_AND_QUIT
+    real_exec, unexpected = QMessageBox.exec, []
+
+    def exec_(box):
+        if box.text() != "Kayıt sürüyor, durdurulup çıkılsın mı?":
+            return real_exec(box)
+        unexpected.append(box.text())
+        try:
+            box.parent().recorder.stop()
+        except Exception:  # noqa: BLE001 - temizlik; test zaten hatayla biter
+            pass
+        next(b for b in box.buttons() if b.text() == STOP_AND_QUIT).click()
+        return 0
+    monkeypatch.setattr(QMessageBox, "exec", exec_)
+    yield
+    assert not unexpected, "kayıt açık kalmış pencere kapatıldı (kapanış sorusu yanıtlanmadı)"
+
+
 def test_window_shell(window):
     assert window.windowTitle() == "Matematiğin Mantığı"
     assert window.toolbar.width() == 88

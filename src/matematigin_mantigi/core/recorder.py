@@ -250,9 +250,12 @@ _DURATION = re.compile(rb"^\s*Duration: (\d+):(\d\d):(\d\d(?:\.\d+)?)", re.M)   
 def media_duration(exe: str, path: Path, timeout: float = DURATION_TIMEOUT_S) -> float | None:
     """Dosyanın süresi (sn), ffmpeg'in giriş başlığı dökümünden ('Duration: 01:00:00.00'); ffprobe paketle gelmiyor.
     MP4'te yalnız moov kutusu okunur: video çözülmez, paketler taranmaz. 60 dakikalık 60 kare/sn dosyada ~0,1 sn
-    (paketleri okumak 600 MB'ta ~6 sn sürüyor; 1440p60 bir ders ~7 GB). Okunamazsa ya da süre yoksa (N/A) None."""
+    (paketleri okumak 600 MB'ta ~6 sn sürüyor; 1440p60 bir ders ~7 GB). Okunamazsa ya da süre yoksa (N/A) None.
+    WAV -f wav ile açılır: ffmpeg 9.0.2 düz WAV'ı biçim tahminiyle tanımıyor (mux_args'taki gibi)."""
+    fmt = ["-f", "wav"] if Path(path).suffix.lower() == ".wav" else []
     try:
-        res = subprocess.run([exe, "-hide_banner", "-nostdin", "-i", str(path)], capture_output=True, timeout=timeout)
+        res = subprocess.run([exe, "-hide_banner", "-nostdin", *fmt, "-i", str(path)], capture_output=True,
+                             timeout=timeout)
     except (OSError, subprocess.SubprocessError):
         return None
     m = _DURATION.search(res.stderr)                 # çıktı dosyası verilmediği için ffmpeg 1 ile çıkar: beklenen

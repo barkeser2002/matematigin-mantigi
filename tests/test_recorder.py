@@ -618,6 +618,25 @@ def test_media_duration_reads_the_container_header(tmp_path):
     assert media_duration(str(tmp_path / "ffmpeg-yok"), video) is None
 
 
+def test_media_duration_names_the_wav_demuxer_for_wav_files(tmp_path, monkeypatch):
+    """imageio-ffmpeg 0.8.0'ın ffmpeg 9.0.2'si düz WAV'ı biçim tahminiyle tanımıyor (mpegts sanıyor, süre yok): .wav
+    yolunda giriş -f wav ile açılır. MP4 tahmine açık kalır. (Gerçek ffmpeg'li başlık testi en yeni sürümler
+    venv'inde bu yüzden kırmızıydı.)"""
+    from matematigin_mantigi.core.recorder import media_duration
+    seen = []
+
+    def run(args, **k):
+        seen.append(args)
+        return subprocess.CompletedProcess(args, 1, b"", b"  Duration: 00:00:01.25, start: 0.000000\n")
+    monkeypatch.setattr(subprocess, "run", run)
+    wav, mp4 = tmp_path / "kayit.WAV", tmp_path / "kayit.mp4"
+    assert media_duration("ffmpeg", wav) == pytest.approx(1.25) and media_duration("ffmpeg", mp4) == pytest.approx(1.25)
+    wav_args, mp4_args = seen
+    i = wav_args.index(str(wav))
+    assert wav_args[i - 3:i] == ["-f", "wav", "-i"], wav_args
+    assert "-f" not in mp4_args, mp4_args
+
+
 def test_clock_text_and_mic_cut_text():
     """Sesin kesildiği an okunur 'dakika:saniye' (toplam dakika). Uyarı yalnız ses videodan 2 sn'den fazla erken
     bitince: sürücü tamponu ve durdurma sırası (ses videodan sonra kapanır) yanlış uyarı vermesin."""

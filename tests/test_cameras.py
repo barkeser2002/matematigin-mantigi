@@ -52,3 +52,19 @@ def test_camera_info_label_with_name():
     from matematigin_mantigi.core.cameras import CameraInfo
     assert CameraInfo(1, 1280, 720, "FaceTime HD Camera").label == "1: FaceTime HD Camera (1280×720)"
     assert CameraInfo(0, 640, 480).label == "Kamera 0 (640×480)"
+
+
+def test_list_camera_names_hides_the_ffmpeg_console_window_on_windows(monkeypatch):
+    """#10: paketli Windows uygulamasında kamera adları için koşan ffmpeg konsol penceresi açmaz."""
+    import subprocess
+    import sys
+    from matematigin_mantigi.core.cameras import list_camera_names
+    seen = []
+
+    def run(cmd, **k):
+        seen.append(k)
+        return subprocess.CompletedProcess(cmd, 1, "", '[dshow @ 0] "HD Pro Webcam C920" (video)\n')
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(subprocess, "run", run)
+    assert list_camera_names("ffmpeg", platform="win32") == ["HD Pro Webcam C920"]
+    assert len(seen) == 1 and seen[0].get("creationflags") == 0x08000000, seen

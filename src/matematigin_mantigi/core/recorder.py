@@ -112,6 +112,14 @@ class NullRecorder:
 # --- gerçek kayıt ------------------------------------------------------------------
 
 DISK_HINT = "Diskte boş yer ve kayıt klasörüne yazma izni olduğunu kontrol edin."
+CREATE_NO_WINDOW = 0x08000000           # subprocess.CREATE_NO_WINDOW (yalnız Windows'ta tanımlı)
+
+
+def no_window(platform: str | None = None) -> dict:
+    """subprocess çağrısına eklenecek argüman: Windows'ta alt süreç konsol penceresi açmasın (paketli, konsolsuz
+    .exe'de her ffmpeg çağrısı siyah bir pencere yakıp söndürüyordu: kayıt, birleştirme, süre ölçümü, kodlayıcı
+    denemesi, kamera listesi). Başka sistemlerde boş. Bütün ffmpeg çağrıları bunu kullanır (#10; test kilitler)."""
+    return {"creationflags": CREATE_NO_WINDOW} if (platform or sys.platform) == "win32" else {}
 
 
 def find_ffmpeg() -> str | None:
@@ -164,7 +172,7 @@ def detect_encoder(exe: str, platform: str | None = None, runner=None) -> str:
 
     def default_runner(cmd: list[str]) -> int:
         try:
-            return subprocess.run(cmd, capture_output=True, timeout=20).returncode
+            return subprocess.run(cmd, capture_output=True, timeout=20, **no_window()).returncode
         except (OSError, subprocess.SubprocessError):
             return 1
     run = runner or default_runner
@@ -255,7 +263,7 @@ def media_duration(exe: str, path: Path, timeout: float = DURATION_TIMEOUT_S) ->
     fmt = ["-f", "wav"] if Path(path).suffix.lower() == ".wav" else []
     try:
         res = subprocess.run([exe, "-hide_banner", "-nostdin", *fmt, "-i", str(path)], capture_output=True,
-                             timeout=timeout)
+                             timeout=timeout, **no_window())
     except (OSError, subprocess.SubprocessError):
         return None
     m = _DURATION.search(res.stderr)                 # çıktı dosyası verilmediği için ffmpeg 1 ile çıkar: beklenen
@@ -504,7 +512,8 @@ class MssFfmpegRecorder:
             self._abort_audio(s)
             raise RecorderError(f"Kayıt dosyası açılamadı: {err}\n{DISK_HINT}") from err
         try:
-            s.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=s.log_file)
+            s.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=s.log_file,
+                                      **no_window())
         except OSError as err:
             self._close_log(s)
             self._abort_audio(s)
@@ -670,7 +679,7 @@ class MssFfmpegRecorder:
             s.audio_error = f"{s.audio_error} ({cut})" if s.audio_error else f"Mikrofon kayıt sırasında kesildi ({cut})"
         args = mux_args(exe, video, audio.path, out, offset, asetrate=rate, video_s=length)
         try:
-            res = subprocess.run(args, capture_output=True, timeout=_mux_timeout(s.duration))
+            res = subprocess.run(args, capture_output=True, timeout=_mux_timeout(s.duration), **no_window())
         except (OSError, subprocess.SubprocessError) as err:
             s.audio_error = _joined(f"Ses birleştirilemedi: {err}", s.audio_error)
             video.replace(out)

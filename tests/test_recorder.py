@@ -637,6 +637,31 @@ def test_media_duration_names_the_wav_demuxer_for_wav_files(tmp_path, monkeypatc
     assert "-f" not in mp4_args, mp4_args
 
 
+def test_every_ffmpeg_call_hides_the_console_window_on_windows():
+    """#10: paketli Windows uygulaması konsolsuz; her ffmpeg alt süreci (kayıt, birleştirme, süre ölçümü, kodlayıcı
+    denemesi, kamera listesi) kendi konsol penceresini yakıp söndürüyordu. Tek yardımcı no_window(): Windows'ta
+    CREATE_NO_WINDOW, başka sistemde boş. recorder ve cameras modüllerindeki her subprocess çağrısı onu kullanır;
+    eklenen yeni bir çağrı da bu testi geçmek için onu kullanmak zorunda."""
+    import ast
+    import inspect
+    from matematigin_mantigi.core import cameras, recorder
+    from matematigin_mantigi.core.recorder import no_window
+    assert no_window("win32") == {"creationflags": 0x08000000}                # subprocess.CREATE_NO_WINDOW
+    assert no_window("darwin") == {} and no_window("linux") == {}
+    assert no_window() == (no_window("win32") if sys.platform == "win32" else {})
+    found = []
+    for mod in (recorder, cameras):
+        for node in ast.walk(ast.parse(inspect.getsource(mod))):
+            func = node.func if isinstance(node, ast.Call) else None
+            if (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id == "subprocess"
+                    and func.attr in {"run", "Popen", "call", "check_call", "check_output"}):
+                hidden = any(k.arg is None and isinstance(k.value, ast.Call)
+                             and getattr(k.value.func, "id", None) == "no_window" for k in node.keywords)
+                found.append((mod.__name__.rsplit(".", 1)[-1], node.lineno, hidden))
+    assert len(found) >= 5, found               # kodlayıcı denemesi, süre ölçümü, kayıt, birleştirme, kamera listesi
+    assert all(hidden for *_, hidden in found), [f for f in found if not f[2]]
+
+
 def test_clock_text_and_mic_cut_text():
     """Sesin kesildiği an okunur 'dakika:saniye' (toplam dakika). Uyarı yalnız ses videodan 2 sn'den fazla erken
     bitince: sürücü tamponu ve durdurma sırası (ses videodan sonra kapanır) yanlış uyarı vermesin."""

@@ -1,5 +1,5 @@
 import pytest
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QLocale, Qt
 from PyQt6.QtGui import QImage
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
@@ -54,6 +54,46 @@ def test_add_and_delete_rows(qtbot, tmp_path):
     d.del_button.click()
     assert d.list_widget.count() == 3 and len(d.questions) == 3
     assert [q.id for q in d.questions] == ["S1", "S3", "S04"]
+
+
+@pytest.fixture
+def turkish_locale():
+    """Öğretmenin Mac'i Türkçe bölge ayarında: '.' binlik ayırıcı. Varsayılan yerel ayar global durum,
+    test sonunda geri yüklenir."""
+    prev = QLocale()
+    QLocale.setDefault(QLocale(QLocale.Language.Turkish, QLocale.Country.Turkey))
+    yield
+    QLocale.setDefault(prev)
+
+
+@pytest.mark.parametrize("typed, expected", [("7.", 7), ("+", None), ("12", 12)])
+def test_sinif_typed_ordinal_does_not_crash_save(qtbot, tmp_path, turkish_locale, typed, expected):
+    """q#1: Türkçe sıra sayısı yazımı '7.' (ya da tek '+') Sınıf'a yazılıp Kaydet'e basılınca int() yuvada
+    patlıyor, PyQt6 süreci (süren kayıtla birlikte) kapatıyordu. Alan yalnız rakam kabul etmeli."""
+    d, path = _dialog(qtbot, tmp_path)
+    d.sinif_edit.clear()
+    qtbot.keyClicks(d.sinif_edit, typed)
+    assert d.sinif_edit.text().isdigit() or d.sinif_edit.text() == ""
+    d.save_button.click()
+    assert load_questions(path)[0].sinif == expected
+
+
+def test_sinif_ordinal_then_row_change_keeps_number(qtbot, tmp_path, turkish_locale):
+    """Aynı çökme başka satıra geçerken de (_on_row_changed -> _commit_current) oluyordu."""
+    d, _ = _dialog(qtbot, tmp_path)
+    d.sinif_edit.clear()
+    qtbot.keyClicks(d.sinif_edit, "7.")
+    d.list_widget.setCurrentRow(1)
+    assert d.questions[0].sinif == 7
+
+
+def test_sinif_parse_tolerates_non_digits_set_programmatically(qtbot, tmp_path):
+    """setText doğrulayıcıyı atlar; form okuması yine de çökmemeli (rakam dışı karakterler atılır)."""
+    d, _ = _dialog(qtbot, tmp_path)
+    d.sinif_edit.setText("7.")
+    assert d._question_from_form().sinif == 7
+    d.sinif_edit.setText("+")
+    assert d._question_from_form().sinif is None
 
 
 def test_empty_soru_blocks_save(qtbot, tmp_path, monkeypatch):

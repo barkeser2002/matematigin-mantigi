@@ -5,8 +5,8 @@ import re
 from pathlib import Path
 from typing import Sequence
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QIntValidator, QPixmap
+from PyQt6.QtCore import QRegularExpression, Qt, pyqtSignal
+from PyQt6.QtGui import QPixmap, QRegularExpressionValidator
 from PyQt6.QtWidgets import (QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
                              QListWidget, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QVBoxLayout,
                              QWidget)
@@ -99,7 +99,10 @@ class QuestionEditorDialog(QDialog):
 
         base_card, bcol = _card("Temel bilgiler", self.fam)
         self.id_edit = QLineEdit(); self.konu_edit = QLineEdit()
-        self.sinif_edit = QLineEdit(); self.sinif_edit.setValidator(QIntValidator(0, 99, self))
+        # Yalnız rakam: QIntValidator yerel ayarın binlik ayırıcısını ve işareti kabul ediyordu; Türkçe bölgede
+        # sıra sayısı yazımı "7." (ya da tek "+") alanda kalıp int()'i yuvada patlatıyor, uygulamayı düşürüyordu.
+        self.sinif_edit = QLineEdit()
+        self.sinif_edit.setValidator(QRegularExpressionValidator(QRegularExpression("[0-9]{0,2}"), self))
         self.sinif_edit.setPlaceholderText("boş bırakılabilir")
         self.id_edit.textEdited.connect(self._sync_label); self.konu_edit.textEdited.connect(self._sync_label)
         bcol.addLayout(self._field("Kimlik (id)", self.id_edit))
@@ -212,8 +215,9 @@ class QuestionEditorDialog(QDialog):
         self._update_preview()
 
     def _question_from_form(self) -> Question:
-        raw = self.sinif_edit.text().strip()
-        sinif = int(raw) if raw else None
+        # setText doğrulayıcıyı atlar: rakam dışı karakterler burada da atılır, okuma hiçbir girdide patlamaz.
+        digits = "".join(ch for ch in self.sinif_edit.text() if ch in "0123456789")
+        sinif = int(digits) if digits else None
         return Question(
             id=self.id_edit.text().strip(),
             konu=self.konu_edit.text().strip(),

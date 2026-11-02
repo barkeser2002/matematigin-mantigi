@@ -195,9 +195,15 @@ başlatır (kapanan dersin dosyaları yenisine karışmasın). Şerit araç çub
 durum satırı ve rozet girer). Kayıt sürerken pencere kapatılırsa (pencere düğmesi ya da ⌘Q) önce "Kayıt sürüyor,
 durdurulup çıkılsın mı?" diye sorulur (varsayılan: kayda devam); "Durdur ve çık" kaydı arka planda kaydettirir, şerit
 "Kayıt kaydediliyor… bitince pencere kapanacak" der ve kayıt bitince (varsa hata gösterildikten sonra) pencere kendisi
-kapanır. Kayıt zaten kaydediliyorsa soru sorulmadan aynı bekleme olur. ffmpeg yanıt vermezse (borudan okumayı bırakırsa
-10 sn, durdurunca kapanmazsa 60 sn sonra) öldürülür: kayıt "ffmpeg yanıt vermedi; kayıt zorla kapatıldı" hatasıyla
-biter, birleştirme denenmez, ara dosyalar silinmez ve pencere yerlerini yazar. Kayıt başlatılamazsa (ffmpeg yok, kayıt
+kapanır. Kayıt zaten kaydediliyorsa soru sorulmadan aynı bekleme olur. ffmpeg ancak ilerlemiyorsa öldürülür
+(borudan 10 sn boyunca tek kare okumazsa ya da durdurduktan sonra 60 sn boyunca dosyaya hiç yazmazsa); yavaş ama
+okuyan ffmpeg beklenir. Öldürülen ffmpeg dosyayı bitiremediği için video büyük olasılıkla hiç açılmaz: kayıt "ffmpeg
+yanıt vermedi; kayıt zorla kapatıldı" hatasıyla biter, birleştirme denenmez, ara dosyalar silinmez ve pencere
+yerlerini yazar. Kodlayıcı gerçek zamana yetişemezse (yazılan kare duvar saatinin gerisinde) durdurmada birikmiş
+kareler yazılmaz (2 sn'den azsa yazılır): video düğmeye basılan andan erken biter, birleşik dosyada ses yine sonuna
+dek sürer (son kare ekranda kalır) ve durum satırı uyarır ("UYARI: Görüntü kodlayıcısı kayda yetişemedi: …"). Ara
+video moov'u sona yazar (`+faststart` yok: kapanışta 7 GB'lık dosyayı yeniden yazmak dakikalar sürebiliyordu);
+faststart yalnız birleşik dosyada. Kayıt başlatılamazsa (ffmpeg yok, kayıt
 klasörü ya da dosyası açılamıyor: disk dolu, izin yok; beklenmeyen bir hata da) sebebi bir pencerede yazar, açılmış
 ffmpeg ve mikrofon kapatılır, araç çubuğu "KAYIT"a döner. Kayıt hataları, ses uyarıları ve kayıt yolunda yakalanan
 istisnalar veri klasöründeki `hatalar.log`'a da yazılır. Windows'ta ffmpeg çağrıları konsol penceresi açmaz.

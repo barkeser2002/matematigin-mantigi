@@ -1008,15 +1008,32 @@ def test_each_recordings_result_gets_its_own_entry_in_the_error_log(tmp_path, mo
     from matematigin_mantigi.core import crash_log
     log = crash_log.CrashLog(tmp_path / "hatalar.log")
     monkeypatch.setattr(crash_log, "_active", log)
-    first = SimpleNamespace(final_path=tmp_path / "ders-1.mp4", error=None, audio_error="Mikrofon kesildi (00:12)")
+    first = SimpleNamespace(final_path=tmp_path / "ders-1.mp4", error=None, audio_error="Mikrofon kesildi (00:12)",
+                            video_warning=None)
     second = SimpleNamespace(final_path=tmp_path / "ders-2.mp4", error="ffmpeg hata kodu 1: disk dolu",
-                             audio_error=None)
+                             audio_error=None, video_warning=None)
     for s in (first, second, second):
         MssFfmpegRecorder._log_result(s)
     text = log.path.read_text(encoding="utf-8")
     assert "ders-1.mp4 · ses: Mikrofon kesildi (00:12)" in text
     assert "ders-2.mp4 · hata: ffmpeg hata kodu 1: disk dolu" in text, text
     assert text.count("ffmpeg hata kodu 1: disk dolu") == 1, text
+
+
+def test_video_warning_reaches_the_recording_result_line(tmp_path, monkeypatch):
+    """R1: görüntü kodlayıcısının uyarısı artık ses uyarısı alanında değil (video_warning); hatalar.log'daki kayıt
+    sonucu satırı onu da taşır, kendi etiketiyle: öğretmen kutuyu okumadan kapatsa da sonradan görülür."""
+    from types import SimpleNamespace
+    logged = capture_logged(monkeypatch)
+    lag = "Görüntü kodlayıcısı kayda yetişemedi: görüntü kayıt boyunca donarak ilerledi; video 8 sn erken bitiyor"
+    only_video = SimpleNamespace(final_path=tmp_path / "ders-3.mp4", error=None, audio_error=None, video_warning=lag)
+    both = SimpleNamespace(final_path=tmp_path / "ders-4.mp4", error=None, audio_error="Mikrofon kesildi (00:12)",
+                           video_warning=lag)
+    for s in (only_video, both):
+        MssFfmpegRecorder._log_result(s)
+    lines = [str(exc) for exc, where in logged if where == "kayıt sonucu"]
+    assert lines == [f"ders-3.mp4 · görüntü: {lag}", f"ders-4.mp4 · ses: Mikrofon kesildi (00:12) · görüntü: {lag}"], \
+        lines
 
 
 def test_recording_errors_reach_the_error_log_as_one_line(tmp_path, monkeypatch):

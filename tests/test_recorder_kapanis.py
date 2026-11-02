@@ -13,11 +13,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from matematigin_mantigi.core.recorder import (MssFfmpegRecorder, RecordRect, RecorderError, RecorderState,
-                                               ffmpeg_args, find_ffmpeg, media_duration, mux_args)
+from matematigin_mantigi.core.recorder import (MssFfmpegRecorder, RecordRect, RecorderError, RecorderState, clock_text,
+                                               encoder_lag_text, ffmpeg_args, find_ffmpeg, media_duration, mux_args)
 from tests.test_recorder import (FakeAudioCapture, _outcome, _raw_files, _stream_seconds, _write_test_media,
-                                 python_ffmpeg, recorded_runs, stepping_clock, synthetic_grabber, wait_until,
-                                 waiting_stop_signal, writer_blocked_in_pipe_write)
+                                 capture_logged, python_ffmpeg, recorded_runs, stepping_clock, synthetic_grabber,
+                                 wait_until, waiting_stop_signal, writer_blocked_in_pipe_write)
 
 needs_ffmpeg = pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
 
@@ -84,6 +84,9 @@ def debt(rec, fps: int) -> int:
     return int((time.monotonic() - rec.video_t0) * fps) - rec.frames_written
 
 
+TRY_LOWER = " (30 kare/sn ya da daha düşük çözünürlük deneyin)"
+
+
 # --- K1: yavaş ama okuyan ffmpeg öldürülmez; durdurma borcu ödenmez -------------------------------------------
 
 @needs_ffmpeg
@@ -94,12 +97,14 @@ def test_slow_encoder_that_keeps_reading_is_not_killed_and_the_file_opens(tmp_pa
     okuyordu (s1'de STOP->KILL arası 242->443 kare); moov yazılmadığı için videonun TAMAMI açılmıyordu. Şimdi büyük
     borç (STOP_DEBT_S'den büyük) yazılmaz, son kare en yeni ekran; okuyan ffmpeg öldürülmez, dosya açılır. Video
     duvar saatinden kısa kaldığı için birleştirme sesin ucunu kesmez (ses tam, son kare ekranda durur); kayıt hatasız
-    biter, uyarı (durum satırı) kodlayıcının yetişemediğini söyler."""
+    biter. Uyarı görüntü uyarısı alanında (video_warning; ses uyarısı kanalı temiz kalır, R1) ve izleyicinin ne
+    göreceğini söyler: görüntü donarak ilerledi, sesle arası açıldı, video erken bitiyor."""
     from matematigin_mantigi.core import recorder as r
     monkeypatch.setattr(r, "WRITER_JOIN_S", 1.0)                        # gerçek sınır 10 sn
     monkeypatch.setattr(r, "STOP_DEBT_S", 1.0)                          # bundan büyük borç yazılmaz (gerçekte 2 sn)
     fps = 20
     pipes = slow_pipes(monkeypatch)
+    logged = capture_logged(monkeypatch)
     kw = dict(audio_device="Sahte Mikrofon", audio_factory=FakeAudioCapture) if mic else {}
     rec = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=fps, grabber=synthetic_grabber, out_height=0,
                             clock=stepping_clock(), **kw)
@@ -139,13 +144,17 @@ def test_slow_encoder_that_keeps_reading_is_not_killed_and_the_file_opens(tmp_pa
     video_s = rec.frames_written / fps
     assert media_duration(exe, path) is not None                         # dosya açılıyor
     assert abs(_stream_seconds(exe, path, "-an") - video_s) < 0.15
-    assert rec.error is None, rec.error
-    assert re.match(r"Görüntü kodlayıcısı kayda yetişemedi: video \d sn erken bitiyor", rec.audio_error or ""), \
-        rec.audio_error
+    assert rec.error is None and rec.audio_error is None, (rec.error, rec.audio_error)
+    behind = (r", sesle arası sona doğru (\d) sn'ye çıktı; görüntü \1 sn erken bitiyor, son kare ses bitene dek ekranda"
+              r" kalıyor" if mic else r"; video (\d) sn erken bitiyor")
+    m = re.fullmatch(r"Görüntü kodlayıcısı kayda yetişemedi: görüntü kayıt boyunca donarak ilerledi" + behind
+                     + re.escape(TRY_LOWER), rec.video_warning or "")
+    assert m and int(m.group(1)) == round(rec._session.frames_skipped / fps), rec.video_warning
+    results = [str(exc) for exc, where in logged if where == "kayıt sonucu"]       # hatalar.log'daki sonuç satırı
+    assert results == [f"{path.name} · görüntü: {rec.video_warning}"], results
     if mic:                                                             # ses durdurma anına dek tam
         wall = t_stop - rec.video_t0
         assert abs(_stream_seconds(exe, path, "-vn") - wall) < 0.15, wall
-        assert "son kare ses bitene dek duruyor" in rec.audio_error, rec.audio_error
         assert not any(p.exists() for p in _raw_files(path))            # birleşik dosya doğrulandı
 
 
@@ -190,7 +199,63 @@ def test_stopped_writer_still_writing_to_a_slow_reader_is_not_killed_after_one_w
     assert kills == [] and rec.error is None, (kills, rec.error)
     assert media_duration(find_ffmpeg(), path) is not None               # moov yazıldı, dosya açılıyor
     assert rec._session.frames_skipped > 0                              # yazılamayan borç hesapta ...
-    assert "Görüntü kodlayıcısı kayda yetişemedi" in (rec.audio_error or ""), rec.audio_error    # ... ve uyarıda
+    warning = rec.video_warning or ""
+    assert warning.startswith("Görüntü kodlayıcısı kayda yetişemedi"), warning      # ... ve görüntü uyarısında
+    assert rec.audio_error is None, rec.audio_error
+
+
+def test_encoder_lag_text_says_what_the_viewer_will_see():
+    """R1 (son inceleme s8, s1f): kodlayıcı uyarısı ses uyarısı kanalından gidiyordu ('Kayıtta ses sorunu', mikrofonsuz
+    kayıtta bile) ve hasarı küçümsüyordu ('görüntü takılmış olabilir'). Geride kalan yazıcı aynı kareyi art arda
+    yazar: görüntü slayt gösterisi gibi donarak ilerler, sesle arası durdurmadaki borca dek açılır, video o kadar erken
+    biter. Metin bunu kendi başına söyler; ses yoksa sesten söz etmez. Kodlayıcı dersin ortasında geride kalmaya
+    başladıysa (ısınan MacBook Air, takılan disk) 'kayıt boyunca' demez, hangi dakikadan sonra olduğunu söyler."""
+    assert encoder_lag_text(8.2, lag_from_s=0.4, sound=False, tail_kept=False) == (
+        "Görüntü kodlayıcısı kayda yetişemedi: görüntü kayıt boyunca donarak ilerledi; video 8 sn erken bitiyor"
+        + TRY_LOWER)
+    assert encoder_lag_text(17.1, lag_from_s=2.0, sound=True, tail_kept=True) == (
+        "Görüntü kodlayıcısı kayda yetişemedi: görüntü kayıt boyunca donarak ilerledi, sesle arası sona doğru 17 sn'ye"
+        " çıktı; görüntü 17 sn erken bitiyor, son kare ses bitene dek ekranda kalıyor" + TRY_LOWER)
+    assert encoder_lag_text(135.0, lag_from_s=1510.4, sound=True, tail_kept=False) == (
+        "Görüntü kodlayıcısı kayda yetişemedi: görüntü 25:10. dakikadan sonra donarak ilerledi, sesle arası sona doğru"
+        " 2 dk 15 sn'ye çıktı; video 2 dk 15 sn erken bitiyor" + TRY_LOWER)
+    assert "kayıt boyunca" not in encoder_lag_text(3.0, lag_from_s=6.0, sound=False, tail_kept=False)
+
+
+@needs_ffmpeg
+def test_lag_that_starts_mid_lesson_says_from_which_minute(tmp_path, monkeypatch):
+    """R1: yazıcı tempodayken (kodlayıcı yetişirken) geçen süre ölçülür; kodlayıcı ancak ders ilerledikten sonra geride
+    kaldıysa uyarı 'kayıt boyunca' değil o dakikayı söyler: öncesi sağlam. Ölçü yazıcının tempoda olduğu son an."""
+    from matematigin_mantigi.core import recorder as r
+    monkeypatch.setattr(r, "WRITER_JOIN_S", 1.0)
+    monkeypatch.setattr(r, "STOP_DEBT_S", 1.0)
+    monkeypatch.setattr(r, "LAG_START_S", 0.5)                          # gerçekte 5 sn: test kısa sürsün
+    fps = 20
+    pipes = slow_pipes(monkeypatch)
+    rec = MssFfmpegRecorder(lambda: tmp_path, fps=fps, grabber=synthetic_grabber, out_height=0,
+                            clock=stepping_clock())
+    rec.start(RecordRect(0, 0, 160, 120))
+    wait_until(lambda: rec.frames_written >= 1.2 * fps)                 # 1,2 sn kodlayıcı yetişiyor
+    pipe = pipes[0]
+    held = time.monotonic()
+    pipe.hold()                                                         # sonra geride kaldı
+    wait_until(lambda: pipe.waits >= 1 and debt(rec, fps) >= 2.5 * fps)
+    feeding = threading.Event()
+    feeder = threading.Thread(target=lambda: [pipe.allow() for _ in iter(lambda: feeding.wait(0.1), True)],
+                              daemon=True)
+    feeder.start()
+    try:
+        rec.stop()
+    finally:
+        feeding.set()
+        pipe.release()
+        feeder.join(5)
+    lag_from = rec._session.on_time_at - rec.video_t0
+    assert 0.5 < lag_from and abs(lag_from - (held - rec.video_t0)) < 0.3, (lag_from, held - rec.video_t0)
+    assert rec.error is None and rec.audio_error is None, (rec.error, rec.audio_error)
+    assert re.fullmatch(r"Görüntü kodlayıcısı kayda yetişemedi: görüntü " + re.escape(clock_text(lag_from))
+                        + r"\. dakikadan sonra donarak ilerledi; video \d sn erken bitiyor" + re.escape(TRY_LOWER),
+                        rec.video_warning or ""), rec.video_warning
 
 
 @needs_ffmpeg

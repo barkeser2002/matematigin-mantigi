@@ -68,7 +68,7 @@ class RecorderError(RuntimeError):
 
 
 class RecordingResult(RecorderError):
-    """hatalar.log'daki kayıt sonucu girdisi: bir kaydın hatası ve ses uyarısı, tek satır (fırlatılmaz)."""
+    """hatalar.log'daki kayıt sonucu girdisi: bir kaydın hatası, ses ve görüntü uyarısı, tek satır (fırlatılmaz)."""
 
 
 class Recorder(Protocol):
@@ -214,6 +214,7 @@ MIC_GAP_S = 2.0         # ses videodan bundan fazla erken bitiyorsa mikrofon kay
 SHORT_MUX_S = 1.0       # birleşik dosya videodan bundan fazla kısaysa (kısa kayıtta: sürenin 1/4'ü) ham dosyalar kalır
 TAIL_KEEP_S = 0.25      # video durdurma anından bundan fazla erken bittiyse birleştirme sesin ucunu korur (end_s)
 STOP_DEBT_S = 2.0       # durdurmada yazıcının borcu bundan küçükse yazılır (kısa takılma), büyükse hiç yazılmaz
+LAG_START_S = 5.0       # kodlayıcı kaydın ilk bu kadar saniyesinde geride kaldıysa görüntü uyarısı 'kayıt boyunca' der
 
 # Kapanışın her adımı sınırlı; testler bu sabitleri kısaltır. ffmpeg ancak İLERLEMİYORSA öldürülür: yazıcı WRITER_JOIN_S
 # boyunca tek kare yazamadıysa (ffmpeg stdin'i okumuyor: donan kodlayıcı, takılan disk) ya da EOF'tan sonra
@@ -305,6 +306,23 @@ def span_text(seconds: float) -> str:
     """Kısa bir süre okunur: '1 sn', '12 sn', dakikadan uzunsa '2 dk 15 sn' (en az 1 sn)."""
     s = max(1, round(seconds))
     return f"{s} sn" if s < 60 else f"{s // 60} dk {s % 60} sn"
+
+
+def encoder_lag_text(skipped_s: float, lag_from_s: float, sound: bool, tail_kept: bool) -> str:
+    """Görüntü kodlayıcısı gerçek zamana yetişemeyen kaydın uyarısı (video_warning), izleyicinin göreceğiyle. Geride
+    kalan yazıcı aynı kareyi art arda yazar: görüntü slayt gösterisi gibi donarak ilerler ve sesin önüne geçer; arası
+    sona doğru durdurmadaki borca (skipped_s) dek açılır, video o kadar erken biter (sesin ucu korunduysa son kare ses
+    bitene dek ekranda kalır). lag_from_s: yazıcının tempoda olduğu son an (kaydın başından); kodlayıcı ancak sonra
+    geride kaldıysa (ısınan makine, takılan disk) öncesi sağlamdır, metin o dakikayı söyler. sound: kayıtta ses var;
+    yoksa sesten söz edilmez. Eski metin ('görüntü takılmış olabilir') hasarı küçümsüyordu (son inceleme s8)."""
+    span = span_text(skipped_s)
+    when = "kayıt boyunca" if lag_from_s <= LAG_START_S else f"{clock_text(lag_from_s)}. dakikadan sonra"
+    text = f"Görüntü kodlayıcısı kayda yetişemedi: görüntü {when} donarak ilerledi"
+    if sound:
+        text += f", sesle arası sona doğru {span}'ye çıktı"
+    text += (f"; görüntü {span} erken bitiyor, son kare ses bitene dek ekranda kalıyor" if tail_kept
+             else f"; video {span} erken bitiyor")
+    return text + " (30 kare/sn ya da daha düşük çözünürlük deneyin)"
 
 
 def audio_end_in_video(audio: AudioResult, offset_s: float, asetrate: int | None = None) -> float:
@@ -410,12 +428,14 @@ class _Session:
     started_at: float = 0.0
     stopped_at: float = 0.0           # durdurma anı (monotonic): videonun duvar saatine göre bitmesi gereken yer
     video_t0: float | None = None
+    on_time_at: float = 0.0           # yazıcının tempoda olduğu son an (monotonic): kodlayıcı ancak sonra geride kaldı
     duration: float = 0.0
     frames_written: int = 0
     frames_grabbed: int = 0
     frames_skipped: int = 0           # durdurmada yazılmayan borç (kodlayıcı geride kaldı): video bu kadar erken biter
     audio_result: AudioResult | None = None
-    audio_error: str | None = None
+    audio_error: str | None = None    # ses uyarısı (mikrofon açılmadı, kesildi, WAV yazılamadı): kayıt yine kaydedildi
+    video_warning: str | None = None  # görüntü uyarısı (kodlayıcı yetişemedi): dosya tam, görüntü donarak ilerledi
     error: str | None = None
     failed: bool = False
     tail_kept: bool = False           # video erken bittiği için birleştirme sesin ucunu korudu (son kare ekranda)
@@ -443,6 +463,7 @@ class MssFfmpegRecorder:
     frames_grabbed = _session_field("frames_grabbed", 0)
     audio_result = _session_field("audio_result")
     audio_error = _session_field("audio_error")
+    video_warning = _session_field("video_warning")
     error = _session_field("error")
     failed = _session_field("failed", False)
 
@@ -688,12 +709,13 @@ class MssFfmpegRecorder:
 
     @staticmethod
     def _log_result(s: _Session) -> None:
-        """Kaydın hatası ve ses uyarısı hatalar.log'a tek satır (günlük kurulu değilse hiçbir şey): öğretmen 'Kayıt
-        hatası' penceresini okumadan kapatsa da sonradan ne olduğu görülür. Günlük aynı türden ve aynı yoldan gelen
-        hatayı oturumda bir kez yazar (sonra 10., 100. tekrarı); her kaydın sonucu ayrı bir olay olduğu için türün adı
-        kaydın dosya adını taşır, kendi anahtarını alır (yoksa oturumun ikinci kaydı günlüğe hiç girmiyordu).
-        İstisna fırlatmaz."""
-        parts = [f"hata: {s.error}" if s.error else "", f"ses: {s.audio_error}" if s.audio_error else ""]
+        """Kaydın hatası, ses ve görüntü uyarısı hatalar.log'a tek satır (günlük kurulu değilse hiçbir şey): öğretmen
+        'Kayıt hatası' penceresini ya da uyarı kutusunu okumadan kapatsa da sonradan ne olduğu görülür. Günlük aynı
+        türden ve aynı yoldan gelen hatayı oturumda bir kez yazar (sonra 10., 100. tekrarı); her kaydın sonucu ayrı bir
+        olay olduğu için türün adı kaydın dosya adını taşır, kendi anahtarını alır (yoksa oturumun ikinci kaydı
+        günlüğe hiç girmiyordu). İstisna fırlatmaz."""
+        parts = [f"hata: {s.error}" if s.error else "", f"ses: {s.audio_error}" if s.audio_error else "",
+                 f"görüntü: {s.video_warning}" if s.video_warning else ""]
         text = " · ".join(p for p in parts if p)
         if text:
             line = " | ".join(p.strip() for p in f"{s.final_path.name} · {text}".splitlines() if p.strip())
@@ -766,20 +788,19 @@ class MssFfmpegRecorder:
 
     def _report_lag(self, s: _Session) -> None:
         """Kodlayıcı gerçek zamana yetişemediyse (durdurmada yazılmayan borç; ancak STOP_DEBT_S'den büyük borçta ya da
-        çok yavaş kodlayıcıda kalır) uyarı bunu söyler: kayıt sırasında görüntü takılmıştır (geride kalan yazıcı aynı
-        kareyi art arda yazar), video durdurma anından erken biter. Dosya açılır ve tamdır (sesin ucu korunduysa son
-        kare ses bitene dek ekranda kalır): hata değil, kaydedilen kaydın uyarısı (arayüzde durum satırında 'UYARI';
-        ayrı bir görüntü uyarısı alanı yok, audio_error kaydın uyarı kanalı). Ölçü yazıcının kendi borcu, durdurma
-        çağrısının zamanı değil: stop() geç çağrılsa da video düğmeye basılan yerde biter. ffmpeg kayıt sırasında
-        öldüyse (failed) sebep odur, bu uyarı eklenmez."""
+        çok yavaş kodlayıcıda kalır) kaydın görüntü uyarısı (video_warning) bunu ve izleyicinin ne göreceğini söyler
+        (encoder_lag_text): görüntü donarak ilerledi, sesle arası açıldı, video erken bitiyor. Dosya açılır ve tamdır:
+        hata değil, kaydedilen kaydın uyarısı; arayüz kayıt bitince uyarı kutusunda gösterir. Eskiden ses uyarısı
+        alanına (audio_error) ekleniyordu, arayüz mikrofonsuz kayıtta bile 'Kayıtta ses sorunu' diyordu (R1). Ölçü
+        yazıcının kendi borcu, durdurma çağrısının zamanı değil: stop() geç çağrılsa da video düğmeye basılan yerde
+        biter. ffmpeg kayıt sırasında öldüyse (failed) sebep odur, bu uyarı eklenmez."""
         skipped = s.frames_skipped / s.fps
         if s.failed or skipped <= TAIL_KEEP_S:
             return
-        text = f"Görüntü kodlayıcısı kayda yetişemedi: video {span_text(skipped)} erken bitiyor"
-        if s.tail_kept:
-            text += ", sonunda son kare ses bitene dek duruyor"
-        text += "; kayıt sırasında görüntü takılmış olabilir (30 kare/sn ya da daha düşük çözünürlük deneyin)"
-        s.audio_error = _joined(s.audio_error, text)
+        t0 = s.video_t0 if s.video_t0 is not None else s.started_at
+        sound = s.audio_result is not None and s.audio_result.samples > 0
+        s.video_warning = _joined(s.video_warning, encoder_lag_text(skipped, max(0.0, s.on_time_at - t0), sound,
+                                                                     s.tail_kept))
 
     def _grab(self, rect: RecordRect, sct=None) -> np.ndarray:
         return self._grabber(rect) if self._grabber else grab_screen(rect, sct)
@@ -1016,7 +1037,10 @@ class MssFfmpegRecorder:
             while not s.stop_event.is_set():
                 with s.latest_lock:
                     data = s.latest
-                due = int((time.monotonic() - t0) * fps) - s.frames_written
+                now = time.monotonic()
+                due = int((now - t0) * fps) - s.frames_written
+                if due <= 1:                        # yazıcı tempoda (kodlayıcı yetişiyor): geride kalma ancak sonra
+                    s.on_time_at = now
                 for _ in range(max(1, due)):
                     if s.stop_event.is_set():
                         break

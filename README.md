@@ -192,8 +192,8 @@ derste de saniyenin altında). 10 dakikadan uzun kayıtlarda mikrofon saati kaym
 örnek arasında ölçülür) `asetrate` ile düzeltilir; mikrofon durdurmadan önce sustuysa düzeltme yapılmaz, eksik ses
 kayma sanılıp derse yayılmaz. Birleştirme videoyu asla kısaltmaz: mikrofon kayıt sırasında kesilirse (kablo çekildi,
 Bluetooth/AirPods koptu) ya da ses dosyası yazılamazsa (disk dolu) eksik ses sessizlikle doldurulur, video tam
-uzunlukta kalır ve durum satırı uyarır ("UYARI: Mikrofon kayıt sırasında kesildi (20:15. dakikadan sonra ses yok)",
-"UYARI: Ses dosyası yazılamadı: …"). Birleşik dosya yine de videodan kısa çıkarsa, süresi ölçülemezse ya da
+uzunlukta kalır ve kayıt bitince uyarı kutusu söyler ("Mikrofon kayıt sırasında kesildi (20:15. dakikadan sonra ses
+yok)", "Ses dosyası yazılamadı: …"). Birleşik dosya yine de videodan kısa çıkarsa, süresi ölçülemezse ya da
 birleştirme düşerse (yarım birleşik dosya silinir) ham video ve ses silinmez, son ada taşınmaz; "Kayıt hatası" penceresi
 ne olduğunu ve dosyaların yerini durumlarıyla yazar ("… (video 42:10)", "… (ses sağlam, 42:11)"). ffmpeg kayıt
 sırasında durursa (kodlayıcı çöktü, bellek ya da disk bitti) kayıt hemen kapanır, pencere ffmpeg'in hangi dakikada
@@ -209,17 +209,26 @@ kapanır. Kayıt zaten kaydediliyorsa soru sorulmadan aynı bekleme olur. ffmpeg
 (borudan 10 sn boyunca tek kare okumazsa ya da durdurduktan sonra 60 sn boyunca dosyaya hiç yazmazsa); yavaş ama
 okuyan ffmpeg beklenir. Öldürülen ffmpeg dosyayı bitiremediği için video büyük olasılıkla hiç açılmaz: kayıt "ffmpeg
 yanıt vermedi; kayıt zorla kapatıldı" hatasıyla biter, birleştirme denenmez, ara dosyalar silinmez ve pencere
-yerlerini yazar. Kodlayıcı gerçek zamana yetişemezse (yazılan kare duvar saatinin gerisinde) durdurmada birikmiş
-kareler yazılmaz (2 sn'den azsa yazılır): video düğmeye basılan andan erken biter, birleşik dosyada ses yine sonuna
-dek sürer (son kare ekranda kalır) ve durum satırı uyarır ("UYARI: Görüntü kodlayıcısı kayda yetişemedi: …"). Ara
-video moov'u sona yazar (`+faststart` yok: kapanışta 7 GB'lık dosyayı yeniden yazmak dakikalar sürebiliyordu);
-faststart yalnız birleşik dosyada. Mikrofon videoyla aynı anda, ayrı iş parçacığında kapanır: ses sürücüsü akışı
-kapatırken takılırsa (USB mikrofon çekildi) 5 sn sonra o ana dek gelen sesle devam edilir ve durum satırı uyarır;
-mikrofon 25 sn içinde hiç kapanmazsa video sessiz kaydedilir, pencere ses dosyasının yerini yazar. Mikrofon
-açılamazsa kayıt sessiz sürer, geride ses dosyası ya da iş parçacığı kalmaz. Kayıt başlatılamazsa (ffmpeg yok, kayıt
-klasörü ya da dosyası açılamıyor: disk dolu, izin yok; beklenmeyen bir hata da) sebebi bir pencerede yazar, açılmış
-ffmpeg ve mikrofon kapatılır, araç çubuğu "KAYIT"a döner. Kayıt hataları, ses uyarıları ve kayıt yolunda yakalanan
-istisnalar veri klasöründeki `hatalar.log`'a da yazılır. Windows'ta ffmpeg çağrıları konsol penceresi açmaz.
+yerlerini yazar. Kodlayıcı gerçek zamana yetişemezse (yazılan kare duvar saatinin gerisinde) yazıcı aynı kareyi art
+arda yazar: görüntü slayt gösterisi gibi donarak ilerler ve sesin önüne geçer. Durdurmada birikmiş kareler yazılmaz
+(2 sn'den azsa yazılır): video düğmeye basılan andan erken biter, birleşik dosyada ses yine durdurma anına dek sürer
+(son kare ekranda kalır). Kayıt bitince uyarı kutusu bunu ses uyarısından ayrı, görüntü uyarısı olarak söyler
+(kaydedicinin `video_warning` alanı: "Görüntü kodlayıcısı kayda yetişemedi: görüntü kayıt boyunca donarak ilerledi,
+sesle arası sona doğru 17 sn'ye çıktı; …"; kodlayıcı ders ortasında geride kaldıysa hangi dakikadan sonra olduğunu
+yazar). Ara video moov'u sona yazar (`+faststart` yok: kapanışta 7 GB'lık dosyayı yeniden yazmak dakikalar
+sürebiliyordu); faststart yalnız birleşik dosyada. Mikrofonsuz kayıtta (mikrofon açılmadığında da) son dosya bu ara
+videonun kendisidir: moov sonda kalır, dosya faststart değildir (yerel oynatıcılar ve video sitelerine yükleme için
+fark etmez); 60 dakikalık derste 7 GB'lık ikinci bir kopya yazmamak için bilinçli tercih. Mikrofonlu kayıtta birleşik
+dosya faststart'tır. Mikrofon videoyla aynı anda, ayrı iş parçacığında kapanır: ses sürücüsü akışı kapatırken
+takılırsa (USB mikrofon çekildi) 5 sn sonra o ana dek gelen sesle devam edilir ve kayıt bitince uyarı kutusu söyler;
+mikrofon 25 sn içinde hiç kapanmazsa video sessiz kaydedilir, pencere ses dosyasının yerini yazar. Sürücü akışı
+kapatmayı bitirene dek yeni kayıt mikrofonu açmaz (aynı sürücüde yeni akış açmak da takılabilir, arayüz donardı):
+kayıt sessiz başlar, uyarı uygulamayı yeniden başlatmayı söyler; takılan kaydın kendi uyarısı da bunu önceden yazar.
+Mikrofon açılamazsa kayıt sessiz sürer, geride ses dosyası ya da iş parçacığı kalmaz. Kayıt başlatılamazsa (ffmpeg
+yok, kayıt klasörü ya da dosyası açılamıyor: disk dolu, izin yok; beklenmeyen bir hata da) sebebi bir pencerede yazar,
+açılmış ffmpeg ve mikrofon kapatılır, araç çubuğu "KAYIT"a döner. Kayıt hataları, ses ve görüntü uyarıları, kayıt
+yolunda yakalanan istisnalar da veri klasöründeki `hatalar.log`'a yazılır. Windows'ta ffmpeg çağrıları konsol
+penceresi açmaz.
 Durdurunca durum satırı gerçek yakalama hızını yazar (Windows'ta GDI ~30 kare/sn ile sınırlar; macOS CoreGraphics daha hızlıdır).
 macOS'ta ilk kayıtta "Ekran Kaydı" izni istenir (Sistem Ayarları > Gizlilik ve Güvenlik); izin verilmezse kare siyah gelir.
 

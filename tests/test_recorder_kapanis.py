@@ -777,7 +777,7 @@ def test_microphone_that_never_closes_does_not_hold_the_video_and_its_file_is_na
 @needs_ffmpeg
 def test_driver_that_hangs_closing_the_stream_still_gives_a_recording_with_sound(tmp_path, monkeypatch):
     """k1, gerçek AudioCapture: sürücü akışı kapatırken takılırsa (s5) AudioCapture STREAM_STOP_S sonra o ana dek gelen
-    sesi WAV'a yazıp kapatır; kayıt sesiyle birleştirilir, durum satırı mikrofonun düzgün kapanmadığını söyler."""
+    sesi WAV'a yazıp kapatır; kayıt sesiyle birleştirilir, ses uyarısı mikrofonun düzgün kapanmadığını söyler."""
     from matematigin_mantigi.core import audio_capture as ac
     from tests.test_audio_capture import FakeSoundDevice
     release = threading.Event()

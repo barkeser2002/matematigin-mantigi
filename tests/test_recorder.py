@@ -555,7 +555,7 @@ def test_microphone_that_goes_quiet_mid_lesson_does_not_cut_the_video(tmp_path, 
 def test_wav_writer_that_dies_mid_lesson_is_reported_and_does_not_cut_the_video(tmp_path, monkeypatch):
     """Denetimin ikinci kipi: mikrofon canlı ama WAV yazıcı iş parçacığı 1,5 sn sonra OSError'la ölüyor (disk
     hatası). Hata yalnız iş parçacığından stderr'e gidiyor, kaydediciye ulaşmıyor, dosya ~1,4 sn'ye kesiliyordu.
-    Şimdi sebep audio_error'da (durum satırına UYARI olarak gider), video tam uzunlukta kalır."""
+    Şimdi sebep audio_error'da (kayıt bitince uyarı kutusunda), video tam uzunlukta kalır."""
     from tests.test_audio_capture import disk_full_after
     leaked = []
     monkeypatch.setattr(threading, "excepthook", lambda args: leaked.append(args.exc_value))

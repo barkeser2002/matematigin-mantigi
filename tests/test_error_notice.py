@@ -91,3 +91,17 @@ def test_box_lands_fully_on_screen_with_the_app_stylesheet(qtbot):
     qtbot.waitUntil(lambda: notice.box is not None and notice.box.isVisible(), timeout=2000)
     qtbot.addWidget(notice.box)
     assert notice.box.screen().availableGeometry().contains(notice.box.frameGeometry())
+
+
+def test_box_opens_over_an_open_modal_dialog_so_it_stays_clickable(qtbot):
+    """Soru editörü gibi uygulama modal bir pencere açıkken gelen uyarı o pencerenin çocuğu olur; ana pencerenin
+    çocuğu olsaydı modal pencere kapanana kadar tıklanamazdı."""
+    from PyQt6.QtWidgets import QDialog
+    notice, anchor = _notice(qtbot)
+    dlg = QDialog(anchor); dlg.setModal(True); dlg.show()
+    qtbot.waitUntil(lambda: QApplication.activeModalWidget() is dlg, timeout=2000)
+    notice.post("Beklenmeyen hata", "editör açıkken", "k")
+    qtbot.waitUntil(lambda: notice.box is not None and notice.box.isVisible(), timeout=2000)
+    qtbot.addWidget(notice.box)
+    assert notice.box.parent() is dlg and not notice.box.isModal()
+    dlg.close()

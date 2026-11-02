@@ -66,6 +66,17 @@ def test_mux_args_offsets_and_rate_fix(tmp_path):
     assert plain[plain.index("-af") + 1] == "afade=t=in:st=0:d=0.01"
 
 
+def test_mux_args_names_the_wav_demuxer_for_the_audio_input(tmp_path):
+    """Ses girişi -f wav ile açılır, biçim tahmine bırakılmaz: imageio-ffmpeg 0.8.0'ın ffmpeg 9.0.2'si
+    düz WAV'ı mpegts sanıp 'End of file' ile düşüyor, kayıt sessiz kalıyordu."""
+    v, a, out = tmp_path / "v.mp4", tmp_path / "a.wav", tmp_path / "o.mp4"
+    for offset in (0.25, 0.0, -0.1):                              # -ss, sıfır ve -itsoffset yolları
+        args = mux_args("ffmpeg", v, a, out, offset)
+        i = args.index(str(a))
+        assert args[i - 3:i] == ["-f", "wav", "-i"], args
+        assert args.index(str(v)) < args.index("-f")              # video girişi (mp4) tahmine açık kalır
+
+
 def test_audio_rate_correction_only_for_long_clear_drift():
     from matematigin_mantigi.core.audio_capture import AudioResult
     from pathlib import Path as _P

@@ -171,12 +171,13 @@ def mux_args(exe: str, video: Path, audio: Path, out: Path, offset_s: float,
              asetrate: int | None = None, out_rate: int = 48000) -> list[str]:
     """Video (kopya) + WAV -> MP4 (AAC). offset_s > 0: ses videodan önce başladı, başı atılır (-ss);
     offset_s < 0: ses geç başladı, geciktirilir (-itsoffset). asetrate: ölçülen gerçek örnekleme hızı
-    (mikrofon saati kaymasını düzeltir; ppm düzeyi, duyulmaz)."""
+    (mikrofon saati kaymasını düzeltir; ppm düzeyi, duyulmaz). Ses girişi -f wav ile açılır: biçim tahmine
+    bırakılırsa ffmpeg 9.0.2 düz WAV'ı mpegts sanıp düşüyor (imageio-ffmpeg 0.8.0)."""
     args = [exe, "-y", "-hide_banner", "-loglevel", "warning", "-nostats", "-i", str(video)]
     if offset_s >= 0:
-        args += ["-ss", f"{offset_s:.3f}", "-i", str(audio)]
+        args += ["-ss", f"{offset_s:.3f}", "-f", "wav", "-i", str(audio)]
     else:
-        args += ["-itsoffset", f"{-offset_s:.3f}", "-i", str(audio)]
+        args += ["-itsoffset", f"{-offset_s:.3f}", "-f", "wav", "-i", str(audio)]
     af = ["afade=t=in:st=0:d=0.01"]                  # -ss kesim noktasındaki tek örneklik tıkı yumuşatır (10 ms)
     if asetrate:
         af = [f"asetrate={asetrate}", f"aresample={out_rate}", *af]

@@ -225,8 +225,10 @@ def test_alert_strip_sits_above_record_button_and_fits_in_every_tier(qtbot):
 
 def test_alert_strip_shrinks_its_font_until_the_longest_word_fits(qtbot):
     """Şeritte kelime içinde satır kırılmaz; 88 px'e sığmayan kelime kırpılıyordu ('kaydediliyor…' Windows'un yazı
-    tipi ölçüsüyle sığmadı, CI). Yazı en uzun kelime sığana dek küçülür, en çok ALERT_MIN_PX'e; kısa metinde olağan
-    boyuna döner. Ölçüm gerçek yazı tipiyle."""
+    tipi ölçüsüyle sığmadı, CI). Yazı, en uzun kelimenin sığdığı en büyük boya iner (en çok ALERT_PX, en az
+    ALERT_MIN_PX); kısa metinde olağan boyuna döner. Glif genişliği platforma göre değişir (Windows'ta aynı kelime
+    Linux'tan geniş, küçük boyda yuvarlanır): beklenen boy etiketin kendi ölçüsüyle bulunur. Gerçek yazı tipiyle."""
+    from PyQt6.QtGui import QFontMetrics
     from matematigin_mantigi.ui.toolbar import ALERT_MIN_PX, ALERT_PX
     if not list(paths.FONTS_DIR.glob("*.ttf")):
         pytest.skip("bundled fonts not downloaded")
@@ -234,17 +236,26 @@ def test_alert_strip_shrinks_its_font_until_the_longest_word_fits(qtbot):
     qtbot.addWidget(tb)
     tb.show()
     alert = tb.alert_label
+
+    def widest(text: str, px: int) -> int:
+        fm = QFontMetrics(theme.font(tb.fam, px, 700), alert)
+        return max(fm.horizontalAdvance(w) for w in text.split())
+
     for h in (1100, 700):
         tb.resize(88, h)
-        tb.set_alert("test", "⚠ Kamera görüntülenemiyor — ayrıntı kayıt bitince")
-        QApplication.processEvents()
-        room = alert.contentsRect().width()
-        assert ALERT_MIN_PX <= alert.font().pixelSize() < ALERT_PX, h
-        assert all(alert.fontMetrics().horizontalAdvance(w) <= room for w in alert.text().split()), h
-        assert alert.height() >= alert.heightForWidth(alert.width()), h               # dikeyde kırpılmıyor
-        tb.set_alert("test", "Kısa uyarı")
-        QApplication.processEvents()
-        assert alert.font().pixelSize() == ALERT_PX, h                                 # olağan boyuna döner
+        for text in ("⚠ Kamera görüntülenemiyor — ayrıntı kayıt bitince",      # 10 px'te hiçbir platformda sığmaz
+                     "Kayıt kaydediliyor… bitince pencere kapanacak", "Kısa uyarı"):
+            tb.set_alert("test", text)
+            QApplication.processEvents()
+            room, px = alert.contentsRect().width(), alert.font().pixelSize()
+            fitting = [p for p in range(ALERT_MIN_PX, ALERT_PX + 1) if widest(text, p) <= room]
+            assert px == (max(fitting) if fitting else ALERT_MIN_PX), (text, h, px, room, fitting)
+            if fitting:                                                           # sığabiliyorsa gerçekten sığar
+                assert all(alert.fontMetrics().horizontalAdvance(w) <= room for w in text.split()), (text, h)
+            assert alert.height() >= alert.heightForWidth(alert.width()), (text, h)   # dikeyde kırpılmıyor
+            if text.startswith("⚠"):
+                assert px < ALERT_PX, h                                           # küçültme gerçekten sınandı
+        assert alert.font().pixelSize() == ALERT_PX, h                             # kısa metinde olağan boyuna döner
     tb.set_alert("test", "Çekoslovakyalılaştıramadıklarımızdanmışsınız")              # en küçükte de sığmaz
     QApplication.processEvents()
     assert alert.font().pixelSize() == ALERT_MIN_PX and alert.isVisible()

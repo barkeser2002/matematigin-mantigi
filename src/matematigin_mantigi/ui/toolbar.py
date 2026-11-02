@@ -268,7 +268,7 @@ class ToolBar(QWidget):
         room = self.width() - lay.left() - lay.right() - m.left() - m.right()
         px = ALERT_PX
         font = theme.font(self.fam, px, 700)
-        while px > ALERT_MIN_PX and words and max(QFontMetrics(font).horizontalAdvance(w) for w in words) > room:
+        while px > ALERT_MIN_PX and words and max(QFontMetrics(font, alert).horizontalAdvance(w) for w in words) > room:
             px -= 1
             font = theme.font(self.fam, px, 700)
         if font != alert.font():

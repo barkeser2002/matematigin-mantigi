@@ -223,6 +223,33 @@ def test_alert_strip_sits_above_record_button_and_fits_in_every_tier(qtbot):
     assert alert.isHidden()
 
 
+def test_alert_strip_shrinks_its_font_until_the_longest_word_fits(qtbot):
+    """Şeritte kelime içinde satır kırılmaz; 88 px'e sığmayan kelime kırpılıyordu ('kaydediliyor…' Windows'un yazı
+    tipi ölçüsüyle sığmadı, CI). Yazı en uzun kelime sığana dek küçülür, en çok ALERT_MIN_PX'e; kısa metinde olağan
+    boyuna döner. Ölçüm gerçek yazı tipiyle."""
+    from matematigin_mantigi.ui.toolbar import ALERT_MIN_PX, ALERT_PX
+    if not list(paths.FONTS_DIR.glob("*.ttf")):
+        pytest.skip("bundled fonts not downloaded")
+    tb = ToolBar(theme.load_fonts(paths.FONTS_DIR))
+    qtbot.addWidget(tb)
+    tb.show()
+    alert = tb.alert_label
+    for h in (1100, 700):
+        tb.resize(88, h)
+        tb.set_alert("test", "⚠ Kamera görüntülenemiyor — ayrıntı kayıt bitince")
+        QApplication.processEvents()
+        room = alert.contentsRect().width()
+        assert ALERT_MIN_PX <= alert.font().pixelSize() < ALERT_PX, h
+        assert all(alert.fontMetrics().horizontalAdvance(w) <= room for w in alert.text().split()), h
+        assert alert.height() >= alert.heightForWidth(alert.width()), h               # dikeyde kırpılmıyor
+        tb.set_alert("test", "Kısa uyarı")
+        QApplication.processEvents()
+        assert alert.font().pixelSize() == ALERT_PX, h                                 # olağan boyuna döner
+    tb.set_alert("test", "Çekoslovakyalılaştıramadıklarımızdanmışsınız")              # en küçükte de sığmaz
+    QApplication.processEvents()
+    assert alert.font().pixelSize() == ALERT_MIN_PX and alert.isVisible()
+
+
 def test_alert_strip_takes_only_its_own_room_so_content_does_not_start_scrolling(qtbot):
     """Kademe eşikleri şeritsiz ölçüldü; görünen şerit kaydırma alanından yer alır. Kademe, şeridin yeri düşülmüş
     yükseklikle seçilir: şeritli araç çubuğu her yükseklikte, şerit kadar kısa şeritsiz olanla aynı kademede ve aynı

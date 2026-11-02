@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QFontMetrics
 from PyQt6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton,
                              QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
@@ -10,6 +11,8 @@ from matematigin_mantigi.core.models import PALETTE, TOOL_META, WIDTHS, Tool
 from matematigin_mantigi.ui import theme
 from matematigin_mantigi.ui.theme import FontFamilies
 from matematigin_mantigi.ui.widgets import DotButton, GlyphButton, RecordButton, SwatchButton, WrapButton
+
+ALERT_PX, ALERT_MIN_PX = 10, 7      # uyarı şeridinin yazısı: olağan ve en küçük boy (px), bkz. _fit_alert_font
 
 _BTN_CSS = (f"QPushButton {{ background: {theme.TOOLBAR_BTN}; color: {theme.TOOLBAR_MUTED}; border: none;"
             f" border-radius: 6px; padding: 5px 3px; font-size: 10px; font-weight: 600; }}"
@@ -219,7 +222,7 @@ class ToolBar(QWidget):
         self.alert_label = QLabel()
         self.alert_label.setWordWrap(True)
         self.alert_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.alert_label.setFont(theme.font(fam, 10, 700))
+        self.alert_label.setFont(theme.font(fam, ALERT_PX, 700))
         self.alert_label.setStyleSheet(f"QLabel {{ color: white; background: {theme.REC_DOT}; border-radius: 5px;"
                                        f" padding: 4px 3px; margin: 0 5px; }}")
         self.alert_label.hide()
@@ -250,7 +253,26 @@ class ToolBar(QWidget):
     # --- kademe (FULL / COMPACT / MINI) -------------------------------------
     def resizeEvent(self, e) -> None:
         super().resizeEvent(e)
+        self._fit_alert_font()
         self._update_tier()
+
+    def _fit_alert_font(self) -> None:
+        """Şeritte kelime içinde satır kırılmaz: en uzun kelime satıra sığana dek yazı küçülür (en çok ALERT_MIN_PX'e),
+        kısa metinde olağan boyuna döner. Sığmayan kelime kırpılıyordu: 'kaydediliyor…' Linux'ta 72 px'lik satıra
+        6 px payla sığarken Windows'un yazı tipi ölçüsüyle sığmadı (CI). Şerit araç çubuğu boyunca uzanır; genişlik
+        ondan hesaplanır (gizliyken etiketin kendi geometrisi henüz güncel değildir)."""
+        alert = self.alert_label
+        words = alert.text().split()
+        alert.ensurePolished()                          # stil sayfasının kenar ve dolgusu contentsMargins'e işlensin
+        lay, m = self.layout().contentsMargins(), alert.contentsMargins()
+        room = self.width() - lay.left() - lay.right() - m.left() - m.right()
+        px = ALERT_PX
+        font = theme.font(self.fam, px, 700)
+        while px > ALERT_MIN_PX and words and max(QFontMetrics(font).horizontalAdvance(w) for w in words) > room:
+            px -= 1
+            font = theme.font(self.fam, px, 700)
+        if font != alert.font():
+            alert.setFont(font)
 
     def _update_tier(self) -> None:
         """Kademe, görünen uyarı şeridinin aldığı yer düşüldükten sonra kalan yüksekliğe göre seçilir: eşikler
@@ -338,6 +360,7 @@ class ToolBar(QWidget):
         shown = texts[-1] + (f" (+{len(texts) - 1})" if len(texts) > 1 else "") if texts else ""
         self.alert_label.setText(shown)
         self.alert_label.setVisible(bool(texts))
+        self._fit_alert_font()
         self._update_tier()
 
     def set_undo_enabled(self, on: bool) -> None:

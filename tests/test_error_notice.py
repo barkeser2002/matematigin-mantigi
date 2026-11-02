@@ -38,7 +38,8 @@ def _box_shown(notice):
 
 def test_post_shows_a_single_non_modal_box_without_a_window_storm(qtbot):
     """Aynı hata art arda yüzlerce kez gelse de tek, modal olmayan bir kutu: ders ve kayıt sürer, pencere yağmuru
-    olmaz. Farklı bir hata aynı kutunun metnini değiştirir; kapatılan bir uyarı aynı hatayla yeniden açılmaz."""
+    olmaz. Farklı bir hata aynı kutuya eklenir (Tamam'a basılmamış önceki silinmez); kapatılan bir uyarı aynı hatayla
+    yeniden açılmaz."""
     notice, _ = _notice(qtbot)
     for _ in range(200):
         notice.post("Beklenmeyen hata", "aynı hata", "k1")
@@ -48,12 +49,39 @@ def test_post_shows_a_single_non_modal_box_without_a_window_storm(qtbot):
     assert not notice.box.isModal() and notice.box.windowModality() == Qt.WindowModality.NonModal
     assert notice.box.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)    # kalemden odağı çalmaz
     notice.post("Düzen kaydedilemedi", "farklı hata", "k2")
-    qtbot.waitUntil(lambda: notice.box.text() == "farklı hata", timeout=2000)
-    assert _visible_boxes() == [notice.box]
+    qtbot.waitUntil(lambda: "farklı hata" in notice.box.text(), timeout=2000)
+    assert _visible_boxes() == [notice.box] and "aynı hata" in notice.box.text()
     if sys.platform != "darwin":                 # Qt macOS'ta QMessageBox başlığını yok sayar; metin kendi başına yeter
-        assert notice.box.windowTitle() == "Düzen kaydedilemedi"
+        assert notice.box.windowTitle() == "2 uyarı"
     notice.box.button(QMessageBox.StandardButton.Ok).click()
     notice.post("Beklenmeyen hata", "aynı hata", "k1")
+    qtbot.wait(50)
+    assert _visible_boxes() == []
+
+
+def test_new_notice_on_a_visible_box_keeps_the_unacknowledged_ones(qtbot):
+    """P5: kayıttan sonra açılan '2 uyarı' kutusu Tamam'a basılmadan yeni (farklı) bir uyarı gelince tek uyarıya
+    iniyordu; eskiler 'gösterildi' sayıldığı için bir daha hiç gelmiyordu (v13). Görünür kutuya gelen uyarı
+    öncekilere eklenir; Tamam hepsini görülmüş sayar."""
+    notice, _ = _notice(qtbot)
+    rec, alerts = _route(notice)
+    rec[0] = True
+    notice.post("Beklenmeyen hata", "kayıt sırasında birinci", "k1")
+    notice.post("Düzen kaydedilemedi", "kayıt sırasında ikinci", "k2")
+    qtbot.waitUntil(lambda: alerts[-1:] == ["⚠ 2 uyarı — ayrıntı kayıt bitince"], timeout=2000)
+    rec[0] = False
+    qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)
+    qtbot.addWidget(notice.box)
+    notice.post("Tahta görüntüsü kaydedilemedi", "kayıttan sonra üçüncü", "k3")
+    qtbot.waitUntil(lambda: "kayıttan sonra üçüncü" in notice.box.text(), timeout=2000)
+    text = notice.box.text()
+    assert "kayıt sırasında birinci" in text and "kayıt sırasında ikinci" in text, text
+    assert _visible_boxes() == [notice.box]
+    if sys.platform != "darwin":
+        assert notice.box.windowTitle() == "3 uyarı"
+    notice.box.button(QMessageBox.StandardButton.Ok).click()
+    for key in ("k1", "k2", "k3"):
+        notice.post("Beklenmeyen hata", "yeniden", key)
     qtbot.wait(50)
     assert _visible_boxes() == []
 
@@ -176,6 +204,22 @@ def test_box_open_when_recording_starts_is_hidden_and_comes_back_after(qtbot):
     assert notice.box.text() == "kayıttan önce gelen" and alerts[-1] is None
 
 
+def test_prepare_recording_hides_the_box_before_the_first_frame_and_it_returns_if_recording_does_not_start(qtbot):
+    """P4: kaydedici ilk kareyi start() içinde yakalar; kutu ancak kayıt başladıktan sonra (rozetin ilk tiki) gizlenince
+    kaydın ilk karelerine giriyordu. prepare_recording() (start()'tan hemen önce, app.py bağlar) kutuyu hemen gizler,
+    uyarıyı şeride geçirir. Kayıt başlamazsa (başlatma hatası) yoklama kutuyu geri getirir: uyarı kaybolmaz."""
+    notice, _ = _notice(qtbot)
+    rec, alerts = _route(notice)
+    notice.post("Beklenmeyen hata", "kayıttan önce gelen", "k1")
+    qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)
+    qtbot.addWidget(notice.box)
+    notice.prepare_recording()                            # kaydedici henüz kayıtta değil (rec[0] False)
+    assert _visible_boxes() == [] and alerts == ["⚠ Beklenmeyen hata — ayrıntı kayıt bitince"]
+    qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)          # kayıt başlamadı: kutu geri gelir
+    qtbot.addWidget(notice.box)
+    assert notice.box.text() == "kayıttan önce gelen" and alerts[-1] is None
+
+
 def test_growing_box_is_moved_back_onto_the_screen(qtbot):
     """B-3: görünür kutuya daha uzun ikinci uyarı gelince kutu yerinde büyüyordu: alt köşeye konan kutunun alt kenarı
     ve Tamam düğmesi ekranın altından taşıyordu (1920x1080 tam ekranda 88 px). Görünürken de gerçek boyutla
@@ -186,7 +230,7 @@ def test_growing_box_is_moved_back_onto_the_screen(qtbot):
     qtbot.addWidget(notice.box)
     long_text = "\n".join(f"{i}. satır: kutuyu büyüten uzun uyarı metni" for i in range(16))
     notice.post("Beklenmeyen hata", long_text, "k2")
-    qtbot.waitUntil(lambda: notice.box.text() == long_text, timeout=2000)
+    qtbot.waitUntil(lambda: long_text in notice.box.text(), timeout=2000)
     assert notice.box.screen().availableGeometry().contains(notice.box.frameGeometry())
 
 
@@ -222,6 +266,84 @@ def test_box_destroyed_with_its_temporary_modal_parent_is_shown_again(qtbot):
     assert _visible_boxes() == []
 
 
+# --- kapanış: gizli/kapanmış ana pencerenin altında pencere açılmaz; uyarılar hatalar.log'da (P1) --------------
+def test_no_box_opens_under_a_hidden_main_window_and_the_box_closes_with_it(qtbot):
+    """Ana pencere kapanınca görünen kutu da kapanır; ana pencere gizliyken gelen uyarı pencere açmaz (gizli pencerenin
+    çocuğu olarak gösterilen kutu Qt'nin otomatik çıkışını kuyruktan siliyordu: pencere kapanıyor, süreç çıkmıyordu).
+    Yoklama da durur. Pencere yeniden gösterilirse (ör. kapanış iptal) Tamam'a basılmamış uyarılar geri gelir."""
+    notice, anchor = _notice(qtbot)
+    rec, alerts = _route(notice)
+    notice.post("Beklenmeyen hata", "kapanıştan önce görünen", "k1")
+    qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)
+    qtbot.addWidget(notice.box)
+    anchor.close()
+    assert _visible_boxes() == []
+    notice.post("Düzen kaydedilemedi", "pencere kapalıyken gelen", "k2")
+    for _ in range(3):
+        QApplication.processEvents()
+    assert _visible_boxes() == [] and not notice._poll_timer.isActive()
+    anchor.show()
+    qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)
+    qtbot.addWidget(notice.box)
+    text = notice.box.text()
+    assert "kapanıştan önce görünen" in text and "pencere kapalıyken gelen" in text, text
+
+
+def test_box_lost_with_a_modal_is_not_shown_again_under_a_closed_main_window(qtbot):
+    """'Kayıt hatası' modalının çocuğu olan kutu modalla silinir; ardından pencere kapanırsa kutu gizli pencerenin
+    altında yeniden açılmaz (açılıyordu: Qt'nin kuyruktaki çıkışı silinip süreç görünmez kalıyordu, v04)."""
+    notice, anchor = _notice(qtbot)
+    modal = QMessageBox(QMessageBox.Icon.Warning, "", "Kayıt hatası", QMessageBox.StandardButton.Ok, anchor)
+    modal.setModal(True); modal.show()
+    qtbot.waitUntil(lambda: QApplication.activeModalWidget() is modal, timeout=2000)
+    notice.post("Beklenmeyen hata", "modalın çocuğu", "k1")
+    qtbot.waitUntil(lambda: _box_shown(notice) and notice.box.parent() is modal, timeout=2000)
+    sip.delete(modal)                          # statik warning() exec bitince kutuyu da siler ...
+    anchor.close()                             # ... ve pencere hemen kapanır (_close_after_save)
+    for _ in range(5):
+        QApplication.processEvents()
+    assert _visible_boxes() == []
+
+
+def test_take_all_hands_over_shown_and_waiting_notices_and_closes_the_box(qtbot):
+    """Kapanış özeti için: Tamam'a basılmamış (görünen) ve kayıt sırasında biriken uyarıların hepsi geliş sırasıyla
+    verilir ve bırakılır: kutu kapanır ve geri gelmez, şerit temizlenir, yoklama durur."""
+    notice, _ = _notice(qtbot)
+    rec, alerts = _route(notice)
+    notice.post("Düzen kaydedilemedi", "görünen kutuda", "k1")
+    qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)
+    qtbot.addWidget(notice.box)
+    rec[0] = True
+    notice.post("Tahta görüntüsü kaydedilemedi", "kayıt sırasında", "k2")
+    qtbot.waitUntil(lambda: alerts[-1:] == ["⚠ 2 uyarı — ayrıntı kayıt bitince"], timeout=2000)
+    rec[0] = False
+    assert notice.take_all() == [("Düzen kaydedilemedi", "görünen kutuda"),
+                                 ("Tahta görüntüsü kaydedilemedi", "kayıt sırasında")]
+    assert alerts[-1] is None and _visible_boxes() == [] and not notice._poll_timer.isActive()
+    qtbot.wait(3 * POLL_MS)
+    assert _visible_boxes() == [] and notice.take_all() == []
+    notice.post("Düzen kaydedilemedi", "görünen kutuda", "k1")          # özette gösterildi: yeniden gelmez
+    qtbot.wait(50)
+    assert _visible_boxes() == []
+
+
+def test_posted_notices_are_written_to_the_error_log_without_flooding_it(tmp_path, monkeypatch):
+    """Kullanıcıya gösterilen her uyarı başlığı ve metniyle hatalar.log'a da yazılır: kutu/özet okunmadan kapansa da
+    sonradan ne olduğu görülür (eskiden 'Tahta görüntüsü kaydedilemedi' günlükte hiç yoktu). Günlük aynı türü oturumda
+    bir kez yazar: her uyarı anahtarı kendi girdisini alır (tek türde ikinci uyarı hiç yazılmazdı), aynı uyarının
+    tekrarı günlüğü doldurmaz."""
+    from matematigin_mantigi.core import crash_log
+    monkeypatch.setattr(crash_log, "_active", crash_log.CrashLog(tmp_path / "hatalar.log"))
+    monkeypatch.setattr(error_notice, "_instance", None)               # kutu yok (stderr); günlük yine yazılır
+    error_notice.post("Tahta görüntüsü kaydedilemedi", "S1 sorusunun tahta resmi kaydedilemedi: diskte yer kalmadı.",
+                      key="tahta-goruntusu")
+    for _ in range(5):
+        error_notice.post("Düzen kaydedilemedi", "duzen.json yazılamadı: erişim izni yok.", key="duzen")
+    text = (tmp_path / "hatalar.log").read_text(encoding="utf-8")
+    assert "Tahta görüntüsü kaydedilemedi" in text and "S1 sorusunun tahta resmi kaydedilemedi" in text, text
+    assert "Düzen kaydedilemedi" in text and text.count("duzen.json yazılamadı") == 1, text
+
+
 def test_box_never_activates_or_raises_itself(qtbot, monkeypatch):
     """Kutu odağı çalmaz (kalem ve kısayollar tahtada kalır). Offscreen QPA gösterilen her pencereyi etkinleştirdiği
     için odak burada ölçülemez: kutuyu etkinleştiren ya da öne alan bir çağrı hiçbir yolda yapılmamalı (ilk gösterim,
@@ -235,7 +357,7 @@ def test_box_never_activates_or_raises_itself(qtbot, monkeypatch):
     qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)
     qtbot.addWidget(notice.box)
     notice.post("Düzen kaydedilemedi", "ikinci", "k2")
-    qtbot.waitUntil(lambda: notice.box.text() == "ikinci", timeout=2000)
+    qtbot.waitUntil(lambda: "ikinci" in notice.box.text(), timeout=2000)
     rec[0] = True
     qtbot.waitUntil(lambda: _visible_boxes() == [], timeout=2000)
     rec[0] = False
@@ -288,12 +410,18 @@ _APP_PRELUDE = textwrap.dedent('''
         QApplication.instance().quit()
 
     class Rec(NullRecorder):
-        """Kayıt gerçek toggle_recording yolundan başlar/durur; kaydın kaydedilme anı (FINALIZING) elle sürülür."""
+        """Kayıt gerçek toggle_recording yolundan başlar/durur; kaydın kaydedilme anı (FINALIZING) elle sürülür.
+        first_frame: start() anında görünen kutu sayısı (gerçek kaydedici ilk kareyi start() içinde yakalar)."""
         forced = None
+        first_frame = None
 
         @property
         def state(self):
             return self.forced or NullRecorder.state.fget(self)
+
+        def start(self, rect, fps=60):
+            Rec.first_frame = len(boxes())
+            NullRecorder.start(self, rect, fps)
 
     def make(args, fam):
         # Ayarlar geçici ini dosyasında: Windows kayıt defterine / macOS plist'ine dokunulmaz.
@@ -326,6 +454,7 @@ def build(args, fam, settings=None):
     def start():
         res["once"] = snapshot(win)
         win.toggle_recording(True)
+        res["ilk_karede_kutu"] = Rec.first_frame    # kaydedicinin ilk karesi (start() içinde)
         res["baslar_baslamaz"] = snapshot(win)      # yoklamayı beklemeden: kaydın ilk karelerine girmesin
         QTimer.singleShot(0, boom)
         later(lambda: "2 uyarı" in win.toolbar.alert_label.text(), lambda: QTimer.singleShot(wait, recording))
@@ -389,12 +518,13 @@ def _run_app(tmp_path, body: str, screens: list) -> dict:
 
 
 def test_app_routes_notices_to_the_toolbar_while_recording_full_screen(tmp_path):
-    """B-1 uçtan uca (gerçek app.main, 1920x1080 tek ekran, tam ekran): kayıttan önce açılmış kutu kayıt başlar
-    başlamaz (yoklamayı beklemeden, ilk karelere girmeden) gizlenir; kayıt sürerken yuvadaki hata kutu açmaz, araç
-    çubuğunun şeridine kısa satır yazılır; kayıt kaydedilirken (FINALIZING) de. Kayıt bitince şerit temizlenir, kutu
-    iki uyarıyla açılır ve kayıt düğmesini örtmez (eskiden sol altta, kayıt düğmesinin üstündeydi)."""
+    """B-1 uçtan uca (gerçek app.main, 1920x1080 tek ekran, tam ekran): kayıttan önce açılmış kutu kaydedici ilk
+    kareyi yakalamadan (start() içinde; P4: eskiden rozetin ilk tikinde, start()'tan sonra) gizlenir; kayıt sürerken
+    yuvadaki hata kutu açmaz, araç çubuğunun şeridine kısa satır yazılır; kayıt kaydedilirken (FINALIZING) de. Kayıt
+    bitince şerit temizlenir, kutu iki uyarıyla açılır ve kayıt düğmesini örtmez (eskiden sol altta, kayıt düğmesinin
+    üstündeydi)."""
     res = _run_app(tmp_path, _RECORDING_FULL_SCREEN, _FHD)
-    assert res["once"]["kutu"] == 1 and res["baslar_baslamaz"]["kutu"] == 0, res
+    assert res["once"]["kutu"] == 1 and res["ilk_karede_kutu"] == 0 and res["baslar_baslamaz"]["kutu"] == 0, res
     strip = "⚠ 2 uyarı — ayrıntı kayıt bitince"
     assert (res["kayitta"]["kutu"], res["kayitta"]["serit"]) == (0, strip), res["kayitta"]
     assert (res["kaydedilirken"]["kutu"], res["kaydedilirken"]["serit"]) == (0, strip), res["kaydedilirken"]

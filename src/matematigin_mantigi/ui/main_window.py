@@ -59,6 +59,20 @@ SAVING_KEY = "kayit-kaydediliyor"        # araç çubuğu uyarı şeridinde bu k
 SAVING_ALERT = "Kayıt kaydediliyor…"   # kapanış (ffmpeg + ses birleştirme) sürerken araç çubuğundaki uyarı
 CLOSING_ALERT = "Kayıt kaydediliyor… bitince pencere kapanacak"     # pencere kapatılmak istendi, kayıt bekleniyor
 STOP_AND_QUIT, KEEP_RECORDING = "Durdur ve çık", "Kayda devam et"   # kayıt sürerken kapatma sorusunun düğmeleri
+# Kayıt pencerelerinin metni kendi başına anlaşılır olmalı: Qt macOS'ta QMessageBox başlığını göstermez.
+RECORD_FAILED = "Kayıt düzgün tamamlanamadı."
+
+
+def _sound_text(audio_err: str) -> str:
+    return f"Kaydın sesinde sorun var: {audio_err}"
+
+
+def _record_error_text(err: str, audio_err: str | None) -> str:
+    """Kayıt hatası penceresinin metni: kaydedicinin hatası ve (atılmadan) ses uyarısı."""
+    text = f"{RECORD_FAILED}\n{err}"
+    if audio_err and audio_err not in err:
+        text += f"\n\n{_sound_text(audio_err)}"
+    return text
 
 
 class MainWindow(QMainWindow):
@@ -306,6 +320,9 @@ class MainWindow(QMainWindow):
         istendiyse bitince kapanacağını da söyler."""
         self.toolbar.set_alert(SAVING_KEY, CLOSING_ALERT if self._close_after_save else SAVING_ALERT)
 
+    # Kapanış kabul edildi (pencere kapanıyor; kamera ve ayarlar kapandı): app.main süreci bitirir.
+    closed = pyqtSignal()
+
     def toggle_recording(self, on: bool) -> None:
         if self._record_saving():               # düğme kilitli; R de kapanan kaydın yollarına karışmasın (#2)
             self._show_saving_alert()
@@ -369,23 +386,22 @@ class MainWindow(QMainWindow):
         self.toolbar.set_alert(SAVING_KEY, None)
         self.toolbar.record_button.setEnabled(True)
         self.toolbar.set_recording(False)
+        closing, self._close_after_save = self._close_after_save, False
         try:
-            self._report_record_result(path, exc)
+            if closing:
+                self._show_closing_summary(path, exc)
+            else:
+                self._report_record_result(path, exc)
         finally:
-            if self._close_after_save:       # pencere kapatılmak istenmişti: kayıt bitti, sonuç gösterildi
-                self._close_after_save = False
+            if closing:                      # pencere kapatılmak istenmişti: kayıt bitti, sonuç ve uyarılar gösterildi
                 self.close()
 
-    def _report_record_result(self, path, exc: str | None) -> None:
-        """Hata pencerede (o an kayıt yok); başarı ve ses uyarısı durum satırında."""
-        # Önce kaydedicinin anlamlı hatası (sebep, dosyaların yeri); işçinin ham istisna metni yalnız yedek.
-        err = getattr(self.recorder, "error", None) or exc
-        audio_err = getattr(self.recorder, "audio_error", None)
-        if err:
-            QMessageBox.warning(self, "Kayıt hatası", err)
-            return
-        if path is None:
-            return
+    def _record_problems(self, exc: str | None) -> tuple[str | None, str | None]:
+        """(hata, ses uyarısı). Önce kaydedicinin anlamlı hatası (sebep, dosyaların yeri); işçinin ham istisna metni
+        yalnız yedek."""
+        return getattr(self.recorder, "error", None) or exc, getattr(self.recorder, "audio_error", None)
+
+    def _record_details(self) -> list[str]:
         cap = getattr(self.recorder, "capture_fps", 0.0)
         parts = [f"yakalama ~{cap:.0f} kare/sn"] if cap else []
         off = getattr(self.recorder, "av_offset_ms", None)
@@ -394,6 +410,45 @@ class MainWindow(QMainWindow):
         res = getattr(self.recorder, "audio_result", None)
         if res is not None and (res.overflows or res.dropped_blocks):
             parts.append(f"ses taşması {res.overflows + res.dropped_blocks}")
+        return parts
+
+    def _show_closing_summary(self, path, exc: str | None) -> None:
+        """'Durdur ve çık': pencere kendisi kapanmadan önce TEK pencerede kaydın sonucu (dosya ya da hata, ses uyarısı)
+        ve görülmemiş bütün uyarılar (kayıt sırasında biriken, Tamam'a basılmamış); o an kayıt yok. Eskiden başarıda
+        sonuç durum satırına yazılıp pencere hemen kapanıyor, uyarılar hiç görünmüyordu; hatada uyarı kutusu 'Kayıt
+        hatası'nın çocuğu olup onunla siliniyor, gizlenen pencerenin altında yeniden açılıp Qt'nin otomatik çıkışını
+        iptal ediyordu (pencere kapanır, süreç çıkmazdı). Uyarılar kutudan alınır: pencere kapanırken açılmazlar."""
+        err, audio_err = self._record_problems(exc)
+        parts: list[str] = []
+        if err:
+            parts.append(_record_error_text(err, audio_err))
+        else:
+            if path is not None:
+                details = self._record_details()
+                parts.append(f"Kayıt kaydedildi: {path}" + ("\n" + " · ".join(details) if details else ""))
+            if audio_err:
+                parts.append(_sound_text(audio_err))
+        notices = error_notice.take_all()
+        if notices:
+            head = "Uyarı:" if len(notices) == 1 else f"{len(notices)} uyarı:"
+            parts.append(f"{head}\n\n{error_notice.summary_text(notices)}")
+        if not parts:
+            return
+        text = "\n\n".join(parts)
+        if err or audio_err or notices:
+            QMessageBox.warning(self, "Kayıt sonucu", text)
+        else:
+            QMessageBox.information(self, "Kayıt kaydedildi", text)
+
+    def _report_record_result(self, path, exc: str | None) -> None:
+        """Hata pencerede (o an kayıt yok); başarı ve ses uyarısı durum satırında."""
+        err, audio_err = self._record_problems(exc)
+        if err:
+            QMessageBox.warning(self, "Kayıt hatası", err)
+            return
+        if path is None:
+            return
+        parts = self._record_details()
         if audio_err:
             parts.append(f"UYARI: {audio_err}")
         self.work_area.set_status(f"Kayıt kaydedildi: {path}" + (" · " + " · ".join(parts) if parts else ""))
@@ -544,9 +599,10 @@ class MainWindow(QMainWindow):
     def closeEvent(self, e):
         """Pencere kapatma (pencere düğmesi, close(), QApplication.quit; macOS'ta ⌘Q da pencerelere bu olayı gönderir).
         Kayıt sürerken önce sorulur. Kayıt kaydedilirken pencere kapanmaz: olay yok sayılır, kapanış arka planda
-        biter, sonuç gösterilir ve pencere kendisi kapanır (_on_record_stopped). Çalışan _StopWorker hiçbir koşulda
-        yok edilmez: Qt süreci 'QThread: Destroyed while thread is still running' ile düşürür, kayıt birleşmeden
-        kalırdı. Gerçek kapanışta kamera ve ayarlar, kaydı durdurmak patlasa da her koşulda kapanır."""
+        biter, sonuç ve görülmemiş uyarılar tek pencerede gösterilir ve pencere kendisi kapanır (_on_record_stopped).
+        Çalışan _StopWorker hiçbir koşulda yok edilmez: Qt süreci 'QThread: Destroyed while thread is still running'
+        ile düşürür, kayıt birleşmeden kalırdı. Gerçek kapanışta kamera ve ayarlar, kaydı durdurmak patlasa da her
+        koşulda kapanır; ardından `closed` yayılır (app.main süreci bitirir)."""
         if self.recorder.state is RecorderState.RECORDING and not self._record_saving():
             if not self._confirm_stop_and_quit():
                 e.ignore()
@@ -569,6 +625,7 @@ class MainWindow(QMainWindow):
         finally:
             self.settings.sync()
         super().closeEvent(e)
+        self.closed.emit()
 
     def _confirm_stop_and_quit(self) -> bool:
         """Kayıt sürerken kapatma sorusu. Varsayılan ve Esc 'Kayda devam et': yanlışlıkla basılan ⌘Q dersi kesmesin."""

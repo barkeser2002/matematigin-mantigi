@@ -222,6 +222,84 @@ def test_box_destroyed_with_its_temporary_modal_parent_is_shown_again(qtbot):
     assert _visible_boxes() == []
 
 
+# --- kapanış: gizli/kapanmış ana pencerenin altında pencere açılmaz; uyarılar hatalar.log'da (P1) --------------
+def test_no_box_opens_under_a_hidden_main_window_and_the_box_closes_with_it(qtbot):
+    """Ana pencere kapanınca görünen kutu da kapanır; ana pencere gizliyken gelen uyarı pencere açmaz (gizli pencerenin
+    çocuğu olarak gösterilen kutu Qt'nin otomatik çıkışını kuyruktan siliyordu: pencere kapanıyor, süreç çıkmıyordu).
+    Yoklama da durur. Pencere yeniden gösterilirse (ör. kapanış iptal) Tamam'a basılmamış uyarılar geri gelir."""
+    notice, anchor = _notice(qtbot)
+    rec, alerts = _route(notice)
+    notice.post("Beklenmeyen hata", "kapanıştan önce görünen", "k1")
+    qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)
+    qtbot.addWidget(notice.box)
+    anchor.close()
+    assert _visible_boxes() == []
+    notice.post("Düzen kaydedilemedi", "pencere kapalıyken gelen", "k2")
+    for _ in range(3):
+        QApplication.processEvents()
+    assert _visible_boxes() == [] and not notice._poll_timer.isActive()
+    anchor.show()
+    qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)
+    qtbot.addWidget(notice.box)
+    text = notice.box.text()
+    assert "kapanıştan önce görünen" in text and "pencere kapalıyken gelen" in text, text
+
+
+def test_box_lost_with_a_modal_is_not_shown_again_under_a_closed_main_window(qtbot):
+    """'Kayıt hatası' modalının çocuğu olan kutu modalla silinir; ardından pencere kapanırsa kutu gizli pencerenin
+    altında yeniden açılmaz (açılıyordu: Qt'nin kuyruktaki çıkışı silinip süreç görünmez kalıyordu, v04)."""
+    notice, anchor = _notice(qtbot)
+    modal = QMessageBox(QMessageBox.Icon.Warning, "", "Kayıt hatası", QMessageBox.StandardButton.Ok, anchor)
+    modal.setModal(True); modal.show()
+    qtbot.waitUntil(lambda: QApplication.activeModalWidget() is modal, timeout=2000)
+    notice.post("Beklenmeyen hata", "modalın çocuğu", "k1")
+    qtbot.waitUntil(lambda: _box_shown(notice) and notice.box.parent() is modal, timeout=2000)
+    sip.delete(modal)                          # statik warning() exec bitince kutuyu da siler ...
+    anchor.close()                             # ... ve pencere hemen kapanır (_close_after_save)
+    for _ in range(5):
+        QApplication.processEvents()
+    assert _visible_boxes() == []
+
+
+def test_take_all_hands_over_shown_and_waiting_notices_and_closes_the_box(qtbot):
+    """Kapanış özeti için: Tamam'a basılmamış (görünen) ve kayıt sırasında biriken uyarıların hepsi geliş sırasıyla
+    verilir ve bırakılır: kutu kapanır ve geri gelmez, şerit temizlenir, yoklama durur."""
+    notice, _ = _notice(qtbot)
+    rec, alerts = _route(notice)
+    notice.post("Düzen kaydedilemedi", "görünen kutuda", "k1")
+    qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)
+    qtbot.addWidget(notice.box)
+    rec[0] = True
+    notice.post("Tahta görüntüsü kaydedilemedi", "kayıt sırasında", "k2")
+    qtbot.waitUntil(lambda: alerts[-1:] == ["⚠ 2 uyarı — ayrıntı kayıt bitince"], timeout=2000)
+    rec[0] = False
+    assert notice.take_all() == [("Düzen kaydedilemedi", "görünen kutuda"),
+                                 ("Tahta görüntüsü kaydedilemedi", "kayıt sırasında")]
+    assert alerts[-1] is None and _visible_boxes() == [] and not notice._poll_timer.isActive()
+    qtbot.wait(3 * POLL_MS)
+    assert _visible_boxes() == [] and notice.take_all() == []
+    notice.post("Düzen kaydedilemedi", "görünen kutuda", "k1")          # özette gösterildi: yeniden gelmez
+    qtbot.wait(50)
+    assert _visible_boxes() == []
+
+
+def test_posted_notices_are_written_to_the_error_log_without_flooding_it(tmp_path, monkeypatch):
+    """Kullanıcıya gösterilen her uyarı başlığı ve metniyle hatalar.log'a da yazılır: kutu/özet okunmadan kapansa da
+    sonradan ne olduğu görülür (eskiden 'Tahta görüntüsü kaydedilemedi' günlükte hiç yoktu). Günlük aynı türü oturumda
+    bir kez yazar: her uyarı anahtarı kendi girdisini alır (tek türde ikinci uyarı hiç yazılmazdı), aynı uyarının
+    tekrarı günlüğü doldurmaz."""
+    from matematigin_mantigi.core import crash_log
+    monkeypatch.setattr(crash_log, "_active", crash_log.CrashLog(tmp_path / "hatalar.log"))
+    monkeypatch.setattr(error_notice, "_instance", None)               # kutu yok (stderr); günlük yine yazılır
+    error_notice.post("Tahta görüntüsü kaydedilemedi", "S1 sorusunun tahta resmi kaydedilemedi: diskte yer kalmadı.",
+                      key="tahta-goruntusu")
+    for _ in range(5):
+        error_notice.post("Düzen kaydedilemedi", "duzen.json yazılamadı: erişim izni yok.", key="duzen")
+    text = (tmp_path / "hatalar.log").read_text(encoding="utf-8")
+    assert "Tahta görüntüsü kaydedilemedi" in text and "S1 sorusunun tahta resmi kaydedilemedi" in text, text
+    assert "Düzen kaydedilemedi" in text and text.count("duzen.json yazılamadı") == 1, text
+
+
 def test_box_never_activates_or_raises_itself(qtbot, monkeypatch):
     """Kutu odağı çalmaz (kalem ve kısayollar tahtada kalır). Offscreen QPA gösterilen her pencereyi etkinleştirdiği
     için odak burada ölçülemez: kutuyu etkinleştiren ya da öne alan bir çağrı hiçbir yolda yapılmamalı (ilk gösterim,

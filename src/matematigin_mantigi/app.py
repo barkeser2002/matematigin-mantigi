@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QPoint, QRect, QSize, Qt, qInstallMessageHandler
+from PyQt6.QtCore import QPoint, QRect, QSize, Qt, QTimer, qInstallMessageHandler
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
@@ -120,5 +120,10 @@ def main(argv: list[str] | None = None) -> int:
     app.setStyleSheet(theme.build_stylesheet(fam))
     win = build_window(parse_args(argv), fam)
     _wire_notice(notice, win)
+    # Ana pencere kapanınca süreç biter. Qt'nin kendi çıkışı (son pencere kapandı) kuyruğa konan bir olaydır; o
+    # işlenmeden gösterilen herhangi bir pencere onu kuyruktan siler: 'Durdur ve çık'tan sonra gizli ana pencerenin
+    # çocuğu olarak yeniden açılan uyarı kutusu pencereyi kapatıp süreci görünmez bırakıyordu (Windows'ta arka plan
+    # süreci). exit() pencere sormaz; kamera ve ayarlar closeEvent'te kapandı.
+    win.closed.connect(lambda: QTimer.singleShot(0, lambda: app.exit(0)))
     win.show()
     return app.exec()

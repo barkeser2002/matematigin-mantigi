@@ -309,5 +309,8 @@ def test_panel_shows_understandable_message_when_frames_keep_failing(qtbot):
     with qtbot.waitSignal(panel.worker.cameraError, timeout=5000):
         panel.start()
     qtbot.waitUntil(lambda: "Kamera görüntüsü alınamadı" in panel.view.placeholder_text, timeout=2000)
-    assert not panel.has_camera and Broken.released
+    # Kaynak, hata sinyalinden SONRA iş parçacığının finally'sinde bırakılır: GUI mesajı gösterdiğinde henüz
+    # bırakılmamış olabilir (Windows CI'da yarış). Bırakılmayı bekle.
+    qtbot.waitUntil(lambda: Broken.released, timeout=2000)
+    assert not panel.has_camera
     panel.shutdown()

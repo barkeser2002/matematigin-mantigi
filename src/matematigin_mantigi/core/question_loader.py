@@ -8,6 +8,7 @@ import re
 import secrets
 import shutil
 import stat
+import time
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -25,6 +26,8 @@ _LINE_BREAK_CONTROLS = str.maketrans({"\x0b": "\n", "\x0c": "\n"})   # Word/Powe
 # XML 1.0'ın taşıyamadığı karakterler: C0 denetim karakterleri (sekme, satır sonu ve satır başı dışında), tek başına
 # vekil (U+D800-U+DFFF), U+FFFE ve U+FFFF. openpyxl yalnız C0'ı reddeder; kalanını yazar ama dosya bir daha okunamaz.
 _XML_ILLEGAL_RE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
+REPLACE_RETRY_S = (0.1, 0.1, 0.1)   # os.replace PermissionError'da yeniden deneme aralıkları (Windows anlık kilidi)
+STALE_TMP_S = 3600                   # bundan eski '.<ad>.<onaltılık>.tmp' yarıda kalmış bir yazımın artığıdır
 
 
 class QuestionTemplateError(ValueError):
@@ -53,12 +56,14 @@ def backup_path(path: Path) -> Path:
     return path.with_name(path.name + ".bak")
 
 
-def _replace_atomically(target: Path, write: Callable[[Path], object],
-                        before_replace: Callable[[Path], object] | None = None) -> None:
+def replace_atomically(target: Path, write: Callable[[Path], object],
+                       before_replace: Callable[[Path], object] | None = None) -> None:
     """write(tmp) hedefin klasöründeki geçici bir dosyaya yazar; before_replace(tmp) (geri okuma, yedek) de geçerse
     hedef os.replace ile tek adımda değişir. Herhangi bir adımda hata olursa (yazım yarıda kaldı: dolu disk, çıkarılan
     USB; geri okunamadı) hedef eski hâlinde kalır, geçici dosya silinir. Windows'ta hedef başka bir programda (Excel)
-    açıksa os.replace PermissionError verir; hedef yine değişmez."""
+    açıksa os.replace PermissionError verir (kısa yeniden denemelerden sonra); hedef yine değişmez. Soru dosyası, yedeği
+    ve duzen.json bununla yazılır; başarılı yazımdan sonra hedefin eski geçici dosya artıkları temizlenir."""
+    target = Path(target)
     tmp = target.with_name(f".{target.name}.{secrets.token_hex(4)}.tmp")
     try:
         write(tmp)
@@ -67,11 +72,42 @@ def _replace_atomically(target: Path, write: Callable[[Path], object],
         if os.name == "posix" and target.exists():
             with contextlib.suppress(OSError):      # izinler eski dosyanınki gibi kalsın
                 shutil.copymode(target, tmp)
-        os.replace(tmp, target)
+        _replace_retrying(tmp, target)
     except BaseException:
         with contextlib.suppress(OSError):
             tmp.unlink(missing_ok=True)
         raise
+    _remove_stale_temps(target)
+
+
+def _replace_retrying(src: Path, dst: Path) -> None:
+    """os.replace; PermissionError'da REPLACE_RETRY_S aralarıyla yeniden dener. Windows'ta eşitleme istemcisi
+    (OneDrive) ya da virüs tarayıcı (Defender) hedefi ya da yeni yazılan dosyayı birkaç on milisaniye açık tutabilir;
+    kalıcı kilitte (Excel) son PermissionError gider. Toplam bekleme ~0,3 sn: arayüz donmaz."""
+    for delay in REPLACE_RETRY_S:
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            time.sleep(delay)
+    os.replace(src, dst)
+
+
+def _remove_stale_temps(target: Path) -> None:
+    """Hedefin yarıda kalmış eski geçici dosyalarını (.<ad>.<8 onaltılık>.tmp; çökme, elektrik kesintisi ya da
+    Windows'ta silinemeyen artık) siler. Yalnız STALE_TMP_S'den eskiler: aynı anda yazan başka bir pencerenin geçici
+    dosyasına dokunulmaz. Hata olursa sessizce geçer (yazım zaten tamamlandı)."""
+    prefix, now = f".{target.name}.", time.time()
+    with contextlib.suppress(OSError):
+        for leftover in target.parent.iterdir():
+            name = leftover.name
+            if not (name.startswith(prefix) and name.endswith(".tmp")
+                    and re.fullmatch(r"[0-9a-f]{8}", name[len(prefix):-len(".tmp")])):
+                continue
+            with contextlib.suppress(OSError):
+                if leftover.is_file() and now - leftover.stat().st_mtime > STALE_TMP_S:
+                    _make_writable(leftover)
+                    leftover.unlink()
 
 
 def _check_written(tmp: Path, folder: Path, expected: int) -> None:
@@ -126,8 +162,8 @@ def write_questions(path: Path, questions: Sequence[Question]) -> Path:
             bak = backup_path(path)
             _make_writable(bak)
             # copyfile: yedek soru dosyasının salt okunur özniteliğini/iznini almaz (copy2 alıyordu; Q3).
-            _replace_atomically(bak, lambda bak_tmp: shutil.copyfile(path, bak_tmp))
-    _replace_atomically(path, wb.save, before_replace=check_then_back_up)
+            replace_atomically(bak, lambda bak_tmp: shutil.copyfile(path, bak_tmp))
+    replace_atomically(path, wb.save, before_replace=check_then_back_up)
     return path
 
 

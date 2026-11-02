@@ -27,6 +27,10 @@ class QuestionTemplateError(ValueError):
     pass
 
 
+class EmptyTemplateError(QuestionTemplateError):
+    """Şablon okunabildi ama hiç soru yok (boş şablon): editör soruları güvenle ona yazabilir."""
+
+
 def clean_text(text: str) -> str:
     """Excel hücresine yazılamayan kontrol karakterlerini temizler (openpyxl bunlarda IllegalCharacterError
     fırlatır): dikey sekme ve sayfa sonu (Word/PowerPoint'ten kopyalanan satır sonları) satır sonu olur, gerisi
@@ -167,5 +171,5 @@ def load_questions(path: Path) -> list[Question]:
                                   options, image))
     wb.close()
     if not questions:
-        raise QuestionTemplateError("Şablonda hiç soru yok")
+        raise EmptyTemplateError("Şablonda hiç soru yok")
     return questions

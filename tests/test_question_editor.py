@@ -376,6 +376,44 @@ def test_unexpected_save_error_shows_a_message_and_keeps_the_dialog(qtbot, tmp_p
     assert d.isVisible() and saved == []
 
 
+# --- okunamayan soru dosyasının üzerine yazılmaz (#4) ---------------------------------------------------------
+@pytest.mark.parametrize("kind", ["yarim", "sutun"])
+def test_save_does_not_overwrite_an_unreadable_question_file(qtbot, tmp_path, monkeypatch, kind):
+    """#4: açılışta okunamayan soru dosyası (uygulama örnek sorularla açılır) editörde Kaydet'le örnek soruların
+    altında kalıyordu; öğretmenin gerçek soruları o dosyada olabilir (yazımı yarıda kalmış xlsx, sütunları farklı
+    kendi çizelgesi). Kaydet o dosyanın üzerine yazmaz, sebebi ve ne yapılacağını söyler, pencere açık kalır;
+    öğretmen dosyayı düzeltip ya da kaldırıp yeniden Kaydet'e basınca yazılır."""
+    path = tmp_path / "sorular_sablon.xlsx"
+    if kind == "yarim":
+        write_questions(path, SAMPLE_QUESTIONS)
+        path.write_bytes(path.read_bytes()[:2289])
+    else:
+        wb = openpyxl.Workbook()
+        wb.active.append(["id", "soru", "ogretmen_notu"]); wb.active.append(["S1", "Gerçek soru", "not"])
+        wb.save(path)
+    before = path.read_bytes()
+    shown = _capture_warnings(monkeypatch)
+    d, _ = _dialog(qtbot, tmp_path)
+    saved = []
+    d.saved.connect(saved.append)
+    d.save_button.click()
+    assert shown and shown[0][0] == "Kaydedilmedi" and "sorular_sablon.xlsx okunamıyor" in shown[0][1]
+    assert path.read_bytes() == before and d.isVisible() and saved == []
+    path.rename(tmp_path / "eski_sorular.xlsx")                      # öğretmen dosyayı klasörden kaldırdı
+    d.save_button.click()
+    assert saved and [q.id for q in load_questions(path)] == ["S1", "S2", "S3"]
+
+
+def test_save_fills_an_empty_template(qtbot, tmp_path, monkeypatch):
+    """Boş şablon (başlık satırı var, soru yok) okunamayan dosya sayılmaz: editör soruları ona yazar."""
+    from matematigin_mantigi.core.question_loader import write_template
+    path = write_template(tmp_path / "sorular_sablon.xlsx", with_samples=False)
+    shown = _capture_warnings(monkeypatch)             # yanlış ret gerçek modal kutu açıp testi kilitlemesin
+    d, _ = _dialog(qtbot, tmp_path)
+    d.save_button.click()
+    assert shown == [] and len(load_questions(path)) == 3
+
+
 # Kaydet'in gerçek hâli: yazımın ORTASINDA işletim sistemi hatası (RLIMIT_FSIZE, write() EFBIG). Ayrı süreçte.
 _SAVE_DISK_FULL = '''
 import json, random, resource, string, sys

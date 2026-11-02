@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import argparse
 import sys
-import zipfile
 from pathlib import Path
 
-from openpyxl.utils.exceptions import InvalidFileException
 from PyQt6.QtCore import QPoint, QRect, QSize, Qt, qInstallMessageHandler
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -13,14 +11,14 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from matematigin_mantigi import paths
 from matematigin_mantigi.core import crash_log
 from matematigin_mantigi.core.models import SAMPLE_QUESTIONS
-from matematigin_mantigi.core.question_loader import (QuestionTemplateError, backup_path, ensure_template,
-                                                      load_questions)
+from matematigin_mantigi.core.question_loader import backup_path, ensure_template, load_questions
 from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState
 from matematigin_mantigi.core.session_store import SessionStore
 from matematigin_mantigi.core.settings import AppSettings
 from matematigin_mantigi.ui import error_notice, theme
 from matematigin_mantigi.ui.camera_worker import OpenCvSource
 from matematigin_mantigi.ui.main_window import MainWindow
+from matematigin_mantigi.ui.question_editor import describe_load_error
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -32,25 +30,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return p.parse_args(argv[1:])
 
 
-def _unreadable_reason(err: Exception) -> str:
-    if isinstance(err, QuestionTemplateError):
-        return str(err)
-    if isinstance(err, OSError):
-        return error_notice.describe_os_error(err)
-    if isinstance(err, (zipfile.BadZipFile, KeyError, InvalidFileException)):
-        return "dosya bozuk ya da yazımı yarıda kalmış; Excel dosyası olarak açılamıyor"
-    return f"{type(err).__name__}: {err}"
-
-
 def load_questions_or_samples(template: Path):
     """Soru dosyasını yükler (yoksa örnek şablonu yazar). Dosya okunamazsa (bozuk, yarım kalmış, eksik sütun, okunamayan
     yol; her türlü hata) dosya adı ve sebep söylenir, uygulama örnek sorularla açılır (#17): yalnız
-    QuestionTemplateError yakalandığı için yarım kalmış bir xlsx uygulamayı bir daha hiç açılmaz yapıyordu."""
+    QuestionTemplateError yakalandığı için yarım kalmış bir xlsx uygulamayı bir daha hiç açılmaz yapıyordu. Editör
+    böyle bir dosyanın üzerine yazmaz (#4)."""
     try:
         return load_questions(ensure_template(template))
     except Exception as err:  # noqa: BLE001 - açılış hiçbir soru dosyası yüzünden düşmez
         crash_log.log_handled(err, "soru dosyası")
-        text = f"Soru dosyası okunamadı: {template.name}\nKlasör: {template.parent}\nSebep: {_unreadable_reason(err)}"
+        text = f"Soru dosyası okunamadı: {template.name}\nKlasör: {template.parent}\nSebep: {describe_load_error(err)}"
         bak = backup_path(template)
         if bak.is_file():
             text += f"\n\nÖnceki sürümün yedeği: {bak.name} (adını {template.name} yapıp uygulamayı yeniden açın)."

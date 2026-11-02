@@ -6,6 +6,7 @@ import zipfile
 from pathlib import Path
 from typing import Sequence
 
+from openpyxl.utils.exceptions import InvalidFileException
 from PyQt6.QtCore import QRegularExpression, Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap, QRegularExpressionValidator
 from PyQt6.QtWidgets import (QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
@@ -14,10 +15,22 @@ from PyQt6.QtWidgets import (QApplication, QDialog, QFileDialog, QFrame, QHBoxLa
 
 from matematigin_mantigi.core import crash_log
 from matematigin_mantigi.core.models import OPTION_LETTERS, Question
-from matematigin_mantigi.core.question_loader import clean_text, save_question_image, write_questions
+from matematigin_mantigi.core.question_loader import (EmptyTemplateError, QuestionTemplateError, clean_text,
+                                                      load_questions, save_question_image, write_questions)
 from matematigin_mantigi.ui import theme
 from matematigin_mantigi.ui.error_notice import describe_os_error
 from matematigin_mantigi.ui.theme import FontFamilies
+
+
+def describe_load_error(err: Exception) -> str:
+    """Soru dosyası okunamadığında öğretmenin anlayacağı kısa sebep (açılış uyarısı ve editör aynı metni verir)."""
+    if isinstance(err, QuestionTemplateError):
+        return str(err)
+    if isinstance(err, OSError):
+        return describe_os_error(err)
+    if isinstance(err, (zipfile.BadZipFile, KeyError, InvalidFileException)):
+        return "dosya bozuk ya da yazımı yarıda kalmış; Excel dosyası olarak açılamıyor"
+    return f"{type(err).__name__}: {err}"
 
 
 def _display_id(raw: str, row: int) -> str:
@@ -325,6 +338,15 @@ class QuestionEditorDialog(QDialog):
                 QMessageBox.warning(self, "Eksik soru", f"{i + 1}. sıradaki sorunun metni boş; lütfen doldurun.")
                 self.list_widget.setCurrentRow(i)
                 return
+        problem = self._unreadable_target()
+        if problem is not None:
+            name = self.questions_path.name
+            QMessageBox.warning(self, "Kaydedilmedi",
+                                f"{name} okunamıyor: {problem}.\n\nİçindeki sorular kaybolmasın diye üzerine "
+                                f"yazılmadı. Dosyayı Excel'de düzeltin ya da klasöründen kaldırın (önceki sürümün "
+                                f"yedeği varsa {name}.bak), sonra yeniden Kaydet'e basın.\n\nDüzenlemeleriniz bu "
+                                "pencerede duruyor.")
+            return
         try:
             write_questions(self.questions_path, self.questions)
         except (OSError, zipfile.BadZipFile, KeyError, ValueError) as err:
@@ -335,6 +357,20 @@ class QuestionEditorDialog(QDialog):
             return
         self.saved.emit(list(self.questions))
         self.accept()
+
+    def _unreadable_target(self) -> str | None:
+        """Kaydedilecek dosya var ama içeriği okunamıyorsa sebebi (#4). Açılışta okunamayıp uygulamanın örnek
+        sorularla açıldığı bir dosyanın üzerine yazılmaz: öğretmenin gerçek soruları onda olabilir. Boş şablon
+        okunabilir sayılır; okuma sırasındaki dosya hatası (ör. kilit) içerik sorunu değildir, yazım yolu bildirir."""
+        if not self.questions_path.exists():
+            return None
+        try:
+            load_questions(self.questions_path)
+        except (EmptyTemplateError, OSError):
+            return None
+        except Exception as err:  # noqa: BLE001 - içeriği okunamayan her dosya korunur
+            return describe_load_error(err)
+        return None
 
     def _save_error_text(self, err: Exception) -> str:
         head = f"Soru dosyası kaydedilemedi: {self.questions_path.name}"

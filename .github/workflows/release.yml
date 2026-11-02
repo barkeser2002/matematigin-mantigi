@@ -1,7 +1,8 @@
 name: Release (Windows + macOS)
 
 # main'e her push'ta Windows .exe ve macOS .app üretir, ikisini bir GitHub Release'e ekler.
-# Elle de çalıştırılabilir (Actions > Release > Run workflow).
+# Elle de çalıştırılabilir (Actions > Release > Run workflow). Daldan elle çalıştırılırsa yalnız derler
+# (artifact'ler run sayfasında); Release yalnız main'den yayınlanır. Sürümler constraints.txt'ten gelir.
 on:
   push:
     branches: [main]
@@ -53,6 +54,7 @@ jobs:
 
   release:
     needs: [windows, macos]
+    if: github.ref == 'refs/heads/main'      # dal derlemeleri Release yayınlamaz
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

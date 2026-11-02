@@ -10,8 +10,8 @@ $py = if ($env:PYTHON) { $env:PYTHON } else { "python" }
 if (-not (Test-Path .venv)) {
     & $py -m venv .venv
 }
-& .\.venv\Scripts\python.exe -m pip install --upgrade pip wheel
-& .\.venv\Scripts\python.exe -m pip install -e ".[dev,pdf]" pyinstaller
+& .\.venv\Scripts\python.exe -m pip install --upgrade pip wheel -c constraints.txt
+& .\.venv\Scripts\python.exe -m pip install -e ".[dev,pdf]" pyinstaller -c constraints.txt   # sürümler constraints.txt'ten
 & .\.venv\Scripts\python.exe -c "import imageio_ffmpeg; print('ffmpeg:', imageio_ffmpeg.get_ffmpeg_exe())"
 
 $env:QT_QPA_PLATFORM = "offscreen"

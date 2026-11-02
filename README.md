@@ -2,7 +2,7 @@
 
 ## Çalıştırma
 
-    python -m pip install -e ".[dev,pdf]"
+    python -m pip install -e ".[dev,pdf]" -c constraints.txt
     python -m matematigin_mantigi              # kamera 0, ./sorular_sablon.xlsx, ./duzen.json
     python -m matematigin_mantigi --kamera 1
     python -m matematigin_mantigi --kamera-yok --sorular C:\yol\sorular.xlsx
@@ -125,8 +125,13 @@ Yerelde: `powershell -ExecutionPolicy Bypass -File windows\build_win.ps1` — `.
 
 `main`'e her push'ta `.github/workflows/release.yml` **Windows `.exe`** ve **macOS `.app`** derler, ikisini bir
 GitHub Release'e (`build-<numara>`) ekler. Elle: Actions > **Release** > Run workflow (ya da `gh workflow run release.yml`).
+Bir daldan elle çalıştırılırsa yalnız derler, Release yayınlamaz (dalı main'e almadan önce iki platformu denemek için).
 Yalnız Mac için `.github/workflows/mac.yml` de var. İndirdikten sonra Windows: klasörü kopyala, `.exe` çalıştır;
 macOS: `.app`'i sağ tık > Aç (imzasız).
+
+Kütüphane sürümleri `constraints.txt` dosyasında sabittir; derleme betikleri ve CI `pip install -c constraints.txt`
+ile kurar. Yerelde de aynısı: `python -m pip install -e ".[dev,pdf]" -c constraints.txt`. Sürüm yükseltmek için
+dosyayı değiştir, testleri koş, dalda iki platformu derle, sonra main'e al.
 
 ## macOS (hedef makine, XP-Pen)
 

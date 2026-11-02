@@ -1,0 +1,44 @@
+# Sabit sürüm listesi: yerel kurulum, build_mac.sh, build_win.ps1 ve CI bununla kurar.
+# Kaynak: son yeşil release (build-2, 12.09.2026, CI run 34678489460) Windows + macOS işlerinde kurulan sürümler.
+# Bir sürümü yükseltmek: burada değiştir, testleri koş (en az recorder testleri gerçek ffmpeg'le), dalda
+# Actions > Release > Run workflow ile iki platformu derle; yeşilse main'e al.
+# Uyarı: imageio-ffmpeg 0.8.0 (ffmpeg 9.0.2) düz WAV'ı tanımıyor; mux_args'taki "-f wav" bunu karşılar,
+# yine de sürüm buradan bilerek yükseltilir.
+
+# Uygulama
+PyQt6==6.11.0
+PyQt6-Qt6==6.11.2
+PyQt6-sip==13.12.0
+opencv-python==5.0.0.93
+numpy==2.5.3
+openpyxl==3.1.5
+et-xmlfile==2.0.0
+mss==10.2.0
+imageio-ffmpeg==0.6.0
+sounddevice==0.5.6
+cffi==2.1.1
+pycparser==3.0
+pymupdf==1.28.2
+
+# Test
+pytest==9.1.1
+pytest-qt==4.5.0
+pluggy==1.6.0
+iniconfig==2.3.0
+packaging==26.3
+pygments==2.21.0
+colorama==0.4.6
+typing_extensions==4.16.0
+
+# Paketleme (PyInstaller; macholib yalnız macOS, pefile ve pywin32-ctypes yalnız Windows'ta kurulur)
+pyinstaller==6.22.2
+pyinstaller-hooks-contrib==2026.7
+altgraph==0.17.5
+macholib==1.16.4
+pefile==2024.8.26
+pywin32-ctypes==0.2.3
+
+# Kurulum araçları
+pip==26.2.1
+setuptools==84.0.0
+wheel==0.48.0

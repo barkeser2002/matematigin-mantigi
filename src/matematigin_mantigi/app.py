@@ -4,20 +4,21 @@ import argparse
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QRect, Qt, qInstallMessageHandler
+from PyQt6.QtCore import QPoint, QRect, QSize, Qt, qInstallMessageHandler
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from matematigin_mantigi import paths
 from matematigin_mantigi.core import crash_log
 from matematigin_mantigi.core.models import SAMPLE_QUESTIONS
-from matematigin_mantigi.core.question_loader import QuestionTemplateError, ensure_template, load_questions
-from matematigin_mantigi.core.recorder import MssFfmpegRecorder
+from matematigin_mantigi.core.question_loader import backup_path, ensure_template, load_questions
+from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState
 from matematigin_mantigi.core.session_store import SessionStore
 from matematigin_mantigi.core.settings import AppSettings
 from matematigin_mantigi.ui import error_notice, theme
 from matematigin_mantigi.ui.camera_worker import OpenCvSource
 from matematigin_mantigi.ui.main_window import MainWindow
+from matematigin_mantigi.ui.question_editor import describe_load_error
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -30,10 +31,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def load_questions_or_samples(template: Path):
+    """Soru dosyasını yükler (yoksa örnek şablonu yazar). Dosya okunamazsa (bozuk, yarım kalmış, eksik sütun, okunamayan
+    yol; her türlü hata) dosya adı ve sebep söylenir, uygulama örnek sorularla açılır (#17): yalnız
+    QuestionTemplateError yakalandığı için yarım kalmış bir xlsx uygulamayı bir daha hiç açılmaz yapıyordu. Editör
+    böyle bir dosyanın üzerine yazmaz (#4)."""
     try:
         return load_questions(ensure_template(template))
-    except QuestionTemplateError as err:
-        QMessageBox.warning(None, "Soru şablonu", f"{err}\n\nÖrnek sorularla devam ediliyor.")
+    except Exception as err:  # noqa: BLE001 - açılış hiçbir soru dosyası yüzünden düşmez
+        crash_log.log_handled(err, "soru dosyası")
+        text = f"Soru dosyası okunamadı: {template.name}\nKlasör: {template.parent}\nSebep: {describe_load_error(err)}"
+        bak = backup_path(template)
+        if bak.is_file():
+            text += f"\n\nÖnceki sürümün yedeği: {bak.name} (adını {template.name} yapıp uygulamayı yeniden açın)."
+        QMessageBox.warning(None, "Soru dosyası okunamadı", f"{text}\n\nÖrnek sorularla devam ediliyor.")
         return list(SAMPLE_QUESTIONS)
 
 
@@ -72,6 +82,26 @@ def _recorded_rect(win: MainWindow) -> QRect:
     return QRect(x, y, w, h)
 
 
+def _toolbar_bottom(win: MainWindow) -> QRect:
+    """Araç çubuğunun altı (uyarı şeridi, kayıt düğmesi ve yazısı; ekran koordinatı): uyarı kutusu burayı örtmez,
+    öğretmen kaydı başlatıp durdurabilsin ve şeridi görsün."""
+    tb = win.toolbar
+    top = tb.alert_label.y() if tb.alert_label.isVisible() else tb.record_button.y()
+    return QRect(tb.mapToGlobal(QPoint(0, top)), QSize(tb.width(), tb.height() - top))
+
+
+def _wire_notice(notice: error_notice.ErrorNotice, win: MainWindow) -> None:
+    """Uyarı kutusunu pencereye bağlar: kayıt dışında sahneye ve araç çubuğunun altına değmeyen yere konur; kayıt
+    sürerken (kaydedilirken de) hiç açılmaz, araç çubuğunun şeridine yazar, kayıt bitince açılır. Kaydedici
+    testlerde/ayarlarda değişebildiği için durum her seferinde pencereden okunur."""
+    notice.set_anchor(win, avoid=lambda: _recorded_rect(win), keep_clear=lambda: _toolbar_bottom(win))
+    notice.set_recording_route(is_recording=lambda: win.recorder.state is not RecorderState.IDLE,
+                               show_alert=lambda text: win.toolbar.set_alert(error_notice.ALERT_KEY, text))
+    # Kayıt rozeti kayıt başlar başlamaz (sonra saniyede bir) tik atar: kayıttan önce açılmış kutu yoklamayı
+    # beklemeden gizlenir, kaydın ilk karelerine girmez.
+    win.badge.ticked.connect(lambda _seconds: notice.recording_changed())
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
     # Önce hata kancası: açılış hataları da hatalar.log'a düşer; yuvadaki yakalanmamış istisna PyQt6'nın qFatal'ıyla
@@ -89,6 +119,6 @@ def main(argv: list[str] | None = None) -> int:
     app.setFont(theme.font(fam, 13))            # varsayılan aile; stil sayfası font-family kullanmaz
     app.setStyleSheet(theme.build_stylesheet(fam))
     win = build_window(parse_args(argv), fam)
-    notice.set_anchor(win, avoid=lambda: _recorded_rect(win))
+    _wire_notice(notice, win)
     win.show()
     return app.exec()

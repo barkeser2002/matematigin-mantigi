@@ -1,4 +1,11 @@
+import errno
 import json
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+
+import pytest
 
 from matematigin_mantigi.core import layout_model as lm
 
@@ -111,6 +118,62 @@ def test_load_save_layout(tmp_path):
     custom = dict(lm.DEFAULT_LAYOUT, webcam=lm.PanelGeom(0, 8, 2, 2))
     lm.save_layout(p, custom)
     assert lm.load_layout(p) == custom
+
+
+_OLD = dict(lm.DEFAULT_LAYOUT, webcam=lm.PanelGeom(0, 6, 4, 4), soru=lm.PanelGeom(4, 0, 8, 5))
+
+
+def test_failed_layout_save_keeps_the_old_layout_and_no_temp_file(tmp_path, monkeypatch):
+    """B-5: duzen.json doğrudan yazılıyordu; yazımın ortasındaki hata (dolu disk) dosyayı yarım bırakıyor, uyarı
+    'yeniden açılınca eski düzen gelir' derken açılışta VARSAYILAN düzen geliyordu. Yazım geçici dosyaya yapılır,
+    tamamlanınca os.replace ile yerine konur: hatada eski düzen aynen kalır, geçici dosya silinir."""
+    p = tmp_path / "duzen.json"
+    lm.save_layout(p, _OLD)
+    real_write_text = Path.write_text
+
+    def half_written(self, data, *a, **k):
+        real_write_text(self, data[: len(data) // 3], *a, **k)
+        raise OSError(errno.ENOSPC, "No space left on device")
+    monkeypatch.setattr(Path, "write_text", half_written)
+    with pytest.raises(OSError):
+        lm.save_layout(p, dict(lm.DEFAULT_LAYOUT))
+    monkeypatch.undo()
+    assert lm.load_layout(p) == _OLD
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["duzen.json"]
+
+
+_LAYOUT_DISK_FULL = textwrap.dedent('''
+    import json, resource
+    from pathlib import Path
+    from matematigin_mantigi.core import layout_model as lm
+
+    old = dict(lm.DEFAULT_LAYOUT, webcam=lm.PanelGeom(0, 6, 4, 4), soru=lm.PanelGeom(4, 0, 8, 5))
+    p = Path("duzen.json")
+    lm.save_layout(p, old)
+    soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+    resource.setrlimit(resource.RLIMIT_FSIZE, (100, hard))         # duzen.json ~600 bayt: 100. baytta EFBIG
+    try:
+        lm.save_layout(p, dict(lm.DEFAULT_LAYOUT))
+        err = None
+    except OSError as e:
+        err = e.errno
+    finally:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
+    print("SONUC " + json.dumps({"hata": err, "eski_duzen": lm.load_layout(p) == old,
+                                 "dosyalar": sorted(x.name for x in Path(".").iterdir())}))
+''')
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="RLIMIT_FSIZE yalnız POSIX'te")
+def test_disk_full_mid_layout_save_keeps_the_old_layout(tmp_path):
+    """B-5'in gerçek hâli (inceleme s04): yazım ortasında EFBIG'den sonra yeniden açılışta eski düzen gelir."""
+    script = tmp_path / "calistir.py"
+    script.write_text(_LAYOUT_DISK_FULL, encoding="utf-8")
+    r = subprocess.run([sys.executable, str(script)], cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    line = next((ln for ln in r.stdout.splitlines() if ln.startswith("SONUC ")), None)
+    assert r.returncode == 0 and line is not None, f"çıkış {r.returncode}:\n{r.stdout}\n{r.stderr[-2000:]}"
+    res = json.loads(line[len("SONUC "):])
+    assert res == {"hata": errno.EFBIG, "eski_duzen": True, "dosyalar": ["calistir.py", "duzen.json"]}
 
 
 def test_load_layout_reads_legacy_integer_file_unchanged(tmp_path):

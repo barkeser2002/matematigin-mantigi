@@ -1,7 +1,10 @@
 """OBS benzeri düzen modeli: tahta üstündeki bölgeler 12x10 ızgara biriminde konum/boyut taşır."""
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import secrets
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -181,4 +184,16 @@ def load_layout(path: Path) -> Layout:
 
 
 def save_layout(path: Path, layout: Layout) -> None:
-    Path(path).write_text(to_json(layout), encoding="utf-8")
+    """duzen.json'u yarıda bırakmadan yazar: metin aynı klasörde geçici dosyaya yazılır, ancak tamamlanınca os.replace
+    ile yerine konur. Yazım yarıda kalırsa (dolu disk) eski düzen dosyası aynen kalır ve geçici dosya silinir; böylece
+    'yeniden açılınca eski düzen gelir' uyarısı doğru olur (önceden yarım JSON yüzünden varsayılan düzen geliyordu).
+    OSError çağırana gider."""
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
+    try:
+        tmp.write_text(to_json(layout), encoding="utf-8")
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
+        raise

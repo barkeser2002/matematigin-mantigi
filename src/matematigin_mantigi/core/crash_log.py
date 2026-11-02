@@ -44,6 +44,23 @@ def _milestone(n: int) -> bool:
     return n >= 10 and str(n).rstrip("0") == "1"
 
 
+_LAST = ("last_exc", "last_type", "last_value", "last_traceback")
+
+
+def _release_last(exc) -> None:
+    """PyQt6 kurulu kancayı PyErr_Print() üzerinden çağırır; o da kancadan önce sys.last_exc/last_type/last_value/
+    last_traceback'i bu istisnaya ayarlar. Bunlar bir sonraki istisnaya dek traceback'i, dolayısıyla patlayan
+    çerçeveyi ve içindeki nesneleri canlı tutar: paintEvent'te etkin kalan QPainter her çizimde 'QBackingStore::
+    endPaint() called with active painter' bastırıyordu. Kanca işini bitirince bu istisnanın kaydını bırakır; başka
+    bir istisnanınkine (doğrudan çağrı) dokunmaz. İstisna fırlatmaz."""
+    try:
+        if exc is not None and (getattr(sys, "last_value", None) is exc or getattr(sys, "last_exc", None) is exc):
+            for name in _LAST:
+                setattr(sys, name, None)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class CrashLog:
     """Kurulu kancaların durumu: günlük yolu, hata sayaçları ve (varsa) kullanıcıya uyarı gösteren geri çağırma.
 
@@ -107,16 +124,19 @@ class CrashLog:
 
     def excepthook(self, exc_type, exc, tb) -> None:
         try:
-            if issubclass(exc_type, KeyboardInterrupt):   # geliştirme terminalindeki Ctrl+C uygulama hatası değil
-                if sys.stderr is not None:
-                    print("Ctrl+C: uygulama ve süren kayıt devam ediyor; çıkmak için pencereyi kapatın.",
-                          file=sys.stderr)
-                return
-            cur = threading.current_thread()
-            where = "" if cur is threading.main_thread() else f"iş parçacığı: {cur.name}"
-        except Exception:  # noqa: BLE001
-            where = ""
-        self._handle(exc_type, exc, tb, where)
+            try:
+                if issubclass(exc_type, KeyboardInterrupt):   # geliştirme terminalindeki Ctrl+C uygulama hatası değil
+                    if sys.stderr is not None:
+                        print("Ctrl+C: uygulama ve süren kayıt devam ediyor; çıkmak için pencereyi kapatın.",
+                              file=sys.stderr)
+                    return
+                cur = threading.current_thread()
+                where = "" if cur is threading.main_thread() else f"iş parçacığı: {cur.name}"
+            except Exception:  # noqa: BLE001
+                where = ""
+            self._handle(exc_type, exc, tb, where)
+        finally:
+            _release_last(exc)
 
     def threading_hook(self, args) -> None:
         """threading.excepthook: threading.Thread'den (ör. ses yazıcısı) kaçan istisna da aynı günlüğe düşer."""

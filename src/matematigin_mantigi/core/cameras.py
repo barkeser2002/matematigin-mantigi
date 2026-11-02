@@ -11,6 +11,8 @@ from dataclasses import dataclass
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 import cv2  # noqa: E402
 
+from matematigin_mantigi.core.recorder import no_window  # noqa: E402
+
 
 @dataclass(frozen=True)
 class CameraInfo:
@@ -51,7 +53,7 @@ def list_camera_names(exe: str | None = None, platform: str | None = None, runne
     else:
         return []
     runner = runner or (lambda c: subprocess.run(c, capture_output=True, text=True, encoding="utf-8",
-                                                 errors="replace", timeout=15).stderr)
+                                                 errors="replace", timeout=15, **no_window()).stderr)
     try:
         text = runner(cmd)
     except (OSError, subprocess.SubprocessError):

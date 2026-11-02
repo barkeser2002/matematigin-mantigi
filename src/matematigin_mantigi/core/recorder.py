@@ -25,6 +25,7 @@ from typing import BinaryIO, Callable, Protocol
 
 import numpy as np
 
+from matematigin_mantigi.core import crash_log
 from matematigin_mantigi.core.audio_capture import AudioCapture, AudioResult
 
 
@@ -64,6 +65,10 @@ class RecorderState(Enum):
 
 class RecorderError(RuntimeError):
     pass
+
+
+class RecordingResult(RecorderError):
+    """hatalar.log'daki kayıt sonucu girdisi: bir kaydın hatası ve ses uyarısı, tek satır (fırlatılmaz)."""
 
 
 class Recorder(Protocol):
@@ -111,6 +116,14 @@ class NullRecorder:
 # --- gerçek kayıt ------------------------------------------------------------------
 
 DISK_HINT = "Diskte boş yer ve kayıt klasörüne yazma izni olduğunu kontrol edin."
+CREATE_NO_WINDOW = 0x08000000           # subprocess.CREATE_NO_WINDOW (yalnız Windows'ta tanımlı)
+
+
+def no_window(platform: str | None = None) -> dict:
+    """subprocess çağrısına eklenecek argüman: Windows'ta alt süreç konsol penceresi açmasın (paketli, konsolsuz
+    .exe'de her ffmpeg çağrısı siyah bir pencere yakıp söndürüyordu: kayıt, birleştirme, süre ölçümü, kodlayıcı
+    denemesi, kamera listesi). Başka sistemlerde boş. Bütün ffmpeg çağrıları bunu kullanır (#10; test kilitler)."""
+    return {"creationflags": CREATE_NO_WINDOW} if (platform or sys.platform) == "win32" else {}
 
 
 def find_ffmpeg() -> str | None:
@@ -163,7 +176,7 @@ def detect_encoder(exe: str, platform: str | None = None, runner=None) -> str:
 
     def default_runner(cmd: list[str]) -> int:
         try:
-            return subprocess.run(cmd, capture_output=True, timeout=20).returncode
+            return subprocess.run(cmd, capture_output=True, timeout=20, **no_window()).returncode
         except (OSError, subprocess.SubprocessError):
             return 1
     run = runner or default_runner
@@ -197,6 +210,26 @@ PAD_MARGIN_S = 1.0      # ses dolgusu videodan bu kadar uzun: -shortest dosyayı
 MIC_GAP_S = 2.0         # ses videodan bundan fazla erken bitiyorsa mikrofon kayıt sırasında kesilmiştir
 SHORT_MUX_S = 1.0       # birleşik dosya videodan bundan fazla kısaysa (kısa kayıtta: sürenin 1/4'ü) ham dosyalar kalır
 
+# Kapanışın her adımı sınırlı; testler bu sabitleri kısaltır. Yazıcı WRITER_JOIN_S içinde durmazsa ffmpeg stdin'i
+# okumuyor demektir (donan kodlayıcı, takılan disk): süreç öldürülür, yazıcı kırılan borudan KILL_JOIN_S içinde çıkar.
+WRITER_JOIN_S = 10.0    # kapanışta yazıcı iş parçacığının durması için beklenen süre
+KILL_JOIN_S = 2.0       # yanıt vermeyen ffmpeg öldürüldükten sonra yazıcının çıkması için süre
+FFMPEG_EXIT_S = 60.0    # stdin kapandıktan sonra ffmpeg'in dosyayı bitirip çıkması için süre
+AUDIO_STOP_S = 20.0     # mikrofonun kapanması (AudioCapture.stop yazıcıyı 15 sn bekler)
+DURATION_TIMEOUT_S = 30.0   # media_duration: başlık okuma
+MUX_MIN_S = 120.0       # birleştirmenin en kısa zaman aşımı; uzun derste kayıt süresinin iki katı
+
+
+def _mux_timeout(duration: float) -> float:
+    return max(MUX_MIN_S, duration * 2)
+
+
+def _close_limit(duration: float) -> float:
+    """Kapanışın en uzun süresi: adımların kendi sınırlarının toplamı (+ pay). Kapanışı bekleyen ikinci stop() bundan
+    uzun beklemez; kapanış meşru biçimde sürerken de vazgeçmez."""
+    return (WRITER_JOIN_S + KILL_JOIN_S + AUDIO_STOP_S + FFMPEG_EXIT_S + 2 * DURATION_TIMEOUT_S
+            + _mux_timeout(duration) + 30.0)
+
 
 def mux_args(exe: str, video: Path, audio: Path, out: Path, offset_s: float,
              asetrate: int | None = None, out_rate: int = 48000, video_s: float | None = None) -> list[str]:
@@ -226,12 +259,15 @@ def mux_args(exe: str, video: Path, audio: Path, out: Path, offset_s: float,
 _DURATION = re.compile(rb"^\s*Duration: (\d+):(\d\d):(\d\d(?:\.\d+)?)", re.M)    # kendi satırı: etiket değeri değil
 
 
-def media_duration(exe: str, path: Path, timeout: float = 30.0) -> float | None:
+def media_duration(exe: str, path: Path, timeout: float = DURATION_TIMEOUT_S) -> float | None:
     """Dosyanın süresi (sn), ffmpeg'in giriş başlığı dökümünden ('Duration: 01:00:00.00'); ffprobe paketle gelmiyor.
     MP4'te yalnız moov kutusu okunur: video çözülmez, paketler taranmaz. 60 dakikalık 60 kare/sn dosyada ~0,1 sn
-    (paketleri okumak 600 MB'ta ~6 sn sürüyor; 1440p60 bir ders ~7 GB). Okunamazsa ya da süre yoksa (N/A) None."""
+    (paketleri okumak 600 MB'ta ~6 sn sürüyor; 1440p60 bir ders ~7 GB). Okunamazsa ya da süre yoksa (N/A) None.
+    WAV -f wav ile açılır: ffmpeg 9.0.2 düz WAV'ı biçim tahminiyle tanımıyor (mux_args'taki gibi)."""
+    fmt = ["-f", "wav"] if Path(path).suffix.lower() == ".wav" else []
     try:
-        res = subprocess.run([exe, "-hide_banner", "-nostdin", "-i", str(path)], capture_output=True, timeout=timeout)
+        res = subprocess.run([exe, "-hide_banner", "-nostdin", *fmt, "-i", str(path)], capture_output=True,
+                             timeout=timeout, **no_window())
     except (OSError, subprocess.SubprocessError):
         return None
     m = _DURATION.search(res.stderr)                 # çıktı dosyası verilmediği için ffmpeg 1 ile çıkar: beklenen
@@ -267,6 +303,18 @@ def mic_cut_text(video_s: float, audio_end_s: float) -> str | None:
 def _joined(*parts: str | None) -> str | None:
     """Boş olmayan uyarıları '; ' ile birleştirir: sonraki bir uyarı öncekini silmesin."""
     return "; ".join(p for p in parts if p) or None
+
+
+def _with_paragraph(text: str | None, more: str) -> str:
+    """Hata metnine yeni paragraf ekler: önceki sebep silinmesin."""
+    return f"{text}\n\n{more}" if text else more
+
+
+def exception_text(err: BaseException) -> str:
+    """İstisnanın okunur özeti, hiçbir zaman boş değil: 'PermissionError: [Errno 13] … : yol'; mesajsızsa 'OSError()'
+    (str(OSError()) boştur, arayüz hiçbir şey göstermiyordu)."""
+    text = str(err)
+    return f"{type(err).__name__}: {text}" if text else repr(err)
 
 
 def audio_rate_correction(result: AudioResult, min_duration: float = 600.0, min_ppm: float = 100.0) -> int | None:
@@ -376,7 +424,9 @@ class MssFfmpegRecorder:
     def stop(self) -> Path | None:
         """Kaydı kapatır ve sesi videoyla birleştirir; son dosyanın yolunu döndürür. Uzun sürebilir (birkaç sn,
         uzun derste onlarca sn); arayüz bunu ayrı iş parçacığında çağırmalı. Kapanış kilitsiz koşar ve yalnız bu
-        kaydın oturumuyla çalışır. Başka bir stop() zaten kapatıyorsa (pencere kapatma + işçi) onun bitmesini bekler."""
+        kaydın oturumuyla çalışır; her adımı sınırlı (ffmpeg yanıt vermezse öldürülür). Başka bir stop() zaten
+        kapatıyorsa (pencere kapatma + işçi) onun bitmesini en çok kapanışın kendi sınırları kadar bekler; kapanış
+        hatayla bittiyse RecorderError fırlatır (dönecek dosya eksik ya da hiç yok olabilir)."""
         with self._lock:
             s, state = self._session, self._state
             if state is RecorderState.RECORDING:
@@ -386,12 +436,21 @@ class MssFfmpegRecorder:
         if state is RecorderState.RECORDING:
             try:
                 self._finalize(s)
+            except BaseException as err:             # sebep oturuma: arayüz ve kapanışı bekleyen stop() da görsün
+                s.error = _with_paragraph(s.error, f"Kayıt kapatılamadı: {exception_text(err)}\n"
+                                                   f"Kayıt klasörü: {s.final_path.parent}")
+                raise
             finally:                                 # kapanış patlasa da FINALIZING'de takılı kalınmasın
                 with self._lock:
                     self._state = RecorderState.IDLE
+                self._log_result(s)
                 s.finished.set()
         elif state is RecorderState.FINALIZING:
-            s.finished.wait()
+            limit = _close_limit(max(s.duration, time.monotonic() - s.started_at))
+            if not s.finished.wait(limit):
+                raise RecorderError(f"Önceki kaydın kapanışı {clock_text(limit)} dakikada bitmedi: {s.final_path}")
+            if s.error:
+                raise RecorderError(s.error)
         return s.final_path
 
     @property
@@ -457,44 +516,113 @@ class MssFfmpegRecorder:
             self._abort_audio(s)
             raise RecorderError(f"Kayıt dosyası açılamadı: {err}\n{DISK_HINT}") from err
         try:
-            s.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=s.log_file)
+            s.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=s.log_file,
+                                      **no_window())
         except OSError as err:
             self._close_log(s)
             self._abort_audio(s)
             raise RecorderError(f"ffmpeg başlatılamadı: {err}") from err
-        s.started_at = time.monotonic()
-        s.thread = threading.Thread(target=self._loop, args=(s, grab_rect, first, w, h, fps), daemon=True)
-        s.thread.start()
+        try:
+            s.started_at = time.monotonic()
+            s.thread = threading.Thread(target=self._loop, args=(s, grab_rect, first, w, h, fps), daemon=True)
+            s.thread.start()
+        except BaseException as err:                 # beklenmeyen (ör. iş parçacığı açılamadı): hiçbir şey sızmasın
+            self._kill(s.proc)
+            self._close_log(s)
+            self._abort_audio(s)
+            if not isinstance(err, Exception):       # KeyboardInterrupt/SystemExit olduğu gibi gitsin
+                raise
+            raise RecorderError(f"Kayıt başlatılamadı: {exception_text(err)}") from err
         return s
 
     def _finalize(self, s: _Session) -> None:
         """Kapanış: yazıcıyı durdurur, mikrofonu kapatır, ffmpeg'in dosyayı bitirmesini bekler, sesi birleştirir.
-        Yalnız bu kaydın oturumuyla çalışır; kilit tutulmaz (start() bu sürede FINALIZING görüp reddeder)."""
+        Yalnız bu kaydın oturumuyla çalışır; kilit tutulmaz (start() bu sürede FINALIZING görüp reddeder).
+        ffmpeg yanıt vermediyse (stdin'i okumadı ya da EOF'tan sonra çıkmadı; öldürüldü) birleştirme denenmez: video
+        eksik ya da bozuktur, hiçbir dosyaya dokunulmaz ve hata öğretmene dosyaların yerini söyler."""
         s.stop_event.set()
         s.duration = time.monotonic() - s.started_at
-        if s.thread is not None:
-            s.thread.join(timeout=10)
+        hung = self._stop_writer(s)
         audio = self._stop_audio(s)
         proc = s.proc
-        if proc is not None:
-            try:
-                if proc.stdin:
-                    try:
-                        proc.stdin.close()
-                    except (OSError, ValueError):
-                        pass
-                    proc.stdin = None        # communicate() kapalı boruyu flush etmesin (Py3.12/macOS ValueError)
-                proc.communicate(timeout=60)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                s.error = "ffmpeg zamanında kapanmadı"
+        if proc is not None and not self._close_ffmpeg(s, proc):
+            hung = True                              # EOF'tan sonra da kapanmadı: öldürüldü
         self._close_log(s)
+        if hung:                                     # (yazıcının öldürmeden sonra yazdığı boru hatası sebep değil)
+            s.error = self._hung_text(s)
+            return
         if proc is not None and proc.returncode not in (0, None) and not s.error:
             s.error = f"ffmpeg hata kodu {proc.returncode}: {self._log_tail(s)}"
         if audio is not None:
             self._mux(s, audio)
         elif s.video_path != s.final_path and s.video_path.exists():
             s.video_path.replace(s.final_path)      # mikrofon açılamadı: yalnız video
+
+    def _stop_writer(self, s: _Session) -> bool:
+        """Yazıcı iş parçacığını durdurur; ffmpeg yanıt vermediyse True. ffmpeg stdin'i okumayı bırakıp ölmezse yazıcı
+        write()'ta borunun kilidini tutarak bekler: stdin.close() da communicate() da o kilidi bekler, hiçbir zaman
+        aşımı işlemez (kapanış sonsuza dek FINALIZING'de kalıyordu). O durumda önce süreç öldürülür: boru kırılır,
+        write() hatayla döner, yazıcı çıkar."""
+        if s.thread is None:
+            return False
+        s.thread.join(timeout=WRITER_JOIN_S)
+        if not s.thread.is_alive():
+            return False
+        if s.proc is not None:
+            self._kill(s.proc)
+        s.thread.join(timeout=KILL_JOIN_S)
+        return True
+
+    def _close_ffmpeg(self, s: _Session, proc: subprocess.Popen) -> bool:
+        """stdin'i kapatır (EOF: ffmpeg dosyayı bitirir) ve çıkmasını FFMPEG_EXIT_S bekler. Çıkmazsa öldürür ve False
+        döner: video eksik ya da bozuk (moov yazılmadı), yanıt vermeyen ffmpeg gibi ele alınır. Yazıcı hâlâ
+        write()'taysa boru kapatılmaz: close() onun kilidini bekleyip kapanışı yine kilitlerdi."""
+        stdin, proc.stdin = proc.stdin, None        # wait()/communicate() kapalı boruyu bir daha flush etmesin
+        if stdin is not None and not (s.thread is not None and s.thread.is_alive()):
+            try:
+                stdin.close()
+            except (OSError, ValueError):
+                pass
+        try:
+            proc.wait(timeout=FFMPEG_EXIT_S)
+            return True
+        except subprocess.TimeoutExpired:
+            self._kill(proc)
+            return False
+
+    @staticmethod
+    def _kill(proc: subprocess.Popen) -> None:
+        """ffmpeg'i öldürür ve toplar (zombi kalmasın); istisna fırlatmaz."""
+        try:
+            proc.kill()
+            proc.wait(timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    @staticmethod
+    def _log_result(s: _Session) -> None:
+        """Kaydın hatası ve ses uyarısı hatalar.log'a tek satır (günlük kurulu değilse hiçbir şey): öğretmen 'Kayıt
+        hatası' penceresini okumadan kapatsa da sonradan ne olduğu görülür. Günlük aynı türden ve aynı yoldan gelen
+        hatayı oturumda bir kez yazar (sonra 10., 100. tekrarı); her kaydın sonucu ayrı bir olay olduğu için türün adı
+        kaydın dosya adını taşır, kendi anahtarını alır (yoksa oturumun ikinci kaydı günlüğe hiç girmiyordu).
+        İstisna fırlatmaz."""
+        parts = [f"hata: {s.error}" if s.error else "", f"ses: {s.audio_error}" if s.audio_error else ""]
+        text = " · ".join(p for p in parts if p)
+        if text:
+            line = " | ".join(p.strip() for p in f"{s.final_path.name} · {text}".splitlines() if p.strip())
+            entry = type(RecordingResult.__name__, (RecordingResult,),
+                         {"__qualname__": f"{RecordingResult.__qualname__}[{s.final_path.name}]"})
+            crash_log.log_handled(entry(line), "kayıt sonucu")
+
+    def _hung_text(self, s: _Session) -> str:
+        kept = [p for p in (s.video_path, s.wav_path) if p is not None and p.exists()]
+        text = "ffmpeg yanıt vermedi; kayıt zorla kapatıldı."
+        if kept:
+            text += " Videonun sonu eksik ya da bozuk olabilir; dosyalar silinmedi:\n" + "\n".join(map(str, kept))
+        else:
+            text += " Video dosyası oluşmadı."
+        tail = self._log_tail(s, 300)
+        return f"{text}\nffmpeg çıktısı: {tail}" if tail else text
 
     def _grab(self, rect: RecordRect, sct=None) -> np.ndarray:
         return self._grabber(rect) if self._grabber else grab_screen(rect, sct)
@@ -533,13 +661,19 @@ class MssFfmpegRecorder:
         return s.audio_result
 
     def _mux(self, s: _Session, audio: AudioResult) -> None:
-        """Video (kopya) + WAV -> son MP4. Birleştirme başarısızsa yalnız video dosyası sonuç olur. Birleştirme
-        videoyu asla kısaltmaz (#1): eksik ses sessizlikle dolar; ara dosyalar yalnız birleşik dosyanın videonun
+        """Video (kopya) + WAV -> son MP4. Birleştirme başarısızsa yalnız video dosyası sonuç olur; video hiç
+        oluşmadıysa (ffmpeg başta öldü) WAV durur ve hata yerini söyler. Birleştirme videoyu asla kısaltmaz (#1):
+        eksik ses sessizlikle dolar; ara dosyalar yalnız birleşik dosyanın videonun
         tam uzunluğunda olduğu ölçülünce silinir. Mikrofon kesildiyse ya da WAV yazılamadıysa audio_error söyler."""
         exe = self._ffmpeg_exe or find_ffmpeg()
         video, out = s.video_path, s.final_path
         if audio.error:                              # WAV yazıcısı öldü (disk dolu...): o ana dek yazılan ses kalır
             s.audio_error = s.audio_error or f"Ses dosyası yazılamadı: {audio.error}"
+        if not video.exists():                       # ffmpeg kayıt başında öldü: birleştirilecek video yok
+            sound = audio.samples > 0 and audio.path.exists()
+            s.error = _with_paragraph(s.error, "Video dosyası oluşmadı" + (
+                f"; ses ayrı dosyada duruyor (silinmedi):\n{audio.path}" if sound else "; ses de kaydedilemedi."))
+            return
         if not exe or audio.samples <= 0 or not audio.path.exists():
             s.audio_error = s.audio_error or "Ses kaydedilemedi (örnek yok)"
             video.replace(out)
@@ -554,7 +688,7 @@ class MssFfmpegRecorder:
             s.audio_error = f"{s.audio_error} ({cut})" if s.audio_error else f"Mikrofon kayıt sırasında kesildi ({cut})"
         args = mux_args(exe, video, audio.path, out, offset, asetrate=rate, video_s=length)
         try:
-            res = subprocess.run(args, capture_output=True, timeout=max(120, int(s.duration * 2)))
+            res = subprocess.run(args, capture_output=True, timeout=_mux_timeout(s.duration), **no_window())
         except (OSError, subprocess.SubprocessError) as err:
             s.audio_error = _joined(f"Ses birleştirilemedi: {err}", s.audio_error)
             video.replace(out)
@@ -583,7 +717,7 @@ class MssFfmpegRecorder:
         yerini söyler. Birleşik dosya da kalır; öğretmen hangisini kullanacağını görür."""
         text = (f"{why}: {s.final_path}\nHam video ve ses silinmedi; kaydın tamamı bu dosyalarda:\n"
                 f"{s.video_path}\n{audio.path}")
-        s.error = f"{s.error}\n\n{text}" if s.error else text
+        s.error = _with_paragraph(s.error, text)
 
     def _grab_loop(self, s: _Session, rect: RecordRect, w: int, h: int, fps: int) -> None:
         """Yakalama iş parçacığı: en fazla fps hızında kare alır, en yenisini bırakır."""

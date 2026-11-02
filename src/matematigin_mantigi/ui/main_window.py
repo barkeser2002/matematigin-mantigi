@@ -9,11 +9,13 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QKeySequence, QShortcut
 from PyQt6.QtWidgets import QHBoxLayout, QMainWindow, QMessageBox, QWidget
 
+from matematigin_mantigi.core import crash_log
 from matematigin_mantigi.core import layout_model as lm
 from matematigin_mantigi.core.models import (SHAPE_META, TOOL_META, PenSettings, Question, QuestionStatus, Tool,
                                              next_shape)
 from matematigin_mantigi.core.question_flow import QuestionFlow
-from matematigin_mantigi.core.recorder import DISK_HINT, Recorder, RecorderError, RecorderState, record_rect_for
+from matematigin_mantigi.core.recorder import (DISK_HINT, Recorder, RecorderError, RecorderState, exception_text,
+                                               record_rect_for)
 from matematigin_mantigi.core.session_store import SessionStore
 from matematigin_mantigi.core.settings import AppSettings
 from matematigin_mantigi.ui.camera_worker import FrameSource
@@ -44,8 +46,9 @@ class _StopWorker(QThread):
         path = None
         try:
             path = self.recorder.stop()
-        except Exception as err:  # noqa: BLE001
-            self.exc = str(err)
+        except Exception as err:  # noqa: BLE001 - sonuç pencereye 'Kayıt hatası' olarak gider
+            self.exc = str(err) or repr(err)         # mesajsız istisna (OSError()) da sessiz kalmasın
+            crash_log.log_handled(err, "kayıt kapanışı")
         self.done.emit(path)
 
 
@@ -54,6 +57,8 @@ WEBCAM_HIDE_TIMEOUT_MS = 400   # apply_ui_settings'in "webcam" görünürlüğü
                                # WebcamPanel.shutdown docstring'i.
 SAVING_KEY = "kayit-kaydediliyor"        # araç çubuğu uyarı şeridinde bu kaynağın anahtarı
 SAVING_ALERT = "Kayıt kaydediliyor…"   # kapanış (ffmpeg + ses birleştirme) sürerken araç çubuğundaki uyarı
+CLOSING_ALERT = "Kayıt kaydediliyor… bitince pencere kapanacak"     # pencere kapatılmak istendi, kayıt bekleniyor
+STOP_AND_QUIT, KEEP_RECORDING = "Durdur ve çık", "Kayda devam et"   # kayıt sürerken kapatma sorusunun düğmeleri
 
 
 class MainWindow(QMainWindow):
@@ -65,6 +70,8 @@ class MainWindow(QMainWindow):
         questions_path: soru dosyası (xlsx); verilmezse soru editörü açılmaz."""
         super().__init__(parent)
         self.camera_source_factory = camera_source_factory
+        self._stop_worker: _StopWorker | None = None    # kayıt kapanışı arka planda sürüyor (sonucu henüz gelmedi)
+        self._close_after_save = False                  # pencere kapatılmak istendi: kayıt bitince kapanacak
         self.base_fam = fam                       # paketle gelen aile; Ayarlar'daki dosya bunun üstüne biner
         self.fam, self.settings, self.recorder, self.session_store = fam, settings, recorder, session_store
         # apply_ui_settings artık her göz düğmesi tıklamasında da çalıştığı için (Görev 6) burada
@@ -292,11 +299,16 @@ class MainWindow(QMainWindow):
     def _record_saving(self) -> bool:
         """Önceki kayıt hâlâ kaydediliyor (kaydedici FINALIZING) ya da durdurma sonucu pencereye henüz ulaşmadı
         (_StopWorker'ın done'ı _on_record_stopped'ta işlenmedi). Bu sürede ne yeni kayıt ne ikinci durdurma."""
-        return self.recorder.state is RecorderState.FINALIZING or getattr(self, "_stop_worker", None) is not None
+        return self.recorder.state is RecorderState.FINALIZING or self._stop_worker is not None
+
+    def _show_saving_alert(self) -> None:
+        """Araç çubuğunda 'Kayıt kaydediliyor…' (durum satırına değil: o tahtada, kayda girer); pencere kapatılmak
+        istendiyse bitince kapanacağını da söyler."""
+        self.toolbar.set_alert(SAVING_KEY, CLOSING_ALERT if self._close_after_save else SAVING_ALERT)
 
     def toggle_recording(self, on: bool) -> None:
         if self._record_saving():               # düğme kilitli; R de kapanan kaydın yollarına karışmasın (#2)
-            self.toolbar.set_alert(SAVING_KEY, SAVING_ALERT)
+            self._show_saving_alert()
             return
         fps = self.settings.record_fps
         state = self.recorder.state
@@ -304,10 +316,8 @@ class MainWindow(QMainWindow):
             rect = record_rect_for(self.work_area.recording_rect())
             try:
                 self.recorder.start(rect, fps=fps)
-            except (RecorderError, OSError) as err:   # OSError (disk, izin) yuvadan kaçıp uygulamayı kapatmasın
-                self.toolbar.set_recording(False)
-                text = str(err) if isinstance(err, RecorderError) else f"Kayıt dosyası yazılamadı: {err}\n{DISK_HINT}"
-                QMessageBox.warning(self, "Kayıt başlatılamadı", text)
+            except Exception as err:  # noqa: BLE001 - hiçbir başlatma hatası yuvadan kaçıp düğmeyi 'kayıtta' bırakmasın
+                self._record_start_failed(err)
                 return
             h = self.settings.record_height or rect.height
             self.badge.set_format(round(rect.width * h / rect.height), h, fps)
@@ -319,27 +329,57 @@ class MainWindow(QMainWindow):
             if getattr(self.recorder, "stop_is_quick", False):
                 self._on_record_stopped(self.recorder.stop())
             else:
-                self.toolbar.set_recording(False)
-                self.toolbar.record_button.setEnabled(False)
-                self.toolbar.set_alert(SAVING_KEY, SAVING_ALERT)      # durum satırına değil: o tahtada, kayda girer
-                self._stop_worker = _StopWorker(self.recorder, self)
-                self._stop_worker.done.connect(self._on_record_stopped)
-                self._stop_worker.start()
+                self._start_stop_worker()
                 return
         recording = self.recorder.state is RecorderState.RECORDING
         self.toolbar.set_recording(recording)
         if recording:
             self.toolbar.set_recording_time(self.badge.seconds)
 
+    def _start_stop_worker(self) -> None:
+        """Kapanışı (recorder.stop: ffmpeg + ses birleştirme) arka planda başlatır; sonuç _on_record_stopped'a gelir.
+        O ana dek düğme ve R kilitli. Kaydedici zaten kapanıyorsa (FINALIZING) işçinin stop()'u bitişi bekler."""
+        self.toolbar.set_recording(False)
+        self.toolbar.record_button.setEnabled(False)
+        self._show_saving_alert()
+        self._stop_worker = _StopWorker(self.recorder, self)
+        self._stop_worker.done.connect(self._on_record_stopped)
+        self._stop_worker.start()
+
+    def _record_start_failed(self, err: Exception) -> None:
+        """Kayıt başlamadı: araç çubuğu 'kayıt yok'a döner, sebep pencerede (her denemede), ayrıntı hatalar.log'da.
+        OSError (disk, izin) ve beklenmeyen hata da buraya gelir: yuvadan kaçıp düğmeyi 'kayıtta' bırakmasın."""
+        self.toolbar.set_recording(False)
+        crash_log.log_handled(err, "kayıt başlatma")
+        if isinstance(err, RecorderError):
+            text = str(err)
+        elif isinstance(err, OSError):
+            text = f"Kayıt dosyası yazılamadı: {err}\n{DISK_HINT}"
+        else:
+            text = f"Beklenmeyen hata: {exception_text(err)}"
+        QMessageBox.warning(self, "Kayıt başlatılamadı", text)
+
     def _on_record_stopped(self, path) -> None:
-        worker = getattr(self, "_stop_worker", None)
+        worker, exc = self._stop_worker, None
         if worker is not None:
             worker.wait()                    # done run()'ın son adımı: iş parçacığı bitsin, öyle bırakılsın
+            exc = worker.exc
+            worker.deleteLater()             # bitmiş iş parçacığı nesnesi pencerede birikmesin
         self._stop_worker = None             # kapanış bitti: düğme ve R yeniden kayıt başlatabilir
         self.toolbar.set_alert(SAVING_KEY, None)
         self.toolbar.record_button.setEnabled(True)
         self.toolbar.set_recording(False)
-        err = (worker.exc if worker is not None and worker.exc else None) or getattr(self.recorder, "error", None)
+        try:
+            self._report_record_result(path, exc)
+        finally:
+            if self._close_after_save:       # pencere kapatılmak istenmişti: kayıt bitti, sonuç gösterildi
+                self._close_after_save = False
+                self.close()
+
+    def _report_record_result(self, path, exc: str | None) -> None:
+        """Hata pencerede (o an kayıt yok); başarı ve ses uyarısı durum satırında."""
+        # Önce kaydedicinin anlamlı hatası (sebep, dosyaların yeri); işçinin ham istisna metni yalnız yedek.
+        err = getattr(self.recorder, "error", None) or exc
         audio_err = getattr(self.recorder, "audio_error", None)
         if err:
             QMessageBox.warning(self, "Kayıt hatası", err)
@@ -502,16 +542,51 @@ class MainWindow(QMainWindow):
                 setattr(self.recorder, attr, val)
 
     def closeEvent(self, e):
-        if self.recorder.state is RecorderState.RECORDING:
-            self.recorder.stop()                 # pencere kapanırken kayıt dosyası tamamlansın
-        worker = getattr(self, "_stop_worker", None)
-        if worker is not None and worker.isRunning():
-            worker.wait(60000)                   # arka planda ses birleştirme sürüyorsa bitmesini bekle
-        # Varsayılan (2000ms) üst sınır: pencere zaten kapanıyor, birkaç saniyelik gecikme kabul edilebilir
-        # (apply_ui_settings'in görünürlük yolu bunun yerine kısa WEBCAM_HIDE_TIMEOUT_MS'yi kullanır).
-        self.webcam_panel.shutdown()
-        self.settings.sync()
+        """Pencere kapatma (pencere düğmesi, close(), QApplication.quit; macOS'ta ⌘Q da pencerelere bu olayı gönderir).
+        Kayıt sürerken önce sorulur. Kayıt kaydedilirken pencere kapanmaz: olay yok sayılır, kapanış arka planda
+        biter, sonuç gösterilir ve pencere kendisi kapanır (_on_record_stopped). Çalışan _StopWorker hiçbir koşulda
+        yok edilmez: Qt süreci 'QThread: Destroyed while thread is still running' ile düşürür, kayıt birleşmeden
+        kalırdı. Gerçek kapanışta kamera ve ayarlar, kaydı durdurmak patlasa da her koşulda kapanır."""
+        if self.recorder.state is RecorderState.RECORDING and not self._record_saving():
+            if not self._confirm_stop_and_quit():
+                e.ignore()
+                return
+            try:
+                self.toggle_recording(False)         # yavaş kaydedici: arka planda _StopWorker; hızlısı hemen durur
+            except Exception as err:  # noqa: BLE001 - kapanış sürer; hata söylenir ve günlüğe yazılır
+                self._report_close_error(err)
+        if self._record_saving():
+            self._close_after_save = True
+            if self._stop_worker is None:            # kapanışı başkası başlatmış (FINALIZING): bitişini bekleyen işçi
+                self._start_stop_worker()
+            self._show_saving_alert()
+            e.ignore()
+            return
+        try:
+            # Varsayılan (2000ms) üst sınır: pencere zaten kapanıyor, birkaç saniyelik gecikme kabul edilebilir
+            # (apply_ui_settings'in görünürlük yolu bunun yerine kısa WEBCAM_HIDE_TIMEOUT_MS'yi kullanır).
+            self.webcam_panel.shutdown()
+        finally:
+            self.settings.sync()
         super().closeEvent(e)
+
+    def _confirm_stop_and_quit(self) -> bool:
+        """Kayıt sürerken kapatma sorusu. Varsayılan ve Esc 'Kayda devam et': yanlışlıkla basılan ⌘Q dersi kesmesin."""
+        box = QMessageBox(QMessageBox.Icon.Question, "Kayıt sürüyor", "Kayıt sürüyor, durdurulup çıkılsın mı?",
+                          parent=self)
+        box.setInformativeText("Kayıt arka planda kaydedilir; bitince pencere kendisi kapanır.")
+        stop = box.addButton(STOP_AND_QUIT, QMessageBox.ButtonRole.AcceptRole)
+        keep = box.addButton(KEEP_RECORDING, QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(keep)
+        box.setEscapeButton(keep)
+        box.exec()
+        stopped = box.clickedButton() is stop
+        box.deleteLater()
+        return stopped
+
+    def _report_close_error(self, err: Exception) -> None:
+        crash_log.log_handled(err, "pencere kapanışı")
+        QMessageBox.warning(self, "Kayıt hatası", f"Kayıt kapatılamadı: {exception_text(err)}")
 
 
 class _NoCamera:

@@ -1,6 +1,7 @@
 import errno
 import json
 import os
+import stat
 import struct
 import subprocess
 import sys
@@ -183,6 +184,42 @@ def test_file_locked_by_excel_is_not_replaced_and_no_temp_file_is_left(tmp_path,
     with pytest.raises(PermissionError):
         write_questions(p, SAMPLE_QUESTIONS[:1])
     assert p.read_bytes() == before
+    assert _leftovers(tmp_path, "sorular.xlsx", "sorular.xlsx.bak") == []
+
+
+def test_backup_does_not_inherit_the_read_only_attribute(tmp_path):
+    """Q3: yedek copy2 ile alınıyordu; salt okunur soru dosyasının yedeği de salt okunur oluyor, Windows'ta sonraki her
+    Kaydet o yedeğin yerine yenisini koyamıyordu. Yedek öznitelik/izin taşımayan kopyayla alınır."""
+    p = write_questions(tmp_path / "sorular.xlsx", SAMPLE_QUESTIONS)
+    os.chmod(p, stat.S_IREAD)
+    try:
+        try:
+            write_questions(p, SAMPLE_QUESTIONS[:2])
+        except PermissionError:
+            if sys.platform != "win32":         # Windows salt okunur hedefin yerine yenisini koymaz; yedek alınmıştır
+                raise
+        assert os.stat(_bak(p)).st_mode & stat.S_IWRITE
+    finally:
+        os.chmod(p, stat.S_IREAD | stat.S_IWRITE)
+
+
+def test_read_only_backup_is_replaced(tmp_path, monkeypatch):
+    """Q3: önceden salt okunur alınmış bir yedek her Kaydet'i düşürüyordu: Windows salt okunur hedefin yerine
+    os.replace ile yenisini koymaz (kural burada sahte os.replace ile). Yedeğin salt okunur biti önce kaldırılır."""
+    p = tmp_path / "sorular.xlsx"
+    write_questions(p, SAMPLE_QUESTIONS[:1])
+    write_questions(p, SAMPLE_QUESTIONS[:2])
+    os.chmod(_bak(p), stat.S_IREAD)
+    previous = p.read_bytes()
+    real_replace = os.replace
+
+    def windows_replace(src, dst, *a, **k):
+        if os.path.exists(dst) and not os.stat(dst).st_mode & stat.S_IWRITE:
+            raise PermissionError(errno.EACCES, "Access is denied", os.fspath(src), None, os.fspath(dst))
+        return real_replace(src, dst, *a, **k)
+    monkeypatch.setattr(os, "replace", windows_replace)
+    write_questions(p, SAMPLE_QUESTIONS)
+    assert len(load_questions(p)) == 3 and _bak(p).read_bytes() == previous
     assert _leftovers(tmp_path, "sorular.xlsx", "sorular.xlsx.bak") == []
 
 

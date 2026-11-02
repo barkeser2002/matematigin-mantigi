@@ -1,6 +1,7 @@
 import errno
 import json
 import os
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -248,16 +249,20 @@ def _capture_warnings(monkeypatch) -> list:
 
 
 def test_save_while_file_is_open_in_excel_keeps_dialog_and_edits(qtbot, tmp_path, monkeypatch):
-    """e2e#6/q#2: Windows'ta xlsx Excel'de açıkken wb.save PermissionError fırlatıyor, yakalanmadığı için uygulama
+    """e2e#6/q#2: Windows'ta xlsx Excel'de açıkken yazım PermissionError veriyor, yakalanmadığı için uygulama
     (süren kayıtla) düşüyor ve editördeki her düzenleme kayboluyordu. Artık Türkçe mesaj, pencere açık kalır;
-    Excel kapatılınca yeniden Kaydet düzenlemeleri yazar."""
-    import openpyxl
+    Excel kapatılınca yeniden Kaydet düzenlemeleri yazar. (Atomik yazımda kilit, yeni sürümü yerine koyan os.replace'te
+    görülür; hata hedefi filename2'de taşır.)"""
+    path, _before = _existing(tmp_path)
     shown = _capture_warnings(monkeypatch)
-    real_save = openpyxl.Workbook.save
+    real_replace = os.replace
 
-    def locked(self, filename):
-        raise PermissionError(13, "Permission denied", str(filename))
-    monkeypatch.setattr(openpyxl.Workbook, "save", locked)
+    def locked(src, dst, *a, **k):
+        if os.fspath(dst) == os.fspath(path):
+            raise PermissionError(errno.EACCES, "The process cannot access the file", os.fspath(src), None,
+                                  os.fspath(dst))
+        return real_replace(src, dst, *a, **k)
+    monkeypatch.setattr(os, "replace", locked)
     d, path = _dialog(qtbot, tmp_path)
     saved = []
     d.saved.connect(saved.append)
@@ -267,9 +272,9 @@ def test_save_while_file_is_open_in_excel_keeps_dialog_and_edits(qtbot, tmp_path
     assert d.isVisible() and d.result() != d.DialogCode.Accepted and saved == []
     edited = "Excel açıkken düzenlendi?"
     assert d.soru_edit.toPlainText() == edited and d.questions[0].soru == edited
-    assert not path.exists()
+    assert load_questions(path)[0].soru == SAMPLE_QUESTIONS[0].soru
 
-    monkeypatch.setattr(openpyxl.Workbook, "save", real_save)         # Excel kapatıldı
+    monkeypatch.setattr(os, "replace", real_replace)                   # Excel kapatıldı
     d.save_button.click()
     assert load_questions(path)[0].soru == "Excel açıkken düzenlendi?"
     assert saved and d.result() == d.DialogCode.Accepted
@@ -396,6 +401,62 @@ def test_save_refused_while_open_in_excel_keeps_the_file(qtbot, tmp_path, monkey
     d.soru_edit.setPlainText("Excel açıkken")
     d.save_button.click()
     assert shown and shown[0][0] == "Kaydedilemedi" and "Excel" in shown[0][1] and "değişmedi" in shown[0][1]
+    assert path.read_bytes() == before and d.isVisible()
+
+
+@pytest.mark.parametrize("how", ["sahte", "chattr"])
+def test_locked_backup_is_named_in_the_message(qtbot, tmp_path, monkeypatch, how):
+    """Q3 (inceleme v08): yedek kilitliyken (Windows'ta eşitleme/virüs tarayıcı tutamağı ya da salt okunur yedek,
+    macOS'ta Finder 'Kilitli') yedeği yerine koyan os.replace PermissionError veriyor, mesaj ise soru dosyasını
+    suçlayıp Excel'i kapatmayı söylüyordu. Mesaj hatanın gerçek dosyasını (yedeği) söyler; dosya ve yedek değişmez.
+    'chattr': Linux'ta gerçek kilit (os.replace -> EPERM, filename2 = yedek)."""
+    from matematigin_mantigi.core.question_loader import backup_path
+    path = tmp_path / "sorular_sablon.xlsx"
+    write_questions(path, SAMPLE_QUESTIONS[:2])
+    write_questions(path, SAMPLE_QUESTIONS)
+    bak = backup_path(path)
+    before, bak_before = path.read_bytes(), bak.read_bytes()
+    if how == "sahte":
+        real_replace = os.replace
+
+        def locked(src, dst, *a, **k):
+            if os.fspath(dst) == os.fspath(bak):
+                raise PermissionError(errno.EACCES, "Access is denied", os.fspath(src), None, os.fspath(dst))
+            return real_replace(src, dst, *a, **k)
+        monkeypatch.setattr(os, "replace", locked)
+    elif (sys.platform != "linux" or shutil.which("chattr") is None
+          or subprocess.run(["chattr", "+i", str(bak)], capture_output=True).returncode != 0):
+        pytest.skip("chattr +i yok (Linux'ta yetki ve ext4 gibi bir dosya sistemi gerekir)")
+    shown = _capture_warnings(monkeypatch)
+    try:
+        d, _ = _dialog(qtbot, tmp_path)
+        d.soru_edit.setPlainText("Yedek kilitliyken düzenlendi")
+        d.save_button.click()
+    finally:
+        if how == "chattr":
+            subprocess.run(["chattr", "-i", str(bak)])
+    assert len(shown) == 1 and shown[0][0] == "Kaydedilemedi", shown
+    text = shown[0][1]
+    assert "sorular_sablon.xlsx.bak" in text and "yedeği" in text and "Excel'de" not in text, text
+    assert path.read_bytes() == before and bak.read_bytes() == bak_before and d.isVisible()
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["sorular_sablon.xlsx", "sorular_sablon.xlsx.bak"]
+
+
+def test_unwritable_folder_is_named_in_the_message(qtbot, tmp_path, monkeypatch):
+    """Q3: geçici dosya yazılamıyorsa (klasöre yazma izni yok, macOS'ta Belgeler izni kapalı) hata geçici dosyanın
+    adını taşır; mesaj anlamsız '.<ad>.<hex>.tmp' adını ya da Excel'i değil klasörü söyler."""
+    path, before = _existing(tmp_path)
+
+    def denied(self, filename):
+        raise PermissionError(errno.EPERM, "Operation not permitted", str(filename))
+    monkeypatch.setattr(openpyxl.Workbook, "save", denied)
+    shown = _capture_warnings(monkeypatch)
+    d, _ = _dialog(qtbot, tmp_path)
+    d.save_button.click()
+    assert len(shown) == 1 and shown[0][0] == "Kaydedilemedi", shown
+    text = shown[0][1]
+    assert "klasöre yazılamıyor" in text and str(tmp_path) in text, text
+    assert ".tmp" not in text and "Excel'de" not in text and "değişmedi" in text, text
     assert path.read_bytes() == before and d.isVisible()
 
 

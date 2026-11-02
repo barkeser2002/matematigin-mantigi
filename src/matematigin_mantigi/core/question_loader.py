@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import shutil
+import stat
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -122,9 +123,21 @@ def write_questions(path: Path, questions: Sequence[Question]) -> Path:
     def check_then_back_up(tmp: Path) -> None:
         _check_written(tmp, path.parent, len(questions))
         if path.exists():
-            _replace_atomically(backup_path(path), lambda bak_tmp: shutil.copy2(path, bak_tmp))
+            bak = backup_path(path)
+            _make_writable(bak)
+            # copyfile: yedek soru dosyasının salt okunur özniteliğini/iznini almaz (copy2 alıyordu; Q3).
+            _replace_atomically(bak, lambda bak_tmp: shutil.copyfile(path, bak_tmp))
     _replace_atomically(path, wb.save, before_replace=check_then_back_up)
     return path
+
+
+def _make_writable(path: Path) -> None:
+    """Salt okunur dosyanın yazma bitini açar (yoksa bir şey yapmaz). Windows salt okunur hedefin yerine os.replace ile
+    yenisini koymaz: eskiden copy2 ile salt okunur alınmış bir yedek her Kaydet'i düşürürdü."""
+    with contextlib.suppress(OSError):
+        mode = os.stat(path).st_mode
+        if not mode & stat.S_IWRITE:
+            os.chmod(path, mode | stat.S_IWRITE)
 
 
 def _same_file(a: Path, b: Path) -> bool:

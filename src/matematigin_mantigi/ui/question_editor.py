@@ -461,10 +461,25 @@ class QuestionEditorDialog(QDialog):
             return (f"{head}\nSebep: yeni sürüm yazıldı ama geri okunamadı, bu yüzden dosyanın yerine konmadı (metinde "
                     f"Excel'in saklayamadığı bir karakter olabilir).\n\n{kept}; metni gözden geçirip yeniden Kaydet'e "
                     "basın. Ayrıntı hatalar.log dosyasında.")
-        if isinstance(err, PermissionError):     # Windows'ta Excel dosyayı açık tuttukça kilitler
-            return (f"{head}\n\nDosya Excel'de (ya da başka bir programda) açıksa kapatıp yeniden Kaydet'e basın; "
-                    f"açık değilse bu klasöre yazma izni yok.\n\n{kept}, hiçbiri kaybolmadı.")
+        if isinstance(err, PermissionError):
+            return f"{head}\n\n{self._permission_hint(err)}\n\n{kept}, hiçbiri kaybolmadı."
         if isinstance(err, OSError):
             return f"{head}\nSebep: {describe_os_error(err)}\n\n{kept}; sorunu giderip yeniden Kaydet'e basın."
         return (f"{head}\nSebep: beklenmeyen hata ({type(err).__name__}: {err}).\n\n{kept}. Ayrıntı hatalar.log "
                 "dosyasında.")
+
+    def _permission_hint(self, err: PermissionError) -> str:
+        """Erişim hatasının gerçek dosyasına göre ne yapılacağı (Q3). os.replace hatası hedefi filename2'de taşır: yedek
+        kilitliyken soru dosyasını (Excel'i) suçlamak öğretmeni yanlış yere gönderiyordu."""
+        culprit = Path(err.filename2 or err.filename or self.questions_path).name
+        bak = backup_path(self.questions_path).name
+        if culprit == bak:
+            return (f"Önceki sürümün yedeği {bak} değiştirilemedi: başka bir programda (eşitleme, virüs tarayıcı) "
+                    "açık, salt okunur ya da kilitli olabilir. Kapatıp ya da kilidini kaldırıp yeniden Kaydet'e basın; "
+                    "yedeğe ihtiyacınız yoksa onu klasörden kaldırabilirsiniz.")
+        if culprit.startswith(".") and culprit.endswith(".tmp"):     # yeni sürümün geçici dosyası: klasör yazılamıyor
+            return (f"Bu klasöre yazılamıyor: {self.questions_path.parent}\nKlasöre yazma izni yok ya da klasör salt "
+                    "okunur. macOS'ta uygulamanın bu klasöre erişim izni (Sistem Ayarları > Gizlilik ve Güvenlik > "
+                    "Dosyalar ve Klasörler) kapalı olabilir.")
+        return ("Dosya Excel'de (ya da başka bir programda) açıksa kapatıp yeniden Kaydet'e basın; açık değilse dosya "
+                "salt okunur ya da kilitli olabilir, ya da bu klasöre yazma izni yok.")

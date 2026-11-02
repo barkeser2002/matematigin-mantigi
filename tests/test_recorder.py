@@ -665,38 +665,81 @@ def _outcome(fn):
         return "istisna", err
 
 
+def waiting_stop_signal(monkeypatch) -> threading.Event:
+    """Kapanışı bekleyen ikinci stop() bekleme yoluna girince kurulan olay (bekleme sınırını hesapladığı an): testler
+    kapanışı ancak ondan sonra bırakır, ikinci stop() geç kalıp kapanış bitmiş kaydı görmesin (yarış yok)."""
+    from matematigin_mantigi.core import recorder as r
+    entered = threading.Event()
+    real = r._close_limit
+    monkeypatch.setattr(r, "_close_limit", lambda duration: (entered.set(), real(duration))[1])
+    return entered
+
+
+def writer_blocked_in_pipe_write(rec) -> bool:
+    """Kaydın yazıcı iş parçacığı ffmpeg borusuna yazarken mi bekliyor (Python yığınının tepesi _loop'taki
+    stdin.write)? Durdurmadan önce bunu beklemek, yazıcı ilk kareyi yazmadan durdurulma yarışını önler."""
+    import linecache
+    s = rec._session
+    th = s.thread if s is not None else None
+    frame = sys._current_frames().get(th.ident) if th is not None and th.ident is not None else None
+    return (frame is not None and frame.f_code.co_name == "_loop"
+            and "stdin.write" in linecache.getline(frame.f_code.co_filename, frame.f_lineno))
+
+
+UNRESPONSIVE = {                                                         # çıktı dosyasını açar, sonra yanıt vermez
+    "okumayi-birakan": 'for last; do :; done; : > "$last"; exec sleep 300',
+    "eofta-kapanmayan": 'for last; do :; done; : > "$last"; cat > /dev/null; exec sleep 300',
+}
+
+
 @posix_only
 @pytest.mark.parametrize("mic", [False, True], ids=["mikrofonsuz", "mikrofonlu"])
-def test_ffmpeg_that_stops_reading_is_killed_and_stop_returns(tmp_path, monkeypatch, mic):
+@pytest.mark.parametrize("fake", list(UNRESPONSIVE))
+def test_unresponsive_ffmpeg_is_killed_and_stop_returns(tmp_path, monkeypatch, fake, mic):
     """ffmpeg stdin'i okumayı bırakıp ölmezse (donan kodlayıcı, takılan disk) yazıcı iş parçacığı write()'ta borunun
     kilidini tutarak bekler. Kapanıştaki stdin.close() aynı kilidi beklediği için join ve communicate zaman aşımları
     hiç işlemiyordu: stop() dönmüyor, kaydedici FINALIZING'de, şerit 'Kayıt kaydediliyor…'da, R ve düğme kilitli
-    kalıyordu. Şimdi yazıcı zamanında durmazsa ffmpeg öldürülür; stop() döner, kaydedici IDLE, hata ne olduğunu ve
-    silinmeyen dosyaları söyler. Kapanışı bekleyen ikinci stop() da sınırlı bekler ve hatayı RecorderError ile görür."""
+    kalıyordu. Şimdi yazıcı zamanında durmazsa ffmpeg öldürülür; EOF'tan sonra çıkmayan ffmpeg de aynı biçimde. stop()
+    döner, kaydedici IDLE; birleştirme denenmez (öldürülen ffmpeg'in videosu eksik), hiçbir dosya silinmez, hata ne
+    olduğunu ve dosyaların yerini söyler. Kapanışı bekleyen ikinci stop() aynı hatayı RecorderError ile görür."""
     from matematigin_mantigi.core import recorder as r
     from matematigin_mantigi.core.recorder import RecorderState
-    monkeypatch.setattr(r, "WRITER_JOIN_S", 0.5)                    # gerçek sınır 10 sn; test kısa sürsün
-    exe = fake_ffmpeg(tmp_path, "exec sleep 300")                     # stdin'i hiç okumaz, kendiliğinden ölmez
+    monkeypatch.setattr(r, "WRITER_JOIN_S", 0.5)                        # gerçek sınır 10 sn; test kısa sürsün
+    if fake == "eofta-kapanmayan":
+        monkeypatch.setattr(r, "FFMPEG_EXIT_S", 0.5)                    # (okumayan ffmpeg bu sınıra hiç varmamalı)
+    calls = tmp_path / "diger-cagrilar.txt"
+    exe = fake_ffmpeg(tmp_path, UNRESPONSIVE[fake], other=f"echo \"$*\" >> '{calls}'; exit 1")
     kw = dict(audio_device="Sahte Mikrofon", audio_factory=FakeAudioCapture) if mic else {}
     rec = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber, out_height=0,
                             ffmpeg_exe=str(exe), clock=stepping_clock(), **kw)
-    rec.start(RecordRect(0, 0, 160, 120))                             # kare 76,8 KB > boru tamponu: write() bekler
+    waiter_in = waiting_stop_signal(monkeypatch)
+    real_kill = rec._kill
+
+    def kill_once_the_second_stop_waits(proc):
+        assert waiter_in.wait(15), "ikinci stop() kapanışı beklemeye girmedi"
+        real_kill(proc)
+    monkeypatch.setattr(rec, "_kill", kill_once_the_second_stop_waits)
+    rec.start(RecordRect(0, 0, 160, 120))                               # kare 76,8 KB > boru tamponu (64 KB)
     pid_file = tmp_path / "ffmpeg.pid"
     wait_until(lambda: pid_file.exists() and pid_file.read_text().strip() != "")
     pid = int(pid_file.read_text())
+    if fake == "okumayi-birakan":
+        wait_until(lambda: writer_blocked_in_pipe_write(rec))           # yazıcı borunun kilidini tutarak bekliyor
+    else:
+        wait_until(lambda: rec.frames_written >= 3)                     # ffmpeg okuyor, kayıt sürüyor
     outcomes: list = [None, None]
     stoppers = [threading.Thread(target=lambda i=i: outcomes.__setitem__(i, _outcome(rec.stop)), daemon=True)
                 for i in range(2)]
     try:
         stoppers[0].start()
         wait_until(lambda: rec.state is RecorderState.FINALIZING)
-        stoppers[1].start()                                           # pencere kapatma + işçi gibi ikinci stop()
+        stoppers[1].start()                                             # pencere kapatma + işçi gibi ikinci stop()
         for t in stoppers:
             t.join(15)
         assert not any(t.is_alive() for t in stoppers), "stop() takılı kaldı"
     finally:
         try:
-            os.kill(pid, signal.SIGKILL)                              # (düzeltmesiz kodda takılı stop()'u çöz)
+            os.kill(pid, signal.SIGKILL)                                # (düzeltmesiz kodda takılı stop()'u çöz)
         except ProcessLookupError:
             pass
         for t in stoppers:
@@ -707,10 +750,12 @@ def test_ffmpeg_that_stops_reading_is_killed_and_stop_returns(tmp_path, monkeypa
     assert rec.error.startswith("ffmpeg yanıt vermedi; kayıt zorla kapatıldı"), rec.error
     assert str(outcomes[1][1]) == rec.error
     with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)                                               # öldürüldü ve toplandı (zombi değil)
-    if mic:
-        wav = rec.last_path.with_suffix(".wav")
-        assert wav.exists() and str(wav) in rec.error, rec.error      # ses silinmedi; öğretmen yerini görür
+        os.kill(pid, 0)                                                 # öldürüldü ve toplandı (zombi değil)
+    assert not calls.exists(), calls.read_text()                        # birleştirme / süre ölçümü denenmedi
+    kept = [rec.last_path.with_name(rec.last_path.stem + ".video.mp4"), rec.last_path.with_suffix(".wav")] \
+        if mic else [rec.last_path]
+    for f in kept:                                                      # ara dosyalar silinmedi, yerleri hatada
+        assert f.exists() and str(f) in rec.error, (f, rec.error)
 
 
 class NoMic:
@@ -739,6 +784,7 @@ def test_exception_while_finalizing_is_recorded_and_the_waiting_stop_sees_it(tmp
     rec.start(RecordRect(0, 0, 160, 120))
     wait_until(lambda: rec.frames_written >= 3)
     monkeypatch.setattr(Path, "replace", busy)
+    waiter_in = waiting_stop_signal(monkeypatch)
     outcomes: list = [None, None]
     stoppers = [threading.Thread(target=lambda i=i: outcomes.__setitem__(i, _outcome(rec.stop)), daemon=True)
                 for i in range(2)]
@@ -746,8 +792,7 @@ def test_exception_while_finalizing_is_recorded_and_the_waiting_stop_sees_it(tmp
     try:
         assert entered.wait(20)
         stoppers[1].start()
-        stoppers[1].join(0.3)
-        assert stoppers[1].is_alive()                                 # kapanışın bitmesini bekliyor
+        assert waiter_in.wait(20)                                     # ikinci stop() kapanışın bitmesini bekliyor
     finally:
         go.set()
         for t in stoppers:
@@ -758,6 +803,32 @@ def test_exception_while_finalizing_is_recorded_and_the_waiting_stop_sees_it(tmp
         "Kayıt kapatılamadı: PermissionError: [Errno 13] dosya kullanımda"), rec.error
     assert f"Kayıt klasörü: {tmp_path / 'rec'}" in rec.error, rec.error
     assert second[0] == "istisna" and isinstance(second[1], RecorderError) and str(second[1]) == rec.error, second
+
+
+@pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
+def test_waiting_stop_gives_up_when_the_closing_exceeds_its_limit(tmp_path, monkeypatch):
+    """Kapanışı bekleyen ikinci stop() sınırsız beklemez: kapanışın kendi sınırları toplamı (_close_limit) dolunca
+    RecorderError ile döner. Kapanışın kendisi sürer ve kaydı bitirir."""
+    from matematigin_mantigi.core import recorder as r
+    from matematigin_mantigi.core.recorder import RecorderState
+    mux = SlowMux(monkeypatch)
+    monkeypatch.setattr(r, "_close_limit", lambda duration: 0.2)
+    rec = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber, out_height=0,
+                            audio_device="Sahte Mikrofon", audio_factory=FakeAudioCapture, clock=stepping_clock())
+    rec.start(RecordRect(0, 0, 160, 120))
+    wait_until(lambda: rec.frames_written >= 5)
+    outcome: list = []
+    closer = threading.Thread(target=lambda: outcome.append(_outcome(rec.stop)), daemon=True)
+    closer.start()
+    try:
+        assert mux.entered.wait(20)                                     # kapanış birleştirmede bekliyor
+        with pytest.raises(RecorderError, match="kapanışı .* bitmedi"):
+            rec.stop()
+        assert rec.state is RecorderState.FINALIZING                    # bekleyen vazgeçti, kapanış sürüyor
+    finally:
+        mux.release()
+        closer.join(20)
+    assert outcome == [("dönüş", rec.last_path)] and rec.state is RecorderState.IDLE and rec.last_path.exists()
 
 
 @posix_only
@@ -852,3 +923,4 @@ def test_recording_errors_reach_the_error_log_as_one_line(tmp_path, monkeypatch)
     line = results[0][0]
     assert line.startswith(f"{path.name} · hata: ffmpeg borusu kapandı: Error while opening encoder"), line
     assert "ses: Mikrofon açılamadı: aygıt yok" in line, line
+

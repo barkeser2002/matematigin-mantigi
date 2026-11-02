@@ -522,15 +522,15 @@ class MssFfmpegRecorder:
     def _finalize(self, s: _Session) -> None:
         """Kapanış: yazıcıyı durdurur, mikrofonu kapatır, ffmpeg'in dosyayı bitirmesini bekler, sesi birleştirir.
         Yalnız bu kaydın oturumuyla çalışır; kilit tutulmaz (start() bu sürede FINALIZING görüp reddeder).
-        ffmpeg yanıt vermediyse (öldürüldü) birleştirme denenmez: video eksik ya da bozuktur, hiçbir dosyaya
-        dokunulmaz ve hata öğretmene dosyaların yerini söyler."""
+        ffmpeg yanıt vermediyse (stdin'i okumadı ya da EOF'tan sonra çıkmadı; öldürüldü) birleştirme denenmez: video
+        eksik ya da bozuktur, hiçbir dosyaya dokunulmaz ve hata öğretmene dosyaların yerini söyler."""
         s.stop_event.set()
         s.duration = time.monotonic() - s.started_at
         hung = self._stop_writer(s)
         audio = self._stop_audio(s)
         proc = s.proc
-        if proc is not None:
-            self._close_ffmpeg(s, proc)
+        if proc is not None and not self._close_ffmpeg(s, proc):
+            hung = True                              # EOF'tan sonra da kapanmadı: öldürüldü
         self._close_log(s)
         if hung:
             s.error = self._hung_text(s)
@@ -557,10 +557,10 @@ class MssFfmpegRecorder:
         s.thread.join(timeout=KILL_JOIN_S)
         return True
 
-    def _close_ffmpeg(self, s: _Session, proc: subprocess.Popen) -> None:
-        """stdin'i kapatır (EOF: ffmpeg dosyayı bitirir) ve çıkmasını FFMPEG_EXIT_S bekler; çıkmazsa öldürür.
-        Yazıcı hâlâ write()'taysa (öldürülen ffmpeg'e rağmen) boru kapatılmaz: close() onun kilidini bekleyip
-        kapanışı yine kilitlerdi."""
+    def _close_ffmpeg(self, s: _Session, proc: subprocess.Popen) -> bool:
+        """stdin'i kapatır (EOF: ffmpeg dosyayı bitirir) ve çıkmasını FFMPEG_EXIT_S bekler. Çıkmazsa öldürür ve False
+        döner: video eksik ya da bozuk (moov yazılmadı), yanıt vermeyen ffmpeg gibi ele alınır. Yazıcı hâlâ
+        write()'taysa boru kapatılmaz: close() onun kilidini bekleyip kapanışı yine kilitlerdi."""
         stdin, proc.stdin = proc.stdin, None        # wait()/communicate() kapalı boruyu bir daha flush etmesin
         if stdin is not None and not (s.thread is not None and s.thread.is_alive()):
             try:
@@ -569,9 +569,10 @@ class MssFfmpegRecorder:
                 pass
         try:
             proc.wait(timeout=FFMPEG_EXIT_S)
+            return True
         except subprocess.TimeoutExpired:
             self._kill(proc)
-            s.error = s.error or "ffmpeg zamanında kapanmadı"
+            return False
 
     @staticmethod
     def _kill(proc: subprocess.Popen) -> None:

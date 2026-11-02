@@ -223,6 +223,7 @@ class ToolBar(QWidget):
         self.alert_label.setStyleSheet(f"QLabel {{ color: white; background: {theme.REC_DOT}; border-radius: 5px;"
                                        f" padding: 4px 3px; margin: 0 5px; }}")
         self.alert_label.hide()
+        self._alerts: dict[str, str] = {}               # set_alert: kaynak anahtarı -> metin
         outer.addWidget(self.alert_label)
 
         self.record_button = RecordButton()
@@ -325,10 +326,18 @@ class ToolBar(QWidget):
         """Kayıt süresi araç çubuğunda sayar (kayda girmez): 'DURDUR · 01:23'."""
         self.record_label.setText(f"DURDUR · {seconds // 60:02d}:{seconds % 60:02d}")
 
-    def set_alert(self, text: str | None) -> None:
-        """Kayıt düğmesinin üstündeki kırmızı uyarı şeridi (araç çubuğu kayda girmez); None ya da boş gizler."""
-        self.alert_label.setText(text or "")
-        self.alert_label.setVisible(bool(text))
+    def set_alert(self, key: str, text: str | None) -> None:
+        """Kayıt düğmesinin üstündeki kırmızı uyarı şeridi (araç çubuğu kayda girmez). Her kaynak kendi anahtarıyla
+        yazar ve yalnız kendi uyarısını kaldırır (None ya da boş): kayıt kapanışının temizliği başka bir kaynağın
+        uyarısını silmez. Birden çok uyarıda en son yazılan görünür, ötekilerin sayısı '(+N)' (şerit tek satır boyu
+        kadar kalsın, kaydırma alanını yemesin)."""
+        self._alerts.pop(key, None)
+        if text:
+            self._alerts[key] = text                    # dict sırası korunur: en son yazılan sonda
+        texts = list(self._alerts.values())
+        shown = texts[-1] + (f" (+{len(texts) - 1})" if len(texts) > 1 else "") if texts else ""
+        self.alert_label.setText(shown)
+        self.alert_label.setVisible(bool(texts))
         self._update_tier()
 
     def set_undo_enabled(self, on: bool) -> None:

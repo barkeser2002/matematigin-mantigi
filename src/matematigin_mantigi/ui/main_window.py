@@ -52,6 +52,7 @@ class _StopWorker(QThread):
 WEBCAM_HIDE_TIMEOUT_MS = 400   # apply_ui_settings'in "webcam" görünürlüğü kapatma yolu: closeEvent'in
                                # varsayılanından (2000ms) çok daha kısa -- bkz. apply_ui_settings ve
                                # WebcamPanel.shutdown docstring'i.
+SAVING_KEY = "kayit-kaydediliyor"        # araç çubuğu uyarı şeridinde bu kaynağın anahtarı
 SAVING_ALERT = "Kayıt kaydediliyor…"   # kapanış (ffmpeg + ses birleştirme) sürerken araç çubuğundaki uyarı
 
 
@@ -295,7 +296,7 @@ class MainWindow(QMainWindow):
 
     def toggle_recording(self, on: bool) -> None:
         if self._record_saving():               # düğme kilitli; R de kapanan kaydın yollarına karışmasın (#2)
-            self.toolbar.set_alert(SAVING_ALERT)
+            self.toolbar.set_alert(SAVING_KEY, SAVING_ALERT)
             return
         fps = self.settings.record_fps
         state = self.recorder.state
@@ -320,7 +321,7 @@ class MainWindow(QMainWindow):
             else:
                 self.toolbar.set_recording(False)
                 self.toolbar.record_button.setEnabled(False)
-                self.toolbar.set_alert(SAVING_ALERT)      # durum satırına değil: o tahtada, kayda girer
+                self.toolbar.set_alert(SAVING_KEY, SAVING_ALERT)      # durum satırına değil: o tahtada, kayda girer
                 self._stop_worker = _StopWorker(self.recorder, self)
                 self._stop_worker.done.connect(self._on_record_stopped)
                 self._stop_worker.start()
@@ -335,7 +336,7 @@ class MainWindow(QMainWindow):
         if worker is not None:
             worker.wait()                    # done run()'ın son adımı: iş parçacığı bitsin, öyle bırakılsın
         self._stop_worker = None             # kapanış bitti: düğme ve R yeniden kayıt başlatabilir
-        self.toolbar.set_alert(None)
+        self.toolbar.set_alert(SAVING_KEY, None)
         self.toolbar.record_button.setEnabled(True)
         self.toolbar.set_recording(False)
         err = (worker.exc if worker is not None and worker.exc else None) or getattr(self.recorder, "error", None)

@@ -205,7 +205,7 @@ def test_alert_strip_sits_above_record_button_and_fits_in_every_tier(qtbot):
     alert = tb.alert_label
     assert alert.isHidden()                                   # varsayılan: uyarı yok
     for text in ("Kayıt kaydediliyor…", "Kayıt sürerken pencere değiştirilemez"):
-        tb.set_alert(text)
+        tb.set_alert("test", text)
         assert alert.text() == text
         for h, tier in ((1100, "full"), (900, "compact"), (700, "mini"), (400, "mini")):
             tb.resize(88, h)
@@ -219,7 +219,7 @@ def test_alert_strip_sits_above_record_button_and_fits_in_every_tier(qtbot):
             assert all(alert.fontMetrics().horizontalAdvance(w) <= room for w in text.split()), (text, h)
     g = alert.geometry()
     assert tb.grab().toImage().pixelColor(g.center().x(), g.top() + 1).name() == theme.REC_DOT   # kırmızı şerit
-    tb.set_alert(None)
+    tb.set_alert("test", None)
     assert alert.isHidden()
 
 
@@ -230,7 +230,7 @@ def test_alert_strip_takes_only_its_own_room_so_content_does_not_start_scrolling
     kaydırma çubuğu daralttığı düğmelerin yazısını kırpıyordu."""
     shown, plain = make(qtbot), make(qtbot)
     for text in ("Kayıt kaydediliyor…", "Kayıt sürerken pencere değiştirilemez"):
-        shown.set_alert(text)
+        shown.set_alert("test", text)
         room = shown.alert_label.heightForWidth(shown.width()) + shown.layout().spacing()
         for h in range(400, 1201, 10):
             shown.resize(88, h)
@@ -238,14 +238,31 @@ def test_alert_strip_takes_only_its_own_room_so_content_does_not_start_scrolling
             QApplication.processEvents()
             assert shown.tier == plain.tier, (text, h)
             assert shown.scroll_area.viewport().height() == plain.scroll_area.viewport().height(), (text, h)
-    shown.set_alert(None)
+    shown.set_alert("test", None)
     shown.resize(88, 960)
     QApplication.processEvents()
     assert shown.tier == "full"
-    shown.set_alert("Kayıt kaydediliyor…")                    # yeniden boyutlanmadan: kalan yere COMPACT sığar
+    shown.set_alert("test", "Kayıt kaydediliyor…")                    # yeniden boyutlanmadan: kalan yere COMPACT sığar
     assert shown.tier == "compact"
-    shown.set_alert(None)
+    shown.set_alert("test", None)
     assert shown.tier == "full"                               # şerit kalkınca kademe geri gelir
+
+
+def test_alert_sources_have_their_own_keys_and_do_not_clear_each_other(qtbot):
+    """Her uyarı kaynağı kendi anahtarıyla yazar ve yalnız kendisini kaldırır: kayıt kapanışının temizliği, kayıt
+    sırasında gelen bir hata uyarısını silmez. Birden çok uyarıda en son gelen görünür, ötekilerin sayısı '(+N)'."""
+    tb = make(qtbot)
+    tb.set_alert("hata", "Beklenmeyen hata")
+    tb.set_alert("kaydediliyor", "Kayıt kaydediliyor…")
+    assert tb.alert_label.isVisible() and tb.alert_label.text() == "Kayıt kaydediliyor… (+1)"
+    tb.set_alert("kaydediliyor", None)
+    assert tb.alert_label.isVisible() and tb.alert_label.text() == "Beklenmeyen hata"
+    tb.set_alert("hata", "Yeni metin")                        # aynı anahtar üzerine yazar, çoğalmaz
+    assert tb.alert_label.text() == "Yeni metin"
+    tb.set_alert("hata", None)
+    assert tb.alert_label.isHidden()
+    tb.set_alert("olmayan", None)                             # olmayan anahtarı kaldırmak sorun değil
+    assert tb.alert_label.isHidden()
 
 
 def test_record_button_paint_adapts_to_smaller_diameter(qtbot):

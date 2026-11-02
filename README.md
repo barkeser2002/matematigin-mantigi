@@ -177,8 +177,15 @@ yazılamadı: …"). Birleşik dosya yine de videodan kısa çıkarsa ya da sür
 Durdurma birkaç saniye (uzun derste onlarca saniye) sürebilir: arayüz donmaz,
 kayıt düğmesinin üstünde kırmızı "Kayıt kaydediliyor…" şeridi görünür ve kayıt bitene kadar ne düğme ne R yeni kayıt
 başlatır (kapanan dersin dosyaları yenisine karışmasın). Şerit araç çubuğunda olduğu için kayda girmez (tahtadaki
-durum satırı ve rozet girer). Kayıt başlatılamazsa (ffmpeg yok, kayıt klasörü ya da dosyası açılamıyor: disk dolu,
-izin yok) sebebi bir pencerede yazar ve araç çubuğu "KAYIT"a döner.
+durum satırı ve rozet girer). Kayıt sürerken pencere kapatılırsa (pencere düğmesi ya da ⌘Q) önce "Kayıt sürüyor,
+durdurulup çıkılsın mı?" diye sorulur (varsayılan: kayda devam); "Durdur ve çık" kaydı arka planda kaydettirir, şerit
+"Kayıt kaydediliyor… bitince pencere kapanacak" der ve kayıt bitince (varsa hata gösterildikten sonra) pencere kendisi
+kapanır. Kayıt zaten kaydediliyorsa soru sorulmadan aynı bekleme olur. ffmpeg yanıt vermezse (borudan okumayı bırakırsa
+10 sn, durdurunca kapanmazsa 60 sn sonra) öldürülür: kayıt "ffmpeg yanıt vermedi; kayıt zorla kapatıldı" hatasıyla
+biter, birleştirme denenmez, ara dosyalar silinmez ve pencere yerlerini yazar. Kayıt başlatılamazsa (ffmpeg yok, kayıt
+klasörü ya da dosyası açılamıyor: disk dolu, izin yok; beklenmeyen bir hata da) sebebi bir pencerede yazar, açılmış
+ffmpeg ve mikrofon kapatılır, araç çubuğu "KAYIT"a döner. Kayıt hataları, ses uyarıları ve kayıt yolunda yakalanan
+istisnalar veri klasöründeki `hatalar.log`'a da yazılır. Windows'ta ffmpeg çağrıları konsol penceresi açmaz.
 Durdurunca durum satırı gerçek yakalama hızını yazar (Windows'ta GDI ~30 kare/sn ile sınırlar; macOS CoreGraphics daha hızlıdır).
 macOS'ta ilk kayıtta "Ekran Kaydı" izni istenir (Sistem Ayarları > Gizlilik ve Güvenlik); izin verilmezse kare siyah gelir.
 

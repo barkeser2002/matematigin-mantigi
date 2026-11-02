@@ -29,25 +29,35 @@ def close_question_never_blocks(monkeypatch):
         return 0
     monkeypatch.setattr(QMessageBox, "exec", exec_)
     yield
-    _let_background_saves_finish()
+    _release_windows_left_open()
     assert not unexpected, "kayıt açık kalmış pencere kapatıldı (kapanış sorusu yanıtlanmadı)"
 
 
-def _let_background_saves_finish(timeout_ms: int = 30000) -> None:
-    """Başarısız bir test kaydı arka planda kaydedilirken bırakırsa pytest-qt pencereyi close() (yok sayılır) ve
-    deleteLater eder; sonraki testin olay döngüsünde çalışan _StopWorker'lı pencere silinir, Qt süreci düşürür
-    ('QThread: Destroyed while thread is still running', Fatal Python error: Aborted) ve paketin geri kalanı hiç
-    koşmaz (macOS CI). Teardown'da işçi sınırlı beklenir, sonucu bu testin içinde işlenir."""
+def _release_windows_left_open(timeout_ms: int = 30000) -> None:
+    """pytest-qt teardown'da pencereyi close() ve deleteLater eder. Başarısız bir test pencereyi kapanmayı yok sayan
+    hâlde bırakmışsa (kayıt arka planda kaydediliyor ya da test kapanış sorusuna 'Kayda devam et' dedirtmiş) pencere
+    çalışan iş parçacıklarıyla (kaydı kaydeden _StopWorker, kamera işçisi) sonraki testin olay döngüsünde silinir, Qt
+    süreci düşürür ('QThread: Destroyed while thread is still running', Fatal Python error: Aborted) ve paketin geri
+    kalanı hiç koşmaz (macOS CI). Teardown'da kayıt işçisi sınırlı beklenir, sonucu bu testte işlenir; pencere hâlâ
+    açıksa kayıt durdurulur ve kamera kapatılır: bir testin hatası yalnız o testi kırmızı yapar."""
     from PyQt6.QtWidgets import QApplication
-    from matematigin_mantigi.ui.main_window import _StopWorker
-    waited = False
+    from matematigin_mantigi.core.recorder import RecorderState
+    from matematigin_mantigi.ui.main_window import MainWindow, _StopWorker
     for w in QApplication.topLevelWidgets():
-        for worker in w.findChildren(_StopWorker):
-            if worker.isRunning():
-                worker.wait(timeout_ms)
-                waited = True
-    if waited:
-        QApplication.processEvents()                                    # kuyruktaki sonuç (_on_record_stopped)
+        if not isinstance(w, MainWindow):
+            continue
+        workers = [t for t in w.findChildren(_StopWorker) if t.isRunning()]
+        for worker in workers:
+            worker.wait(timeout_ms)
+        if workers:
+            QApplication.processEvents()                                # kuyruktaki sonuç (_on_record_stopped)
+        if w.isVisible():                                               # kapanma yok sayıldı: pencere açık kaldı
+            try:
+                if w.recorder.state is RecorderState.RECORDING:
+                    w.recorder.stop()
+            except Exception:  # noqa: BLE001 - temizlik; test zaten hatayla biter
+                pass
+            w.webcam_panel.shutdown()
 
 
 def test_window_shell(window):

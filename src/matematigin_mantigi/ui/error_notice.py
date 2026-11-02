@@ -17,7 +17,7 @@ import sys
 from typing import Callable, Sequence
 
 from PyQt6 import sip
-from PyQt6.QtCore import QObject, QPoint, QRect, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QCoreApplication, QObject, QPoint, QRect, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
 
@@ -168,6 +168,7 @@ class ErrorNotice(QObject):
         box.setWindowModality(Qt.WindowModality.NonModal)
         box.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)   # kalemden/kısayollardan odak çalmaz
         box.finished.connect(self._on_box_finished)
+        box.destroyed.connect(self._on_box_destroyed)
         self.box = box
         return box
 
@@ -182,12 +183,14 @@ class ErrorNotice(QObject):
             # edilen boyutla konan kutu stil sayfasıyla büyüyüp ekrandan taşıyordu. Konum ilk çizimden önce,
             # aynı olay turunda verilir.
             box.show()
-            try:
-                pos = self._position(box.frameGeometry().size())
-                if pos is not None:
-                    box.move(pos)
-            except Exception:  # noqa: BLE001 - konum hesaplanamazsa Qt'nin varsayılan yeri
-                pass
+        # Görünür kutuda da konum gerçek boyutla yeniden verilir: daha uzun ikinci uyarı kutuyu (setText'te) büyütür,
+        # sol üst köşe yerinde kalınca alt kenar ve Tamam düğmesi ekranın altından taşıyordu.
+        try:
+            pos = self._position(box.frameGeometry().size())
+            if pos is not None:
+                box.move(pos)
+        except Exception:  # noqa: BLE001 - konum hesaplanamazsa Qt'nin varsayılan yeri
+            pass
 
     def _position(self, size: QSize) -> QPoint | None:
         anchor = self._live(self._anchor)
@@ -254,6 +257,26 @@ class ErrorNotice(QObject):
     def _on_box_finished(self, *_) -> None:
         self._current = {}                          # Tamam (ya da Esc): uyarı görüldü
         self._update_polling()
+
+    def _on_box_destroyed(self, *_) -> None:
+        # Kutu, kullanıcı Tamam'a basmadan yok oldu: sahibi olan geçici modal pencere (ör. QMessageBox.warning)
+        # kapanınca çocuğu olan kutu da silinir. Anahtar gösterildi sayıldığından aynı uyarı bir daha hiç gelmezdi.
+        if self._current:
+            QTimer.singleShot(0, self._reshow)
+
+    def _reshow(self) -> None:
+        """Yok olan kutunun içeriğini çapa (ana pencere) altında yeniden gösterir (kayıt sürüyorsa şeride). Çapa da
+        yok olduysa ya da uygulama kapanıyorsa gösterilmez; anahtarlar serbest kalır, aynı uyarı yeniden gelebilir."""
+        try:
+            if not self._current or self._live(self.box) is not None:
+                return
+            items, self._current = self._current, {}
+            if QCoreApplication.closingDown() or (self._anchor is not None and self._live(self._anchor) is None):
+                self._shown.difference_update(items)
+                return
+            self._deliver(items)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _to_stderr(title: str, text: str) -> None:

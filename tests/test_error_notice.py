@@ -174,6 +174,52 @@ def test_box_open_when_recording_starts_is_hidden_and_comes_back_after(qtbot):
     assert notice.box.text() == "kayıttan önce gelen" and alerts[-1] is None
 
 
+def test_growing_box_is_moved_back_onto_the_screen(qtbot):
+    """B-3: görünür kutuya daha uzun ikinci uyarı gelince kutu yerinde büyüyordu: alt köşeye konan kutunun alt kenarı
+    ve Tamam düğmesi ekranın altından taşıyordu (1920x1080 tam ekranda 88 px). Görünürken de gerçek boyutla
+    yeniden konumlanır."""
+    notice, _ = _notice(qtbot)
+    notice.post("Düzen kaydedilemedi", "kısa", "k1")
+    qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)
+    qtbot.addWidget(notice.box)
+    long_text = "\n".join(f"{i}. satır: kutuyu büyüten uzun uyarı metni" for i in range(16))
+    notice.post("Beklenmeyen hata", long_text, "k2")
+    qtbot.waitUntil(lambda: notice.box.text() == long_text, timeout=2000)
+    assert notice.box.screen().availableGeometry().contains(notice.box.frameGeometry())
+
+
+def test_box_destroyed_with_its_temporary_modal_parent_is_shown_again(qtbot):
+    """B-4: modal bir pencere açıkken gelen uyarının kutusu onun çocuğu olur (tıklanabilsin). Pencere statik
+    QMessageBox.warning() ise (\"Kaydedilemedi\", \"Kayıt hatası\") kapanınca kutuyu da siler; anahtar gösterildi
+    sayıldığı için aynı uyarı bir daha hiç gelmiyordu. Tamam'a basılmadan yok olan kutu ana pencere altında yeniden
+    açılır; Tamam'a basılmış uyarı ise geri gelmez."""
+    notice, anchor = _notice(qtbot)
+
+    def open_modal():
+        modal = QMessageBox(QMessageBox.Icon.Warning, "Kaydedilemedi", "…", QMessageBox.StandardButton.Ok, anchor)
+        modal.setModal(True); modal.show()
+        qtbot.waitUntil(lambda: QApplication.activeModalWidget() is modal, timeout=2000)
+        return modal
+
+    modal = open_modal()
+    notice.post("Beklenmeyen hata", "modal açıkken gelen", "k1")
+    qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)
+    assert notice.box.parent() is modal
+    sip.delete(modal)                          # statik warning() exec bitince kutuyu böyle siler
+    qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)
+    qtbot.addWidget(notice.box)
+    assert notice.box.parent() is anchor and notice.box.text() == "modal açıkken gelen"
+    notice.box.button(QMessageBox.StandardButton.Ok).click()
+
+    modal = open_modal()
+    notice.post("Beklenmeyen hata", "görülen uyarı", "k2")
+    qtbot.waitUntil(lambda: _box_shown(notice) and notice.box.text() == "görülen uyarı", timeout=2000)
+    notice.box.button(QMessageBox.StandardButton.Ok).click()                 # öğretmen gördü
+    sip.delete(modal)
+    qtbot.wait(100)
+    assert _visible_boxes() == []
+
+
 # --- gerçek app.main: kayıt yolu ve yerleşim bağlaması --------------------------------------------------------
 _FHD = [dict(name="S1", x=0, y=0, width=1920, height=1080, logicalDpi=96, logicalBaseDpi=96, dpr=1)]
 _DUAL = _FHD + [dict(name="S2", x=1920, y=0, width=1440, height=900, logicalDpi=96, logicalBaseDpi=96, dpr=1)]

@@ -83,6 +83,21 @@ soru metni, A–D şıkları, cevap ve 4 ipucu doldur, **Resim seç…** ile gö
 kopyalanır). **Kaydet** xlsx'e yazar ve uygulamayı yeniden başlatmadan tazeler. `--sorular` verilmezse veri
 klasöründeki `sorular_sablon.xlsx` düzenlenir.
 
+Kaydet önce dosyanın o anki hâlini yanına `sorular_sablon.xlsx.bak` olarak kopyalar, yeni sürümü geçici bir dosyaya
+yazar ve ancak yazım tamamlanınca yerine koyar: disk dolsa, USB çıkarılsa ya da dosya Excel'de açık olsa da soru
+dosyası yarım kalmaz (mesaj dosyanın değişmediğini söyler). Bir önceki sürüme dönmek için uygulama kapalıyken `.bak`
+dosyasının adını `sorular_sablon.xlsx` yapın. Soru dosyası okunamazsa uygulama dosya adını ve sebebi söyleyip örnek
+sorularla açılır; editör böyle bir dosyanın üzerine yazmaz (önce düzeltilmeli ya da klasörden kaldırılmalı).
+`duzen.json` da aynı yolla (geçici dosya + yerine koyma) yazılır.
+
+## Hatalar ve uyarılar
+
+Beklenmeyen bir hata uygulamayı ve süren kaydı durdurmaz. Ayrıntısı (zaman, sürüm, traceback) veri klasöründeki
+`hatalar.log` dosyasına yazılır: geliştirmede çalışma klasörü, paketlenmiş uygulamada `~/Documents/Matematiğin
+Mantığı/`. Aynı hata bir kez tam, sonra yalnız 10., 100. … tekrarında tek satır olarak düşer. Hata bildirirken bu
+dosyayı ekleyin. Uyarı kutusu kayıt sürerken (kayıt kaydedilirken de) açılmaz, çünkü kayda girerdi: araç çubuğunun
+kırmızı şeridinde "⚠ … — ayrıntı kayıt bitince" yazar, kutu kayıt bitince açılır.
+
 ## macOS paketleme (.app)
 
 Mac'te proje kökünde:

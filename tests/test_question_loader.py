@@ -243,3 +243,49 @@ def test_unreadable_question_file_opens_with_samples_and_names_the_file(tmp_path
     assert "sorular.xlsx.bak" in shown[0][1] and "Örnek sorularla" in shown[0][1]
     if kind in ("yarim", "metin"):
         assert "bozuk" in shown[0][1]
+
+
+def _assert_not_held_open(path: Path) -> None:
+    """Süreç dosyayı açık tutmuyor. Linux'ta /proc/self/fd'den bakılır; Windows'ta açık tutamak dosyayı kilitler,
+    yeniden adlandırma PermissionError (WinError 32) verir: ikisi de denenir."""
+    fd_dir = Path("/proc/self/fd")
+    if fd_dir.is_dir():
+        target = str(path.resolve())
+        held = []
+        for fd in fd_dir.iterdir():
+            try:
+                if os.readlink(fd) == target:
+                    held.append(fd.name)
+            except OSError:
+                pass
+        assert not held, f"{path.name} açık tutamakta: fd {held}"
+    moved = path.with_name("tasindi-" + path.name)
+    os.replace(path, moved)
+    os.replace(moved, path)
+
+
+@pytest.mark.parametrize("kind", ["sutun", "bos-soru", "gecerli"])
+def test_load_lets_go_of_the_file_on_every_path(tmp_path, kind):
+    """read_only çalışma kitabı dosyayı açık tutar; hata wb.close()'dan önce fırlayınca (eksik sütun, boş soru)
+    tutamak çöp toplayıcıya dek kalıyordu. Windows'ta bu sürede dosya yeniden adlandırılamaz, Excel'den
+    kaydedilemez, editörün atomik yazımı (os.replace) da düşer (CI: WinError 32). Her yolda dosya bırakılır."""
+    import gc
+    path = tmp_path / "sorular_sablon.xlsx"
+    if kind == "gecerli":
+        write_questions(path, SAMPLE_QUESTIONS)
+    else:
+        wb = openpyxl.Workbook()
+        wb.active.append(["id", "metin"] if kind == "sutun" else ["id", "soru"])
+        wb.active.append(["S1", "Gerçek soru"] if kind == "sutun" else ["S1", None])
+        wb.active.append(["S2", "İkinci"])
+        wb.save(path)
+    gc.disable()                                # tutamak çöp toplayıcının şansına bırakılmasın
+    try:
+        if kind == "gecerli":
+            assert load_questions(path)
+        else:
+            with pytest.raises(QuestionTemplateError):
+                load_questions(path)
+        _assert_not_held_open(path)
+    finally:
+        gc.enable()

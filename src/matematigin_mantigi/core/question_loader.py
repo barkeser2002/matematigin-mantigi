@@ -135,8 +135,14 @@ def load_questions(path: Path) -> list[Question]:
     if not path.exists():
         raise QuestionTemplateError(f"Şablon bulunamadı: {path}")
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    ws = wb.active
-    rows = ws.iter_rows(values_only=True)
+    try:
+        # Satırlar önce belleğe alınır, kitap hemen kapanır: read_only kitap dosyayı açık tutar ve aşağıdaki doğrulama
+        # hatası wb.close()'dan önce fırlayınca tutamak çöp toplayıcıya dek kalıyordu. Windows'ta açık tutamak
+        # dosyayı kilitler: öğretmen Excel'den kaydedemez, editörün atomik yazımı (os.replace) da düşer.
+        all_rows = list(wb.active.iter_rows(values_only=True))
+    finally:
+        wb.close()
+    rows = iter(all_rows)
     header = [_text(c).lower() for c in (next(rows, None) or [])]
     missing = [c for c in REQUIRED_COLUMNS if c not in header]
     if missing:
@@ -169,7 +175,6 @@ def load_questions(path: Path) -> list[Question]:
             image = str(p if p.is_absolute() else (path.parent / p))
         questions.append(Question(qid, cell(cells, "konu"), sinif, soru, hints, cell(cells, "cevap"),
                                   options, image))
-    wb.close()
     if not questions:
         raise EmptyTemplateError("Şablonda hiç soru yok")
     return questions

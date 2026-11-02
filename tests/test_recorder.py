@@ -776,3 +776,79 @@ def test_ffmpeg_that_dies_at_start_keeps_the_wav_and_says_where_it_is(tmp_path):
     assert wav.exists() and not path.exists() and not path.with_name(path.stem + ".video.mp4").exists()
     assert "No space left on device" in rec.error and "Video dosyası oluşmadı" in rec.error, rec.error
     assert str(wav) in rec.error, rec.error
+
+
+def capture_logged(monkeypatch) -> list:
+    """crash_log.log_handled çağrıları (istisna, yer): hatalar.log'a giden yakalanmış hatalar."""
+    from matematigin_mantigi.core import crash_log
+    logged: list = []
+    monkeypatch.setattr(crash_log, "log_handled", lambda exc, where="": logged.append((exc, where)))
+    return logged
+
+
+@pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
+def test_unexpected_failure_after_ffmpeg_started_leaks_nothing(tmp_path, monkeypatch):
+    """Popen'dan sonraki adım beklenmedik biçimde düşerse (yazıcı iş parçacığı açılamadı: "can't start new thread")
+    açılan ffmpeg süreci ve mikrofon her denemede sızıyor, ham RuntimeError arayüze kaçıyordu. Şimdi açılan her şey
+    kapatılır (ffmpeg öldürülüp toplanır, günlük dosyası ve mikrofon kapanır), anlamlı RecorderError fırlar, kaydedici
+    IDLE kalır; sorun geçince sonraki kayıt başlar."""
+    from matematigin_mantigi.core.recorder import RecorderState
+    mics: list = []
+
+    class SpyMic(FakeAudioCapture):
+        def __init__(self, device):
+            super().__init__(device)
+            self.stopped = False
+            mics.append(self)
+
+        def stop(self):
+            self.stopped = True
+            return super().stop()
+    procs: list = []
+    real_popen = subprocess.Popen
+
+    class SpyPopen(real_popen):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            procs.append(self)
+    real_start = threading.Thread.start
+
+    def start(self):
+        if getattr(getattr(self, "_target", None), "__name__", "") == "_loop":    # kaydın yazıcı iş parçacığı
+            raise RuntimeError("can't start new thread")
+        return real_start(self)
+    monkeypatch.setattr(subprocess, "Popen", SpyPopen)
+    monkeypatch.setattr(threading.Thread, "start", start)
+    rec = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber, out_height=0,
+                            audio_device="Sahte Mikrofon", audio_factory=SpyMic, clock=stepping_clock())
+    rect = RecordRect(0, 0, 160, 120)
+    with pytest.raises(RecorderError, match="Kayıt başlatılamadı: RuntimeError: can't start new thread"):
+        rec.start(rect)
+    assert rec.state is RecorderState.IDLE and rec.last_path is None
+    assert len(procs) == 1 and procs[0].poll() is not None              # ffmpeg öldürüldü ve toplandı
+    assert len(mics) == 1 and mics[0].stopped                          # mikrofon kapandı
+    log = next((tmp_path / "rec").glob("kayit_*.log")).resolve()
+    if Path("/proc/self/fd").is_dir():                                 # günlük dosyası açık kalmadı (Linux)
+        assert all(Path(f"/proc/self/fd/{fd}").resolve() != log for fd in os.listdir("/proc/self/fd"))
+    monkeypatch.setattr(threading.Thread, "start", real_start)
+    rec.start(rect)                                                    # sorun geçti: kaydedici takılı değil
+    wait_until(lambda: rec.frames_written >= 3)
+    assert rec.stop().exists() and rec.error is None, rec.error
+
+
+@posix_only
+def test_recording_errors_reach_the_error_log_as_one_line(tmp_path, monkeypatch):
+    """Kaydın sonu hatayla bittiyse (error) ya da ses uyarısı varsa (audio_error) hatalar.log'a tek satır düşer:
+    öğretmen 'Kayıt hatası' penceresini okumadan kapatsa da sonradan ne olduğu görülür."""
+    logged = capture_logged(monkeypatch)
+    exe = fake_ffmpeg(tmp_path, "echo 'Error while opening encoder: No space left on device' >&2; exit 1")
+    rec = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber, out_height=0,
+                            ffmpeg_exe=str(exe), audio_device="Yok", audio_factory=NoMic, clock=stepping_clock())
+    rec.start(RecordRect(0, 0, 160, 120))
+    wait_until(lambda: rec.failed)
+    path = rec.stop()
+    results = [(str(exc), where) for exc, where in logged if where == "kayıt sonucu"]
+    assert len(results) == 1 and "\n" not in results[0][0], logged
+    line = results[0][0]
+    assert line.startswith(f"{path.name} · hata: ffmpeg borusu kapandı: Error while opening encoder"), line
+    assert "ses: Mikrofon açılamadı: aygıt yok" in line, line

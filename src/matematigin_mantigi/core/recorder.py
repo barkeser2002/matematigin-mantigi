@@ -25,6 +25,7 @@ from typing import BinaryIO, Callable, Protocol
 
 import numpy as np
 
+from matematigin_mantigi.core import crash_log
 from matematigin_mantigi.core.audio_capture import AudioCapture, AudioResult
 
 
@@ -427,6 +428,7 @@ class MssFfmpegRecorder:
             finally:                                 # kapanış patlasa da FINALIZING'de takılı kalınmasın
                 with self._lock:
                     self._state = RecorderState.IDLE
+                self._log_result(s)
                 s.finished.set()
         elif state is RecorderState.FINALIZING:
             limit = _close_limit(max(s.duration, time.monotonic() - s.started_at))
@@ -504,9 +506,17 @@ class MssFfmpegRecorder:
             self._close_log(s)
             self._abort_audio(s)
             raise RecorderError(f"ffmpeg başlatılamadı: {err}") from err
-        s.started_at = time.monotonic()
-        s.thread = threading.Thread(target=self._loop, args=(s, grab_rect, first, w, h, fps), daemon=True)
-        s.thread.start()
+        try:
+            s.started_at = time.monotonic()
+            s.thread = threading.Thread(target=self._loop, args=(s, grab_rect, first, w, h, fps), daemon=True)
+            s.thread.start()
+        except BaseException as err:                 # beklenmeyen (ör. iş parçacığı açılamadı): hiçbir şey sızmasın
+            self._kill(s.proc)
+            self._close_log(s)
+            self._abort_audio(s)
+            if not isinstance(err, Exception):       # KeyboardInterrupt/SystemExit olduğu gibi gitsin
+                raise
+            raise RecorderError(f"Kayıt başlatılamadı: {exception_text(err)}") from err
         return s
 
     def _finalize(self, s: _Session) -> None:
@@ -571,6 +581,16 @@ class MssFfmpegRecorder:
             proc.wait(timeout=5)
         except (OSError, subprocess.SubprocessError):
             pass
+
+    @staticmethod
+    def _log_result(s: _Session) -> None:
+        """Kaydın hatası ve ses uyarısı hatalar.log'a tek satır (günlük kurulu değilse hiçbir şey): öğretmen 'Kayıt
+        hatası' penceresini okumadan kapatsa da sonradan ne olduğu görülür. İstisna fırlatmaz."""
+        parts = [f"hata: {s.error}" if s.error else "", f"ses: {s.audio_error}" if s.audio_error else ""]
+        text = " · ".join(p for p in parts if p)
+        if text:
+            line = " | ".join(p.strip() for p in f"{s.final_path.name} · {text}".splitlines() if p.strip())
+            crash_log.log_handled(RecorderError(line), "kayıt sonucu")
 
     def _hung_text(self, s: _Session) -> str:
         kept = [p for p in (s.video_path, s.wav_path) if p is not None and p.exists()]

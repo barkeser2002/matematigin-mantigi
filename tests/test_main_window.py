@@ -441,16 +441,18 @@ def test_r_before_the_stop_result_reaches_the_window_starts_nothing(window, qtbo
 
 def test_exception_while_saving_is_shown_and_window_does_not_stay_locked(window, qtbot, tmp_path, monkeypatch):
     """Kapanışın bir adımı patlarsa (ör. Windows'ta kullanımdaki dosyanın yeniden adlandırılması) hata gösterilir ve
-    arayüz 'kaydediliyor'da takılı kalmaz: şerit kalkar, düğme açılır, sonraki R yeni kayıt başlatır."""
+    arayüz 'kaydediliyor'da takılı kalmaz: şerit kalkar, düğme açılır, sonraki R yeni kayıt başlatır. Pencere önce
+    kaydedicinin anlamlı hatasını gösterir (sebep + kayıt klasörü), ham istisna metnini değil; istisna günlüğe gider."""
     from pathlib import Path
     import pytest
     from PyQt6.QtWidgets import QMessageBox
     from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState, find_ffmpeg
-    from tests.test_recorder import stepping_clock, synthetic_grabber, wait_until
+    from tests.test_recorder import capture_logged, stepping_clock, synthetic_grabber, wait_until
     if find_ffmpeg() is None:
         pytest.skip("ffmpeg yok")
     shown = []
     monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: shown.append(a[1:3])))
+    logged = capture_logged(monkeypatch)
 
     class NoMic:
         def __init__(self, device): pass
@@ -471,6 +473,8 @@ def test_exception_while_saving_is_shown_and_window_does_not_stay_locked(window,
     qtbot.keyClick(window, Qt.Key.Key_R)
     qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=20000)
     assert shown and shown[0][0] == "Kayıt hatası" and "dosya kullanımda" in shown[0][1]
+    assert shown[0][1] == rec.error and f"Kayıt klasörü: {tmp_path / 'rec'}" in rec.error, shown
+    assert (PermissionError, "kayıt kapanışı") in [(type(e), where) for e, where in logged]
     assert tb.alert_label.isHidden() and rec.state is RecorderState.IDLE
     monkeypatch.setattr(Path, "replace", real_replace)
     qtbot.keyClick(window, Qt.Key.Key_R)                        # kilitli kalmadı: yeni kayıt başlar
@@ -483,11 +487,13 @@ def test_exception_while_saving_is_shown_and_window_does_not_stay_locked(window,
 def test_record_start_oserror_is_shown_and_toolbar_returns_to_idle(window, qtbot, monkeypatch):
     """Başlatmadaki OSError (disk dolu, izin yok, macOS'ta Belgeler izni) eskiden yalnız RecorderError yakalandığı
     için yuvadan kaçıyordu; PyQt6 yuvadaki yakalanmamış hatada uygulamayı kapatır. Şimdi anlamlı mesaj gösterilir,
-    araç çubuğu 'kayıt yok'a döner; düğme ve R aynı yoldan."""
+    araç çubuğu 'kayıt yok'a döner; düğme ve R aynı yoldan. Ayrıntı hatalar.log'a da düşer."""
     from PyQt6.QtWidgets import QMessageBox
     from matematigin_mantigi.core.recorder import RecorderState
+    from tests.test_recorder import capture_logged
     shown = []
     monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: shown.append(a[1:3])))
+    logged = capture_logged(monkeypatch)
 
     def disk_full(rect, fps=60):
         raise OSError(28, "No space left on device", "/Users/ogretmen/Documents/oturum")
@@ -500,6 +506,82 @@ def test_record_start_oserror_is_shown_and_toolbar_returns_to_idle(window, qtbot
     assert not tb.record_button.isChecked() and tb.record_label.text() == "KAYIT"
     qtbot.keyClick(window, Qt.Key.Key_R)
     assert len(shown) == 2 and not tb.record_button.isChecked()
+    assert [(type(e), where) for e, where in logged] == [(OSError, "kayıt başlatma")] * 2
+
+
+def test_unexpected_record_start_error_is_shown_logged_and_toolbar_returns_to_idle(window, qtbot, monkeypatch):
+    """Beklenmeyen (RecorderError/OSError dışı) başlatma hatası yuvadan kaçıyordu: düğme 'kayıtta' kalıyor, yalnız
+    genel hata kutusu ve aynı hata için bir kez geliyordu (sonraki denemeler sessiz). Son çare: her denemede 'Kayıt
+    başlatılamadı' penceresi, araç çubuğu 'KAYIT'a döner, ayrıntı hatalar.log'a gider."""
+    from PyQt6.QtWidgets import QMessageBox
+    from tests.test_recorder import capture_logged
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: shown.append(a[1:3])))
+    logged = capture_logged(monkeypatch)
+
+    def boom(rect, fps=60):
+        raise RuntimeError("can't start new thread")
+    monkeypatch.setattr(window.recorder, "start", boom)
+    tb = window.toolbar
+    qtbot.mouseClick(tb.record_button, Qt.MouseButton.LeftButton)
+    assert shown == [("Kayıt başlatılamadı", "Beklenmeyen hata: RuntimeError: can't start new thread")]
+    assert not tb.record_button.isChecked() and tb.record_label.text() == "KAYIT" and not window.badge.active
+    qtbot.keyClick(window, Qt.Key.Key_R)                                  # R aynı yoldan; ikinci deneme de sessiz değil
+    assert len(shown) == 2 and not tb.record_button.isChecked()
+    assert [(type(e), where) for e, where in logged] == [(RuntimeError, "kayıt başlatma")] * 2
+
+
+def test_stop_error_without_message_is_still_shown_and_logged(window, qtbot, monkeypatch):
+    """Kapanış mesajsız bir istisnayla patlarsa (OSError()) _StopWorker.exc boş kalıyor, arayüz hiçbir şey
+    göstermiyordu ve hata hiçbir yere yazılmıyordu. Şimdi pencerede istisnanın kendisi görünür, hatalar.log'a düşer."""
+    from PyQt6.QtWidgets import QMessageBox
+    from matematigin_mantigi.core.recorder import NullRecorder
+    from tests.test_recorder import capture_logged
+
+    class FailingStop(NullRecorder):                                  # kapanış ayrı iş parçacığında koşar
+        stop_is_quick = False
+
+        def stop(self):
+            super().stop()
+            raise OSError()
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: shown.append(a[1:3])))
+    logged = capture_logged(monkeypatch)
+    window.recorder = FailingStop()
+    tb = window.toolbar
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=10000)
+    assert shown == [("Kayıt hatası", "OSError()")]
+    assert [(type(e), where) for e, where in logged] == [(OSError, "kayıt kapanışı")]
+
+
+def test_ffmpeg_dying_at_start_shows_why_and_where_the_sound_is(window, qtbot, tmp_path, monkeypatch):
+    """Mikrofonlu kayıtta ffmpeg başta ölünce (kodlayıcı açılamadı, disk dolu) pencere ham 'No such file or
+    directory' metnini gösteriyordu. Şimdi kaydedicinin hatası: ffmpeg'in sebebi ve silinmeyen ses dosyasının yeri."""
+    import sys
+    import pytest
+    from PyQt6.QtWidgets import QMessageBox
+    from matematigin_mantigi.core.recorder import MssFfmpegRecorder
+    from tests.test_recorder import FakeAudioCapture, fake_ffmpeg, stepping_clock, synthetic_grabber, wait_until
+    if sys.platform == "win32":
+        pytest.skip("sahte ffmpeg bir kabuk betiği")
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: shown.append(a[1:3])))
+    exe = fake_ffmpeg(tmp_path, "echo 'Error while opening encoder: No space left on device' >&2; exit 1")
+    window.settings.audio_device = "Sahte Mikrofon"
+    rec = window.recorder = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber,
+                                              out_height=0, ffmpeg_exe=str(exe), audio_device="Sahte Mikrofon",
+                                              audio_factory=FakeAudioCapture, clock=stepping_clock())
+    tb = window.toolbar
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    wait_until(lambda: rec.failed)
+    window.badge.tick()                                                 # _check_recorder kaydı kapatır
+    qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=10000)
+    assert len(shown) == 1 and shown[0][0] == "Kayıt hatası", shown
+    text = shown[0][1]
+    assert "No space left on device" in text and str(rec.last_path.with_suffix(".wav")) in text, text
+    assert "No such file" not in text and rec.last_path.with_suffix(".wav").exists()
 
 
 def test_writer_failure_stops_recording_on_next_badge_tick(window):

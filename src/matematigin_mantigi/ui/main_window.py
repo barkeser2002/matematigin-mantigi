@@ -9,11 +9,13 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QKeySequence, QShortcut
 from PyQt6.QtWidgets import QHBoxLayout, QMainWindow, QMessageBox, QWidget
 
+from matematigin_mantigi.core import crash_log
 from matematigin_mantigi.core import layout_model as lm
 from matematigin_mantigi.core.models import (SHAPE_META, TOOL_META, PenSettings, Question, QuestionStatus, Tool,
                                              next_shape)
 from matematigin_mantigi.core.question_flow import QuestionFlow
-from matematigin_mantigi.core.recorder import DISK_HINT, Recorder, RecorderError, RecorderState, record_rect_for
+from matematigin_mantigi.core.recorder import (DISK_HINT, Recorder, RecorderError, RecorderState, exception_text,
+                                               record_rect_for)
 from matematigin_mantigi.core.session_store import SessionStore
 from matematigin_mantigi.core.settings import AppSettings
 from matematigin_mantigi.ui.camera_worker import FrameSource
@@ -44,8 +46,9 @@ class _StopWorker(QThread):
         path = None
         try:
             path = self.recorder.stop()
-        except Exception as err:  # noqa: BLE001
-            self.exc = str(err)
+        except Exception as err:  # noqa: BLE001 - sonuç pencereye 'Kayıt hatası' olarak gider
+            self.exc = str(err) or repr(err)         # mesajsız istisna (OSError()) da sessiz kalmasın
+            crash_log.log_handled(err, "kayıt kapanışı")
         self.done.emit(path)
 
 
@@ -304,10 +307,8 @@ class MainWindow(QMainWindow):
             rect = record_rect_for(self.work_area.recording_rect())
             try:
                 self.recorder.start(rect, fps=fps)
-            except (RecorderError, OSError) as err:   # OSError (disk, izin) yuvadan kaçıp uygulamayı kapatmasın
-                self.toolbar.set_recording(False)
-                text = str(err) if isinstance(err, RecorderError) else f"Kayıt dosyası yazılamadı: {err}\n{DISK_HINT}"
-                QMessageBox.warning(self, "Kayıt başlatılamadı", text)
+            except Exception as err:  # noqa: BLE001 - hiçbir başlatma hatası yuvadan kaçıp düğmeyi 'kayıtta' bırakmasın
+                self._record_start_failed(err)
                 return
             h = self.settings.record_height or rect.height
             self.badge.set_format(round(rect.width * h / rect.height), h, fps)
@@ -331,6 +332,19 @@ class MainWindow(QMainWindow):
         if recording:
             self.toolbar.set_recording_time(self.badge.seconds)
 
+    def _record_start_failed(self, err: Exception) -> None:
+        """Kayıt başlamadı: araç çubuğu 'kayıt yok'a döner, sebep pencerede (her denemede), ayrıntı hatalar.log'da.
+        OSError (disk, izin) ve beklenmeyen hata da buraya gelir: yuvadan kaçıp düğmeyi 'kayıtta' bırakmasın."""
+        self.toolbar.set_recording(False)
+        crash_log.log_handled(err, "kayıt başlatma")
+        if isinstance(err, RecorderError):
+            text = str(err)
+        elif isinstance(err, OSError):
+            text = f"Kayıt dosyası yazılamadı: {err}\n{DISK_HINT}"
+        else:
+            text = f"Beklenmeyen hata: {exception_text(err)}"
+        QMessageBox.warning(self, "Kayıt başlatılamadı", text)
+
     def _on_record_stopped(self, path) -> None:
         worker = getattr(self, "_stop_worker", None)
         if worker is not None:
@@ -339,7 +353,8 @@ class MainWindow(QMainWindow):
         self.toolbar.set_alert(SAVING_KEY, None)
         self.toolbar.record_button.setEnabled(True)
         self.toolbar.set_recording(False)
-        err = (worker.exc if worker is not None and worker.exc else None) or getattr(self.recorder, "error", None)
+        # Önce kaydedicinin anlamlı hatası (sebep, dosyaların yeri); işçinin ham istisna metni yalnız yedek.
+        err = getattr(self.recorder, "error", None) or (worker.exc if worker is not None else None)
         audio_err = getattr(self.recorder, "audio_error", None)
         if err:
             QMessageBox.warning(self, "Kayıt hatası", err)

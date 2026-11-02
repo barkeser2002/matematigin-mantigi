@@ -15,14 +15,16 @@ from matematigin_mantigi.core import crash_log
 # görünmez). Pencere gerçek build_window'dan gelir; yalnız bir zamanlayıcı yuvası bilerek patlar.
 _E2E = textwrap.dedent('''
     import sys
-    from PyQt6.QtCore import QTimer
+    from PyQt6.QtCore import QSettings, QTimer
     from PyQt6.QtWidgets import QApplication, QMessageBox
     from matematigin_mantigi import app as app_mod
+    from matematigin_mantigi.core.settings import AppSettings
 
     real_build = app_mod.build_window
 
     def build(args, fam, settings=None):
-        win = real_build(args, fam, settings)
+        # Ayarlar geçici ini dosyasında: Windows kayıt defterine / macOS plist'ine dokunulmaz.
+        win = real_build(args, fam, AppSettings(QSettings("ayarlar.ini", QSettings.Format.IniFormat)))
         def boom():
             raise OSError("yapay yuva hatası")
         def report():
@@ -44,16 +46,18 @@ _E2E_REC = textwrap.dedent('''
     import sys
     from pathlib import Path
     import numpy as np
-    from PyQt6.QtCore import QTimer
+    from PyQt6.QtCore import QSettings, QTimer
     from PyQt6.QtWidgets import QApplication
     from matematigin_mantigi import app as app_mod
+    from matematigin_mantigi.core.settings import AppSettings
     from matematigin_mantigi.core.recorder import MssFfmpegRecorder, record_rect_for
 
     real_build = app_mod.build_window
     frame = np.full((120, 160, 4), 255, np.uint8)
 
     def build(args, fam, settings=None):
-        win = real_build(args, fam, settings)
+        # Ayarlar geçici ini dosyasında: Windows kayıt defterine / macOS plist'ine dokunulmaz.
+        win = real_build(args, fam, AppSettings(QSettings("ayarlar.ini", QSettings.Format.IniFormat)))
         rec = MssFfmpegRecorder(lambda: Path("rec"), fps=10, grabber=lambda r: frame, out_height=0)
         at_boom = []
         def boom():

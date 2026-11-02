@@ -7,7 +7,7 @@ from typing import Callable, Sequence
 
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QKeySequence, QShortcut
-from PyQt6.QtWidgets import QHBoxLayout, QMainWindow, QMessageBox, QWidget
+from PyQt6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QMessageBox, QToolTip, QWidget
 
 from matematigin_mantigi.core import crash_log
 from matematigin_mantigi.core import layout_model as lm
@@ -58,6 +58,8 @@ WEBCAM_HIDE_TIMEOUT_MS = 400   # apply_ui_settings'in "webcam" görünürlüğü
 SAVING_KEY = "kayit-kaydediliyor"        # araç çubuğu uyarı şeridinde bu kaynağın anahtarı
 SAVING_ALERT = "Kayıt kaydediliyor…"   # kapanış (ffmpeg + ses birleştirme) sürerken araç çubuğundaki uyarı
 CLOSING_ALERT = "Kayıt kaydediliyor… bitince pencere kapanacak"     # pencere kapatılmak istendi, kayıt bekleniyor
+# Kapanış beklenirken editör/ayarlar düğmesine basılınca düğmenin yanında görünen kısa neden.
+CLOSING_NO_DIALOG = "Kayıt kaydediliyor; bitince pencere kapanacak. Bu pencere şimdi açılmaz."
 STOP_AND_QUIT, KEEP_RECORDING = "Durdur ve çık", "Kayda devam et"   # kayıt sürerken kapatma sorusunun düğmeleri
 # Kayıt pencerelerinin metni kendi başına anlaşılır olmalı: Qt macOS'ta QMessageBox başlığını göstermez.
 START_FAILED = "Kayıt başlamadı."
@@ -427,14 +429,36 @@ class MainWindow(QMainWindow):
         self.toolbar.record_button.setEnabled(True)
         self.toolbar.set_recording(False)
         closing, self._close_after_save = self._close_after_save, False
+        # Başka bir modal pencere açıksa (ör. 'Durdur ve çık'tan önce açılmış soru editörü) pencere kapanmaz: kapanınca
+        # süreç biter, o pencerenin exec döngüsü de biter, içindeki kaydedilmemiş iş sorulmadan kaybolurdu (U3).
+        blocker = self._open_dialog_title() if closing else None
         try:
             if closing:
-                self._show_closing_summary(path, exc)
+                self._show_closing_summary(path, exc, blocker)
             else:
                 self._report_record_result(path, exc)
         finally:
-            if closing:                      # pencere kapatılmak istenmişti: kayıt bitti, sonuç ve uyarılar gösterildi
+            if closing and blocker is None:  # pencere kapatılmak istenmişti: kayıt bitti, sonuç ve uyarılar gösterildi
                 self.close()
+
+    def _open_dialog_title(self) -> str | None:
+        """Açık bir modal pencere varsa başlığı (başlıksızsa boş metin); yoksa None."""
+        dialog = QApplication.activeModalWidget()
+        return None if dialog is None else dialog.windowTitle()
+
+    def _refuse_while_closing(self, button: QWidget) -> bool:
+        """Pencere kayıt kaydedilince kendisi kapanacak ('Durdur ve çık'): soru editörü, Ayarlar ve kalem ayarları
+        açılmaz. Açılsaydı pencere kapanınca exec döngüsüyle birlikte biter, içindeki kaydedilmemiş iş (editörde
+        yazılan sorular) sorulmadan kaybolurdu (U3). Neden tıklanan düğmenin yanında kısa ipucuyla söylenir (şeritte
+        zaten 'bitince pencere kapanacak' yazıyor); modal kutu açılmaz."""
+        if not self._close_after_save:
+            return False
+        try:
+            QToolTip.showText(button.mapToGlobal(button.rect().center()), CLOSING_NO_DIALOG, button, button.rect(),
+                              4000)
+        except Exception:  # noqa: BLE001 - ipucu gösterilemezse de pencere açılmaz
+            pass
+        return True
 
     def _record_problems(self, exc: str | None) -> tuple[str | None, str | None]:
         """(hata, ses uyarısı). Önce kaydedicinin anlamlı hatası (sebep, dosyaların yeri); işçinin ham istisna metni
@@ -452,14 +476,15 @@ class MainWindow(QMainWindow):
             parts.append(f"ses taşması {res.overflows + res.dropped_blocks}")
         return parts
 
-    def _show_closing_summary(self, path, exc: str | None) -> None:
+    def _show_closing_summary(self, path, exc: str | None, blocked_by: str | None = None) -> None:
         """'Durdur ve çık': pencere kendisi kapanmadan önce TEK pencerede kaydın sonucu (dosya ya da hata, ses uyarısı)
         ve görülmemiş bütün uyarılar (kayıt sırasında biriken, Tamam'a basılmamış); o an kayıt yok. Eskiden başarıda
         sonuç durum satırına yazılıp pencere hemen kapanıyor, uyarılar hiç görünmüyordu; hatada uyarı kutusu 'Kayıt
         hatası'nın çocuğu olup onunla siliniyor, gizlenen pencerenin altında yeniden açılıp Qt'nin otomatik çıkışını
         iptal ediyordu (pencere kapanır, süreç çıkmazdı). Uyarılar kutudan alınır: pencere kapanırken açılmazlar.
         Uyarıların ayrıntısı kaydırılabilir ayrıntı bölümünde, ana metinde yalnız sayıları: hepsi ana metinde olunca
-        özet MacBook Air'de 1138 px boyla ekrandan taşıyor, Tamam ekranın dışında kalıyordu (U4)."""
+        özet MacBook Air'de 1138 px boyla ekrandan taşıyor, Tamam ekranın dışında kalıyordu (U4). blocked_by: pencere
+        kapanmıyor, şu başlıklı modal pencere hâlâ açık (U3; başlıksızsa boş metin): özet bunu da söyler."""
         err, audio_err = self._record_problems(exc)
         parts: list[str] = []
         if err:
@@ -473,9 +498,13 @@ class MainWindow(QMainWindow):
         notices = error_notice.take_all()
         if notices:
             parts.append(f"{len(notices)} uyarı var: ayrıntısı aşağıda ('{DETAILS_SHOW}' düğmesi) ve hatalar.log'da.")
+        if blocked_by is not None:
+            which = f"'{blocked_by}' penceresi" if blocked_by else "Başka bir pencere"
+            parts.append(f"Pencere kapanmadı: {which} hâlâ açık; kapansaydı içindeki kaydedilmemiş değişiklikler "
+                         "kaybolurdu. Onu kapattıktan sonra uygulamayı yeniden kapatın.")
         if not parts:
             return
-        warn = bool(err or audio_err or notices)
+        warn = bool(err or audio_err or notices or blocked_by is not None)
         box = QMessageBox(QMessageBox.Icon.Warning if warn else QMessageBox.Icon.Information,
                           "Kayıt sonucu" if warn else "Kayıt kaydedildi", "\n\n".join(parts),
                           QMessageBox.StandardButton.Ok, self)
@@ -509,6 +538,8 @@ class MainWindow(QMainWindow):
             self.toggle_recording(False)
 
     def open_pen_settings(self) -> None:
+        if self._refuse_while_closing(self.toolbar.pen_settings_button):
+            return
         dlg = PenSettingsDialog(self.settings.pen(), self.canvas.color, self.canvas.base_width, self.fam, self)
         dlg.applied.connect(self._apply_pen_settings)
         dlg.exec()
@@ -518,11 +549,15 @@ class MainWindow(QMainWindow):
         self.question_zone.set_reading_ms(p.reading_ms)
 
     def open_settings(self) -> None:
+        if self._refuse_while_closing(self.toolbar.settings_button):
+            return
         dlg = SettingsDialog(self.settings, self.fam, self)
         dlg.applied.connect(self.apply_settings_values)
         dlg.exec()
 
     def open_editor(self) -> None:
+        if self._refuse_while_closing(self.toolbar.editor_button):
+            return
         if self.questions_path is None:
             QMessageBox.information(self, "Soru editörü", "Soru dosyası tanımlı değil.")
             return

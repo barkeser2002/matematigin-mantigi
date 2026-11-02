@@ -1596,6 +1596,85 @@ def test_stop_and_quit_shows_the_result_and_the_waiting_notices_in_one_window_th
     assert _visible_message_boxes() == [] and not notice._poll_timer.isActive() and not notice._pending
 
 
+def test_dialogs_do_not_open_while_the_window_waits_to_close(window, qtbot, tmp_path, monkeypatch):
+    """U3: 'Durdur ve çık'tan sonra kayıt kaydedilirken açılan soru editörü (Ayarlar, kalem ayarları da) pencere
+    kendisi kapanınca exec döngüsüyle birlikte bitiyordu: editörde yazılmış ama kaydedilmemiş sorular sorulmadan
+    kayboluyordu (inceleme v30 editor). Kapanış beklenirken bu pencereler açılmaz; tıklanan düğmenin yanında kısa
+    neden görünür (araç çubuğunun şeridinde zaten 'bitince pencere kapanacak' yazıyor)."""
+    import threading
+    from pathlib import Path
+    from PyQt6.QtWidgets import QToolTip
+    from matematigin_mantigi.core.question_loader import write_questions
+    from matematigin_mantigi.core.recorder import NullRecorder
+    from matematigin_mantigi.ui import pen_settings as ps
+    from matematigin_mantigi.ui import settings_dialog as sd
+    from matematigin_mantigi.ui.main_window import CLOSING_ALERT
+    from matematigin_mantigi.ui.question_editor import QuestionEditorDialog
+    release = threading.Event()
+
+    class HeldStop(NullRecorder):                     # kapanış _StopWorker'da; test bırakana dek sürer
+        stop_is_quick = False
+
+        def stop(self):
+            super().stop()
+            release.wait(20)
+            return Path("oturum") / "kayit.mp4"
+    opened, tips = [], []
+    for cls in (QuestionEditorDialog, sd.SettingsDialog, ps.PenSettingsDialog):
+        monkeypatch.setattr(cls, "exec", lambda self, name=cls.__name__: opened.append(name) or 0)
+    # İpucu çağrısı kaydedilir: görünürlüğü platforma bağlı (macOS'ta solarak açılır, isVisible() hemen True olmaz).
+    monkeypatch.setattr(QToolTip, "showText", staticmethod(lambda pos, text, w=None, *a: tips.append((text, w))))
+    asked, shown = _answer_with_summary(monkeypatch)
+    window.questions_path = write_questions(tmp_path / "sorular.xlsx", list(SAMPLE_QUESTIONS))
+    window.toolbar.editor_button.setEnabled(True)     # fikstür penceresi soru dosyasız kuruldu (düğme kapalıydı)
+    window.recorder = HeldStop()
+    window.toggle_recording(True)
+    tb = window.toolbar
+    try:
+        assert window.close() is False and tb.alert_label.text() == CLOSING_ALERT and len(asked) == 1
+        for open_dialog, button in ((window.open_editor, tb.editor_button), (window.open_settings, tb.settings_button),
+                                    (window.open_pen_settings, tb.pen_settings_button)):
+            tips.clear()
+            open_dialog()
+            assert opened == [] and len(tips) == 1 and tips[0][1] is button, tips
+            assert "bitince pencere kapanacak" in tips[0][0], tips
+        qtbot.mouseClick(tb.editor_button, Qt.MouseButton.LeftButton)          # düğmeden de aynı yol
+        assert opened == [] and window.isVisible() and len(tips) == 2
+    finally:
+        release.set()
+    qtbot.waitUntil(lambda: not window.isVisible(), timeout=10000)
+    assert opened == [] and len(shown) == 1 and "kayit.mp4" in shown[0][1], shown
+
+
+def test_window_stays_open_if_a_dialog_is_still_open_when_the_recording_is_saved(window, qtbot, monkeypatch):
+    """U3: kapanış anında (kayıt kaydedildi, pencere kendisi kapanacak) başka bir modal pencere açıksa (ör. 'Durdur ve
+    çık'tan önce açılmış soru editörü) pencere kapanmaz: kapansaydı süreç biter, o pencerenin exec döngüsü de biter,
+    içindeki kaydedilmemiş iş sorulmadan kaybolurdu. Özet bunu ve açık pencerenin adını söyler; kamera ve ayarlar
+    kapanmaz. O pencere kapatılınca uygulama yeniden kapatılabilir."""
+    from PyQt6.QtWidgets import QApplication, QDialog
+    from matematigin_mantigi.core.recorder import NullRecorder
+
+    class BackgroundStop(NullRecorder):               # kapanış _StopWorker'da
+        stop_is_quick = False
+    asked, shown = _answer_with_summary(monkeypatch)
+    shut, synced = _spy_shutdown(window, monkeypatch)
+    window.recorder = BackgroundStop()
+    window.toggle_recording(True)
+    dlg = QDialog(window)
+    dlg.setWindowTitle("Soru editörü")
+    dlg.setModal(True)
+    dlg.show()
+    qtbot.waitUntil(lambda: QApplication.activeModalWidget() is dlg, timeout=2000)
+    assert window.close() is False and len(asked) == 1                # 'Durdur ve çık': kayıt arka planda
+    qtbot.waitUntil(lambda: window._stop_worker is None, timeout=10000)
+    qtbot.wait(50)
+    assert window.isVisible() and shut == [] and synced == [], (shut, synced)
+    assert len(shown) == 1 and "Pencere kapanmadı" in shown[0][1] and "Soru editörü" in shown[0][1], shown
+    assert not window.toolbar.alert_label.isVisible() and window.toolbar.record_button.isEnabled()
+    dlg.close()
+    assert window.close() is True and not window.isVisible() and shut == [()] and synced == [1]
+
+
 CLOSE_CHILD = r'''
 import os, subprocess, sys, threading, time
 from pathlib import Path

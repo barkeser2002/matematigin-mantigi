@@ -159,6 +159,7 @@ class AudioCapture:
         self.close_error: str | None = None    # akış kapanmadı (sürücü takıldı ya da hata verdi); stop() taşır
         self.samplerate = 48000
         self._stream = None
+        self._stream_closed: threading.Event | None = None     # akışın kapanışı (stop + close) bitti; bkz. closing
         self._wav: wave.Wave_write | None = None
         self._q: queue.Queue = queue.Queue(maxsize=self.QUEUE_BLOCKS)
         self._stop = threading.Event()
@@ -286,6 +287,7 @@ class AudioCapture:
         geride kalır (daemon); geri çağrı gelirse kuyruğa düşer, kimse okumaz, zararsız."""
         problems: list[str] = []
         done = threading.Event()
+        self._stream_closed = done
 
         def close() -> None:
             for step in (stream.stop, stream.close):
@@ -300,6 +302,15 @@ class AudioCapture:
             limit = f"{self.STREAM_STOP_S:g}".replace(".", ",")
             return f"ses sürücüsü akışı kapatamadı ({limit} sn içinde yanıt vermedi)"
         return "; ".join(problems) or None
+
+    @property
+    def closing(self) -> bool:
+        """Ses sürücüsü akışı hâlâ kapatıyor: stop() STREAM_STOP_S bekleyip sesle döndü, akışı kapatan iş parçacığı
+        sürücüde (Pa_StopStream/Pa_CloseStream) takılı. Aynı sürücüde yeni akış açmak da takılabilir; kaydedici bu
+        sürede mikrofon açmaz (R4). Sürücü kendine gelince False. Bitiş iş parçacığının sonlanmasından değil olaydan
+        okunur: olağan kapanıştan hemen sonra da False."""
+        done = self._stream_closed
+        return done is not None and not done.is_set()
 
     def stop(self) -> AudioResult:
         """Akışı kapatır (sınırlı: _close_stream), kuyrukta kalanı WAV'a yazıp dosyayı kapatır ve sonucu döner. Sürücü

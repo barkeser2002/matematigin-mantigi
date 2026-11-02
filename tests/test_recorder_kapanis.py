@@ -610,3 +610,121 @@ def test_microphone_that_cannot_open_leaks_no_writer_and_leaves_no_wav(tmp_path,
     assert writers() == before
     assert not list(tmp_path.glob("*.wav"))
 
+
+MIC_STILL_CLOSING = "Mikrofon açılmadı: önceki kaydın mikrofonu hâlâ kapanmadı (uygulamayı yeniden başlatın)"
+NEXT_ONES_SILENT = "ikrofon kapanana dek yeni kayıtlar mikrofonsuz başlar (uygulamayı yeniden başlatın)"
+
+
+def _has_audio_stream(path: Path) -> bool:
+    return b"Audio:" in subprocess.run([find_ffmpeg(), "-hide_banner", "-i", str(path)], capture_output=True).stderr
+
+
+def _start_in_thread(rec, rect) -> tuple[threading.Thread, threading.Event]:
+    """start()'ı pencerede olduğu gibi (R: arayüz iş parçacığı) ayrı iş parçacığında çağırır: takılırsa test donmaz,
+    olay kurulmaz."""
+    started = threading.Event()
+    starter = threading.Thread(target=lambda: (rec.start(rect), started.set()), daemon=True)
+    starter.start()
+    return starter, started
+
+
+@needs_ffmpeg
+def test_next_recording_does_not_open_a_microphone_that_has_not_closed_yet(tmp_path, monkeypatch):
+    """R4 (son inceleme s11): mikrofonun kapanışı takılınca (k1) kaydedici AUDIO_STOP_S sonra IDLE'a dönüyor ama
+    kapanış iş parçacığı ses sürücüsünde yaşıyor. Sonraki kayıt aynı aygıtı arayüz iş parçacığında ve kaydedicinin
+    kilidi altında açıyordu: sürücü aygıtı kilitli tutuyorsa start() dönmüyor, arayüz donuyordu. Şimdi önceki kaydın
+    mikrofonu hâlâ kapanıyorsa yeni kayıt mikrofonu hiç açmaz: sessiz başlar, uyarı sebebini söyler. Sürücü kendine
+    gelince (kapanış bitti) sonraki kayıt mikrofonu yine açar. Takılan kaydın kendi hatası da bunu önceden söyler:
+    arayüz sonraki kaydın uyarısını ancak o kayıt bitince gösterir, öğretmen bütün dersi sessiz kaydetmesin."""
+    from matematigin_mantigi.core import recorder as r
+    driver, release = threading.Lock(), threading.Event()             # ses sürücüsünün aygıt kilidi (varsayım)
+    opened: list = []
+
+    class StuckDriverMic(FakeAudioCapture):
+        def start(self, path):
+            opened.append(self)
+            with driver:                                                # Pa_OpenStream sürücüye girer
+                super().start(path)
+
+        def stop(self):
+            with driver:                                                # Pa_StopStream sürücüde takıldı
+                release.wait(60)
+            return super().stop()
+    monkeypatch.setattr(r, "AUDIO_STOP_S", 0.5)                         # gerçek sınır 25 sn
+    rec = MssFfmpegRecorder(lambda: tmp_path, fps=20, grabber=synthetic_grabber, out_height=0,
+                            audio_device="USB Mikrofon", audio_factory=StuckDriverMic, clock=stepping_clock())
+    rect = RecordRect(0, 0, 160, 120)
+    rec.start(rect)
+    wait_until(lambda: rec.frames_written >= 10)
+    rec.stop()                                                          # mikrofon kapanmadı: video sessiz kaydedildi
+    assert rec.state is RecorderState.IDLE and "kapanmadı" in (rec.error or ""), rec.error
+    assert (rec.error or "").endswith(f"\nM{NEXT_ONES_SILENT}."), rec.error
+    starter, started = _start_in_thread(rec, rect)
+    try:
+        assert started.wait(10), "ikinci start() ses sürücüsünü bekliyor: arayüz donardı"
+        assert len(opened) == 1                                         # mikrofon açılmadı
+        wait_until(lambda: rec.frames_written >= 10)
+        path = rec.stop()
+    finally:
+        release.set()                                                   # sürücü kendine geldi
+        starter.join(10)
+        if rec.state is RecorderState.RECORDING:                        # (düzeltmesiz kodda ikinci kayıt açık kalmasın)
+            rec.stop()
+    assert rec.audio_error == MIC_STILL_CLOSING and rec.error is None, (rec.audio_error, rec.error)
+    assert rec.audio_result is None and not _has_audio_stream(path) and not path.with_suffix(".wav").exists()
+    assert abs(_stream_seconds(find_ffmpeg(), path, "-an") - rec.frames_written / 20) < 0.15      # video tam
+    wait_until(lambda: not rec._mic_still_closing())                    # önceki kaydın kapanışı bitti
+    rec.start(rect)
+    wait_until(lambda: rec.frames_written >= 10)
+    path = rec.stop()
+    assert len(opened) == 2 and rec.audio_error is None and rec.error is None, (rec.audio_error, rec.error)
+    assert _has_audio_stream(path)                                      # mikrofon yine açıldı
+
+
+@needs_ffmpeg
+def test_next_recording_does_not_reopen_a_stream_the_driver_is_still_closing(tmp_path, monkeypatch):
+    """R4, gerçek AudioCapture: sürücü akışı kapatırken takılınca (s5) AudioCapture STREAM_STOP_S sonra o ana dek gelen
+    sesle döner (kayıt sesiyle kaydedilir), ama akışı kapatan iş parçacığı sürücüde kalır. Sonraki kayıt aynı sürücüde
+    akış açmaz (Pa_OpenStream da takılabilir, arayüz donardı): sessiz başlar, uyarı sebebini söyler."""
+    from matematigin_mantigi.core import audio_capture as ac
+    from tests.test_audio_capture import FakeSoundDevice
+    driver, release = threading.Lock(), threading.Event()
+    sd = FakeSoundDevice(blocks=50)                                     # 1 sn ses
+    real_open = sd.InputStream.__init__
+    opened: list = []
+
+    def open_stream(stream, *a, **k):                                   # Pa_OpenStream: aynı sürücü kilidi
+        opened.append(stream)
+        with driver:
+            real_open(stream, *a, **k)
+
+    def stuck_stop(stream):                                             # Pa_StopStream sürücüde takıldı
+        with driver:
+            release.wait(60)
+    sd.InputStream.__init__, sd.InputStream.stop = open_stream, stuck_stop
+    monkeypatch.setattr(ac, "_sd", lambda: sd)
+    monkeypatch.setattr(ac.AudioCapture, "STREAM_STOP_S", 0.3)
+    rec = MssFfmpegRecorder(lambda: tmp_path, fps=20, grabber=synthetic_grabber, out_height=0,
+                            audio_device="USB Mikrofon", clock=stepping_clock())
+    rect = RecordRect(0, 0, 160, 120)
+    rec.start(rect)
+    assert sd.fed.wait(10)
+    wait_until(lambda: rec.frames_written >= 20)
+    first = rec.stop()
+    assert rec.error is None and "Mikrofon düzgün kapanmadı" in (rec.audio_error or ""), (rec.error, rec.audio_error)
+    assert f"; o ana dek gelen ses kayıtta; m{NEXT_ONES_SILENT}" in (rec.audio_error or ""), rec.audio_error
+    assert _has_audio_stream(first)                                     # o ana dek gelen sesle kaydedildi
+    starter, started = _start_in_thread(rec, rect)
+    try:
+        assert started.wait(10), "ikinci start() ses sürücüsünü bekliyor: arayüz donardı"
+        assert len(opened) == 1                                         # yeni akış açılmadı
+        wait_until(lambda: rec.frames_written >= 10)
+        path = rec.stop()
+    finally:
+        release.set()
+        starter.join(10)
+        if rec.state is RecorderState.RECORDING:
+            rec.stop()
+    assert rec.audio_error == MIC_STILL_CLOSING and rec.error is None, (rec.audio_error, rec.error)
+    assert rec.audio_result is None and not _has_audio_stream(path)
+

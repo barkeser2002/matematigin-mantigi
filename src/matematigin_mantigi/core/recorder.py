@@ -228,6 +228,10 @@ AUDIO_STOP_S = 25.0     # mikrofonun kapanması (AudioCapture.stop: akış en ç
 DURATION_TIMEOUT_S = 30.0   # media_duration: başlık okuma
 MUX_MIN_S = 120.0       # birleştirmenin en kısa zaman aşımı; uzun derste kayıt süresinin iki katı
 
+MIC_STILL_CLOSING = "Mikrofon açılmadı: önceki kaydın mikrofonu hâlâ kapanmadı (uygulamayı yeniden başlatın)"
+# Takılan kaydın kendi uyarısına eklenir: arayüz sonraki kaydın uyarısını ancak o kayıt bitince gösterir.
+NEXT_RECORDINGS_SILENT = "mikrofon kapanana dek yeni kayıtlar mikrofonsuz başlar (uygulamayı yeniden başlatın)"
+
 
 def _mux_timeout(duration: float) -> float:
     """Birleştirmenin zaman aşımı. 60 dk'lık derste 2 saat: 7 GB'ın kopyası + faststart (bir kez daha oku/yaz) yavaş
@@ -482,6 +486,9 @@ class MssFfmpegRecorder:
         self._lock = threading.Lock()                # durum ve geçerli oturum yalnız bu kilitle değişir
         self._state = RecorderState.IDLE
         self._session: _Session | None = None        # süren ya da son biten kayıt
+        # Önceki kayıtların mikrofonları (kapanış iş parçacığı, yakalayıcı): kapanışı bitmeyen varsa yeni kayıt
+        # mikrofon açmaz (_mic_still_closing). Bitenler bir sonraki start()'ta düşer.
+        self._closing_mics: list[tuple[threading.Thread | None, AudioCapture]] = []
 
     # --- Recorder ---------------------------------------------------------------
     def start(self, rect: RecordRect, fps: int | None = None) -> None:
@@ -585,7 +592,11 @@ class MssFfmpegRecorder:
         s = _Session(rect=rect, encoder=encoder, final_path=out, log_path=out_dir / f"kayit_{stamp}.log",
                      video_path=out_dir / f"kayit_{stamp}.video.mp4" if self.audio_device else out,
                      wav_path=out_dir / f"kayit_{stamp}.wav" if self.audio_device else None, fps=fps)
-        if s.wav_path is not None:
+        if s.wav_path is not None and self._mic_still_closing():
+            # Önceki kaydın mikrofonu kapanmadı (ses sürücüsü takıldı, k1). start() arayüz iş parçacığında ve kilit
+            # altında koşar; aynı sürücüde yeni akış açmak da takılırsa arayüz donardı (son inceleme s11). Kayıt sessiz.
+            s.audio_error = MIC_STILL_CLOSING
+        elif s.wav_path is not None:
             # Ses önce başlar: ilk örneğin zamanı ölçülür, video t0 ile fark durdurunca telafi edilir.
             try:
                 s.audio = self._audio_factory(self.audio_device)
@@ -825,14 +836,22 @@ class MssFfmpegRecorder:
                 s.audio.stop()
             except Exception:  # noqa: BLE001
                 pass
+            self._closing_mics.append((None, s.audio))     # sürücü akışı kapatamadıysa sonraki kayıt açmasın
             s.audio = None
 
-    @staticmethod
-    def _begin_audio_stop(s: _Session) -> tuple[threading.Thread, dict, float] | None:
+    def _mic_still_closing(self) -> bool:
+        """Önceki bir kaydın mikrofonu hâlâ kapanıyor mu (R4): kaydedicinin kapanış iş parçacığı yaşıyor (yakalayıcının
+        stop()'u dönmedi) ya da yakalayıcı akışın kapanışını bekleyip vazgeçti, sürücü hâlâ kapatıyor (closing).
+        Kapanışı bitenler listeden düşer: sürücü kendine gelince sonraki kayıt mikrofonu yine açar."""
+        self._closing_mics = [(t, a) for t, a in self._closing_mics
+                              if (t is not None and t.is_alive()) or getattr(a, "closing", False) is True]
+        return bool(self._closing_mics)
+
+    def _begin_audio_stop(self, s: _Session) -> tuple[threading.Thread, dict, float] | None:
         """Mikrofonu yardımcı iş parçacığında kapatmaya başlar: (iş parçacığı, sonuç kutusu, başlangıç) ya da None.
         Mikrofonun kapanması kapanışın tek sınırsız adımıydı ve ffmpeg'e EOF'tan önce koşuyordu (k1): ses sürücüsü
         takılınca kaydedici sonsuza dek 'kaydediliyor'da kalıyor, video da bitmiyordu. Şimdi video beklemeden kapanır,
-        ses durdurma anında durur."""
+        ses durdurma anında durur. İş parçacığı _closing_mics'e yazılır: bitmeden sonraki kayıt mikrofon açmaz (R4)."""
         if s.audio is None:
             return None
         audio, box = s.audio, {}
@@ -844,6 +863,7 @@ class MssFfmpegRecorder:
                 box["error"] = err
         thread = threading.Thread(target=run, daemon=True, name="mikrofon-kapanış")
         thread.start()
+        self._closing_mics.append((thread, audio))
         return thread, box, time.monotonic()
 
     def _end_audio_stop(self, s: _Session, mic: tuple[threading.Thread, dict, float] | None) -> AudioResult | None:
@@ -860,17 +880,21 @@ class MssFfmpegRecorder:
             s.mic_lost = f"Mikrofon kapatılamadı ({exception_text(box['error'])})"
         elif s.audio_result is not None and getattr(s.audio_result, "close_error", None):
             s.audio_error = _joined(s.audio_error, f"Mikrofon düzgün kapanmadı ({s.audio_result.close_error}); o "
-                                                   f"ana dek gelen ses kayıtta")
+                                                   f"ana dek gelen ses kayıtta",
+                                    NEXT_RECORDINGS_SILENT if self._mic_still_closing() else None)
         return s.audio_result
 
     def _report_lost_audio(self, s: _Session) -> None:
         """Mikrofon kapanmadığı için ses birleştirilemedi: video sessiz son dosya oldu, ses ayrı dosyada (silinmez).
-        Arayüz hatayı pencerede gösterir: öğretmen sesin nerede olduğunu bilsin."""
+        Arayüz hatayı pencerede gösterir: öğretmen sesin nerede olduğunu ve mikrofon kapanana dek yeni kayıtların
+        mikrofonsuz başlayacağını (R4) bilsin."""
         text = f"{s.mic_lost}; ses videoya eklenemedi."
         if s.final_path.exists():
             text += f" Video sessiz kaydedildi: {s.final_path}"
         if s.wav_path is not None and s.wav_path.exists():
             text += f"\nSes ayrı dosyada (silinmedi): {s.wav_path}"
+        if self._mic_still_closing():
+            text += f"\n{NEXT_RECORDINGS_SILENT[0].upper()}{NEXT_RECORDINGS_SILENT[1:]}."
         s.error = _with_paragraph(s.error, text)
 
     def _mux(self, s: _Session, audio: AudioResult) -> None:

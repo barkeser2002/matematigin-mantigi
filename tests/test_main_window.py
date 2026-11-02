@@ -403,6 +403,39 @@ def test_r_while_previous_recording_is_saving_starts_nothing_and_warns_in_toolba
     assert rec.last_path.exists() and shown == []
 
 
+def test_stopping_shows_the_saving_strip_until_the_recording_is_saved(window, qtbot, tmp_path, monkeypatch):
+    """Normal durdurmada (R) kapanış sürerken araç çubuğunda 'Kayıt kaydediliyor…' görünür, düğme kilitli; kayıt
+    bitince şerit kalkar. (Önceki test şeridi ancak kaydedilirken ikinci R'den sonra görüyordu: durdurmanın kendisi
+    şeridi göstermese de geçiyordu.)"""
+    import pytest
+    from PyQt6.QtWidgets import QMessageBox
+    from matematigin_mantigi.core.recorder import MssFfmpegRecorder, find_ffmpeg
+    from matematigin_mantigi.ui.main_window import SAVING_ALERT
+    from tests.test_recorder import FakeAudioCapture, SlowMux, stepping_clock, synthetic_grabber, wait_until
+    if find_ffmpeg() is None:
+        pytest.skip("ffmpeg yok")
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: shown.append(a[1:3])))
+    mux = SlowMux(monkeypatch)
+    window.settings.audio_device = "Sahte Mikrofon"
+    rec = window.recorder = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber,
+                                              out_height=0, audio_device="Sahte Mikrofon",
+                                              audio_factory=FakeAudioCapture, clock=stepping_clock())
+    tb = window.toolbar
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    wait_until(lambda: rec.frames_written >= 10)
+    assert tb.alert_label.isHidden()                                     # kayıt sürerken şerit yok
+    qtbot.keyClick(window, Qt.Key.Key_R)                                 # durdur: kapanış arka planda
+    try:
+        assert mux.entered.wait(20)
+        assert tb.alert_label.isVisible() and tb.alert_label.text() == SAVING_ALERT
+        assert not tb.record_button.isEnabled()
+    finally:
+        mux.release()
+    qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=20000)
+    assert tb.alert_label.isHidden() and shown == [] and rec.last_path.exists()
+
+
 def test_r_before_the_stop_result_reaches_the_window_starts_nothing(window, qtbot, tmp_path, monkeypatch):
     """Kaydedici IDLE'a döndükten sonra da, durdurma sonucu pencereye ulaşana (_on_record_stopped) dek yeni kayıt
     yok: yoksa geç gelen sonuç yeni kaydın araç çubuğunu 'kayıt yok'a çevirir ve onun hata alanlarını okur."""

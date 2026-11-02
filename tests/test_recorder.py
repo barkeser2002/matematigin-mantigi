@@ -924,3 +924,31 @@ def test_recording_errors_reach_the_error_log_as_one_line(tmp_path, monkeypatch)
     assert line.startswith(f"{path.name} · hata: ffmpeg borusu kapandı: Error while opening encoder"), line
     assert "ses: Mikrofon açılamadı: aygıt yok" in line, line
 
+
+@pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
+def test_previous_recordings_errors_do_not_carry_over_to_the_next_one(tmp_path, monkeypatch):
+    """Sonuç alanları kaydın kendi oturumunda: önceki kaydın hatası (error) ve ses uyarısı (audio_error) yeni kayda
+    taşınmaz. Eskiden ortak alanlardı; temiz biten ikinci ders önceki dersin 'Kayıt hatası'yla bitebiliyordu."""
+    mics = iter([NoMic, FakeAudioCapture])                              # 1. kayıtta mikrofon açılmaz, 2.'de açılır
+    rec = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber, out_height=0,
+                            audio_device="Sahte Mikrofon", audio_factory=lambda dev: next(mics)(dev),
+                            clock=stepping_clock())
+    rect = RecordRect(0, 0, 160, 120)
+    real_replace = Path.replace
+
+    def busy(self, target):
+        if self.name.endswith(".video.mp4"):
+            raise PermissionError(13, "dosya kullanımda", str(self))
+        return real_replace(self, target)
+    rec.start(rect)                                                     # 1. kayıt: ses yok, kapanış da patlıyor
+    wait_until(lambda: rec.frames_written >= 3)
+    monkeypatch.setattr(Path, "replace", busy)
+    with pytest.raises(PermissionError):
+        rec.stop()
+    assert rec.error and rec.audio_error == "Mikrofon açılamadı: aygıt yok", (rec.error, rec.audio_error)
+    monkeypatch.setattr(Path, "replace", real_replace)
+    rec.start(rect)                                                     # 2. kayıt: temiz
+    assert rec.error is None and rec.audio_error is None, (rec.error, rec.audio_error)
+    wait_until(lambda: rec.frames_written >= 3)
+    path = rec.stop()
+    assert path.exists() and rec.error is None and rec.audio_error is None, (rec.error, rec.audio_error)

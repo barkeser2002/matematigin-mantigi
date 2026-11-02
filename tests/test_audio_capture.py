@@ -286,6 +286,25 @@ def test_capture_records_when_the_last_sample_arrived(tmp_path, monkeypatch):
     assert res.tail_gap >= 0.3 - 0.02
 
 
+def test_sample_times_follow_the_drivers_clock_not_the_callback(monkeypatch):
+    """O1: saat kayması ilk ile son örnek arasında ölçülür. İkisi de sürücünün ADC zamanından: geri çağrı bloğu
+    alındıktan sonra gelir (Bluetooth/USB'de 0,1-0,3 sn). Son örnek geri çağrının anı sayılsaydı ölçülen süre o kadar
+    uzar, 10 dakikalık derste ~500 ppm'lik sahte kayma 'düzeltilir'di (asetrate: ton ve senkron kayar)."""
+    from types import SimpleNamespace
+    now = {"t": 1000.0}
+    monkeypatch.setattr(ac, "time", SimpleNamespace(monotonic=lambda: now["t"]))
+
+    class Late:                                                        # blok geri çağrıdan 0,3 sn önce alındı
+        inputBufferAdcTime, currentTime = 50.0, 50.3
+    cap = ac.AudioCapture("USB Mikrofon")
+    block = np.zeros((960, 1), np.int16)                               # 20 ms
+    cap._callback(block, 960, Late(), None)                            # ilk blok 1000,0'da geldi
+    now["t"] = 1600.0
+    cap._callback(block, 960, Late(), None)                            # son blok 1600,0'da geldi
+    assert cap.first_sample_monotonic == pytest.approx(999.7)
+    assert cap.last_sample_monotonic == pytest.approx(1599.72)         # son bloğun sonu, geri çağrının anı değil
+
+
 # --- k1/k2: sürücü takılınca kapanış sınırlı, yarım açılış iz bırakmaz ---------------------------------------
 
 def _wav_frames(path) -> int:
@@ -322,6 +341,36 @@ def test_stop_keeps_the_sound_when_the_driver_hangs_or_fails_closing_the_stream(
     assert res.error is None                                                            # WAV sağlam
     expected = "0,3 sn içinde yanıt vermedi" if driver == "takılıyor" else "Unanticipated host error"
     assert res.close_error and expected in res.close_error, res.close_error
+
+
+def test_capture_tells_while_the_driver_is_still_closing_the_stream(tmp_path, monkeypatch):
+    """R4: stop() takılan sürücüyü STREAM_STOP_S bekleyip sesle döner; akışı kapatan iş parçacığı sürücüde kalır.
+    closing bunu söyler: kaydedici o sürede aynı sürücüde yeni akış açmaz (Pa_OpenStream da takılabilir, arayüz
+    donardı). Sürücü kendine gelince False olur; olağan kapanıştan sonra hiç True kalmaz (bitiş olaydan okunur, iş
+    parçacığının kapanma yarışından değil)."""
+    release = threading.Event()
+    sd = FakeSoundDevice(blocks=10)
+    sd.InputStream.stop = lambda stream: release.wait(30)              # sürücü takıldı (test sonunda bırakılır)
+    monkeypatch.setattr(ac, "_sd", lambda: sd)
+    monkeypatch.setattr(ac.AudioCapture, "STREAM_STOP_S", 0.3)
+    cap = ac.AudioCapture("USB Mikrofon")
+    assert not cap.closing
+    cap.start(tmp_path / "a.wav")
+    assert sd.fed.wait(10) and not cap.closing
+    try:
+        res = cap.stop()
+        assert res.close_error and cap.closing                         # ses döndü, sürücü hâlâ kapatıyor
+    finally:
+        release.set()
+    deadline = time.monotonic() + 10
+    while cap.closing:                                                 # sürücü kendine geldi: kapanış biter
+        assert time.monotonic() < deadline, "akışın kapanışı bitmedi"
+        time.sleep(0.01)
+    monkeypatch.setattr(ac, "_sd", lambda: FakeSoundDevice(blocks=1))  # olağan kapanış: stop() dönünce closing False
+    ok = ac.AudioCapture("USB Mikrofon")
+    ok.start(tmp_path / "b.wav")
+    ok.stop()
+    assert not ok.closing
 
 
 def test_start_that_cannot_open_the_stream_leaves_nothing_behind(tmp_path, monkeypatch):

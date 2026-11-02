@@ -1092,3 +1092,313 @@ def test_badge_stays_right_anchored_after_font_scale_change_with_real_content(wi
     after_w = win.work_area.badge_slot.width()
     assert after_w > before_w                                              # rozet gerçekten büyüdü
     assert win.work_area.badge_slot.x() == inner.right() - after_w - 12    # ve hâlâ sağa hizalı (taşmadı)
+
+
+# --- kayıt sürerken / kaydedilirken pencere kapatma (bağımsız inceleme F2, F7) ------------------------------
+
+STOP_AND_QUIT, KEEP_RECORDING = "Durdur ve çık", "Kayda devam et"
+
+
+def _answer_close_question(monkeypatch, button: str) -> list:
+    """Kapanış sorusunu (QMessageBox.exec) `button` yazılı düğmeyle yanıtlar; sorulanları (başlık, metin) döndürür."""
+    from PyQt6.QtWidgets import QMessageBox
+    asked: list = []
+
+    def exec_(box):
+        asked.append((box.windowTitle(), box.text()))
+        next(b for b in box.buttons() if b.text() == button).click()
+        return 0
+    monkeypatch.setattr(QMessageBox, "exec", exec_)
+    return asked
+
+
+def _spy_shutdown(window, monkeypatch) -> tuple[list, list]:
+    """Kamera kapatma (gerçeği de çağrılır) ve ayar yazma çağrıları."""
+    shut, synced = [], []
+    real_shutdown, real_sync = window.webcam_panel.shutdown, window.settings.sync
+    monkeypatch.setattr(window.webcam_panel, "shutdown", lambda *a: (shut.append(a), real_shutdown(*a)))
+    monkeypatch.setattr(window.settings, "sync", lambda: (synced.append(1), real_sync()))
+    return shut, synced
+
+
+def test_closing_while_recording_asks_and_keep_recording_cancels_the_close(window, qtbot, monkeypatch):
+    """Kayıt sürerken pencere kapatılınca kayıt sessizce durdurulup (uzun derste dakikalarca donarak) kapanıyordu.
+    Şimdi önce sorulur: 'Kayda devam et' kapanmayı iptal eder, kayıt ve pencere sürer."""
+    from matematigin_mantigi.core.recorder import RecorderState
+    asked = _answer_close_question(monkeypatch, KEEP_RECORDING)
+    shut, synced = _spy_shutdown(window, monkeypatch)
+    window.toggle_recording(True)
+    assert window.close() is False
+    assert asked == [("Kayıt sürüyor", "Kayıt sürüyor, durdurulup çıkılsın mı?")]
+    assert window.isVisible() and window.recorder.state is RecorderState.RECORDING and window.badge.active
+    assert window.toolbar.record_button.isChecked() and shut == [] and synced == []
+    window.toggle_recording(False)                                    # (teardown'da soru açılmasın)
+
+
+def test_closing_while_recording_saves_in_background_then_the_window_closes_itself(window, qtbot, tmp_path,
+                                                                                  monkeypatch):
+    """'Durdur ve çık': kayıt arka planda kaydedilir (pencere donmaz), kapanma olayı yok sayılır, araç çubuğu
+    beklendiğini söyler; tekrar kapatma soru sormadan bekler. Kayıt bitince pencere kendisi kapanır; kamera ve
+    ayarlar ancak o zaman kapanır. Eskiden kapanış GUI iş parçacığında senkron koşuyordu."""
+    import pytest
+    from PyQt6.QtWidgets import QMessageBox
+    from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState, find_ffmpeg
+    from matematigin_mantigi.ui.main_window import CLOSING_ALERT
+    from tests.test_recorder import FakeAudioCapture, SlowMux, stepping_clock, synthetic_grabber, wait_until
+    if find_ffmpeg() is None:
+        pytest.skip("ffmpeg yok")
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: shown.append(a[1:3])))
+    asked = _answer_close_question(monkeypatch, STOP_AND_QUIT)
+    shut, synced = _spy_shutdown(window, monkeypatch)
+    mux = SlowMux(monkeypatch)
+    window.settings.audio_device = "Sahte Mikrofon"
+    rec = window.recorder = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber,
+                                              out_height=0, audio_device="Sahte Mikrofon",
+                                              audio_factory=FakeAudioCapture, clock=stepping_clock())
+    tb = window.toolbar
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    wait_until(lambda: rec.frames_written >= 10)
+    try:
+        assert window.close() is False                                # kapanma olayı yok sayıldı
+        assert len(asked) == 1 and asked[0][0] == "Kayıt sürüyor"
+        assert mux.entered.wait(20)                                   # kayıt arka planda birleştiriliyor
+        assert window.isVisible() and rec.state is RecorderState.FINALIZING
+        assert tb.alert_label.isVisible() and tb.alert_label.text() == CLOSING_ALERT
+        assert not tb.record_button.isEnabled() and shut == [] and synced == []
+        assert window.close() is False and len(asked) == 1           # tekrar kapatma: soru yok, yine bekler
+        qtbot.keyClick(window, Qt.Key.Key_R)                          # R yeni kayıt başlatmaz, bilgi korunur
+        assert rec.state is RecorderState.FINALIZING and tb.alert_label.text() == CLOSING_ALERT
+    finally:
+        mux.release()
+    qtbot.waitUntil(lambda: not window.isVisible(), timeout=20000)   # kayıt bitti: pencere kendisi kapandı
+    assert shut == [()] and synced == [1] and shown == [] and rec.error is None, rec.error
+    path = rec.last_path
+    assert path.exists() and not list(path.parent.glob("*.video.mp4")) and not list(path.parent.glob("*.wav"))
+
+
+def test_closing_while_saving_waits_without_asking_and_closes_when_saved(window, qtbot, tmp_path, monkeypatch):
+    """Kayıt zaten kaydedilirken (durdurma işçisi çalışıyor) kapatma soru sormaz: kapanma olayı yok sayılır, kayıt
+    bitince pencere kendisi kapanır. Eskiden 60 sn bekleyip çalışan _StopWorker'ı yok ediyordu ('QThread: Destroyed
+    while thread is still running', süreç -6 ile düşüyor, ara dosyalar kalıyordu)."""
+    import pytest
+    from PyQt6.QtWidgets import QMessageBox
+    from matematigin_mantigi.core.recorder import MssFfmpegRecorder, find_ffmpeg
+    from matematigin_mantigi.ui.main_window import CLOSING_ALERT
+    from tests.test_recorder import FakeAudioCapture, SlowMux, stepping_clock, synthetic_grabber, wait_until
+    if find_ffmpeg() is None:
+        pytest.skip("ffmpeg yok")
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: shown.append(a[1:3])))
+    asked = _answer_close_question(monkeypatch, STOP_AND_QUIT)
+    shut, synced = _spy_shutdown(window, monkeypatch)
+    mux = SlowMux(monkeypatch)
+    window.settings.audio_device = "Sahte Mikrofon"
+    rec = window.recorder = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber,
+                                              out_height=0, audio_device="Sahte Mikrofon",
+                                              audio_factory=FakeAudioCapture, clock=stepping_clock())
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    wait_until(lambda: rec.frames_written >= 10)
+    qtbot.keyClick(window, Qt.Key.Key_R)                              # durdur: kapanış arka planda
+    try:
+        assert mux.entered.wait(20)
+        assert window.close() is False and asked == []                # soru yok, kapanma bekliyor
+        assert window.isVisible() and window.toolbar.alert_label.text() == CLOSING_ALERT and shut == []
+    finally:
+        mux.release()
+    qtbot.waitUntil(lambda: not window.isVisible(), timeout=20000)
+    assert shut == [()] and synced == [1] and rec.last_path.exists() and shown == []
+
+
+def test_close_error_is_reported_and_camera_and_settings_still_shut_down(window, qtbot, monkeypatch):
+    """Kapanışta kaydı durdurmak patlarsa kamera kapatma ve ayar yazma atlanıyordu: kamera iş parçacığı çalışırken
+    süreç bitiyor ('QThread: Destroyed…', -6), hata kullanıcıya söylenmiyordu. Şimdi hata pencerede ve günlükte;
+    kamera ve ayarlar her koşulda kapanır, pencere kapanır."""
+    from PyQt6.QtWidgets import QMessageBox
+    from matematigin_mantigi.core.recorder import NullRecorder
+    from tests.test_recorder import capture_logged
+
+    class BrokenStop(NullRecorder):                                   # anında durur (stop_is_quick), ama patlar
+        def stop(self):
+            super().stop()
+            raise OSError(13, "Permission denied", "kayit.mp4")
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: shown.append(a[1:3])))
+    asked = _answer_close_question(monkeypatch, STOP_AND_QUIT)
+    logged = capture_logged(monkeypatch)
+    shut, synced = _spy_shutdown(window, monkeypatch)
+    window.recorder = BrokenStop()
+    window.toggle_recording(True)
+    window.close()
+    assert len(asked) == 1 and not window.isVisible()
+    assert shut == [()] and synced == [1]
+    assert shown == [("Kayıt hatası", "Kayıt kapatılamadı: PermissionError: [Errno 13] Permission denied: "
+                                     "'kayit.mp4'")], shown
+    assert [(type(e), where) for e, where in logged] == [(PermissionError, "pencere kapanışı")]
+
+
+def test_finished_stop_workers_do_not_pile_up_on_the_window(window, qtbot):
+    """Her durdurma pencereye bir _StopWorker (QThread) çocuğu ekliyor, hiçbiri silinmiyordu. İş parçacığı bittikten
+    sonra nesne de silinir (deleteLater)."""
+    from matematigin_mantigi.core.recorder import NullRecorder
+    from matematigin_mantigi.ui.main_window import _StopWorker
+
+    class BackgroundStop(NullRecorder):                               # kapanış _StopWorker'da koşar
+        stop_is_quick = False
+    window.recorder = BackgroundStop()
+    tb = window.toolbar
+    for _ in range(3):
+        qtbot.keyClick(window, Qt.Key.Key_R)
+        qtbot.keyClick(window, Qt.Key.Key_R)
+        qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=10000)
+    qtbot.waitUntil(lambda: not window.findChildren(_StopWorker), timeout=5000)
+
+
+CLOSE_CHILD = r'''
+import os, subprocess, sys, threading, time
+from pathlib import Path
+
+import numpy as np
+from PyQt6.QtCore import QSettings, QTimer
+from PyQt6.QtWidgets import QApplication, QMessageBox
+from matematigin_mantigi.core import crash_log
+from matematigin_mantigi.core.models import SAMPLE_QUESTIONS, PenSettings
+from matematigin_mantigi.core.recorder import MssFfmpegRecorder, NullRecorder
+from matematigin_mantigi.core.session_store import SessionStore
+from matematigin_mantigi.core.settings import AppSettings
+from matematigin_mantigi.ui.main_window import MainWindow
+from matematigin_mantigi.ui.theme import FontFamilies
+from tests.test_recorder import FakeAudioCapture, stepping_clock, synthetic_grabber
+
+tmp, scenario = Path(sys.argv[1]), sys.argv[2]
+watchdog = threading.Timer(60, lambda: (print("ZAMAN_ASIMI", flush=True), os._exit(3)))
+watchdog.daemon = True                                # temiz çıkış onu beklemesin
+watchdog.start()
+
+
+def out(*a):
+    print(*a, flush=True)
+
+
+class Camera:                                         # sürekli kare veren kamera: kapanışta iş parçacığı çalışıyor
+    def open(self): return True
+    def read(self):
+        time.sleep(0.02)
+        return np.full((240, 320, 3), 90, np.uint8)
+    def release(self): pass
+
+
+class BrokenStop(NullRecorder):
+    def stop(self):
+        super().stop()
+        raise OSError(13, "Permission denied", "kayit.mp4")
+
+
+def answer(box):                                      # kapanış sorusu: "Durdur ve çık"
+    out("SORU", box.text())
+    next(b for b in box.buttons() if b.text() == "Durdur ve çık").click()
+    return 0
+
+
+gate_in, gate_go = threading.Event(), threading.Event()
+real_run = subprocess.run
+
+
+def gated_run(args, *a, **k):                         # ses birleştirme, senaryo bırakana dek bekler
+    if "-shortest" in args:
+        gate_in.set()
+        gate_go.wait(20)
+    return real_run(args, *a, **k)
+
+
+def poll(cond, then):
+    QTimer.singleShot(20, lambda: then() if cond() else poll(cond, then))
+
+
+def main() -> int:
+    crash = crash_log.install(tmp / "hatalar.log")    # gerçek uygulamadaki gibi: yuvadaki hata süreci düşürmez
+    app = QApplication(sys.argv[:1])
+    QMessageBox.exec = answer
+    QMessageBox.warning = staticmethod(lambda *a, **k: out("UYARI", a[1], str(a[2]).replace("\n", " ")))
+    subprocess.run = gated_run
+    settings = AppSettings(QSettings(str(tmp / "ayarlar.ini"), QSettings.Format.IniFormat))
+    settings.set_pen(PenSettings(reading_ms=0))
+    settings.audio_device = "Sahte"
+    if scenario == "kapanis-hatasi":
+        rec = BrokenStop()
+    else:
+        rec = MssFfmpegRecorder(lambda: tmp / "rec", fps=20, grabber=synthetic_grabber, out_height=0,
+                                audio_device="Sahte", audio_factory=FakeAudioCapture, clock=stepping_clock())
+    win = MainWindow(FontFamilies("Arial", "Arial", False), list(SAMPLE_QUESTIONS), settings, rec,
+                     SessionStore(tmp / "oturum"), lambda index: Camera(), tmp / "duzen.json")
+    win.resize(1280, 720)
+    win.show()
+
+    def quit_():                                      # ⌘Q (macOS uygulama menüsü) ve QApplication.quit aynı yol
+        out("KAMERA", win.webcam_panel.worker.isRunning())
+        QApplication.quit()
+        if scenario != "kapanis-hatasi":
+            poll(gate_in.is_set, saving)
+
+    def saving():
+        def report():
+            out("KAYDEDILIRKEN", win.isVisible(), rec.state.value, win.toolbar.alert_label.text())
+            gate_go.set()
+        QTimer.singleShot(300, report)
+
+    def recorded():
+        if scenario == "kaydedilirken":
+            win.toggle_recording(False)               # durdur: kapanış arka planda
+        quit_()
+
+    def start():
+        win.toggle_recording(True)
+        if scenario == "kapanis-hatasi":
+            poll(lambda: win.webcam_panel.worker.isRunning(), quit_)
+        else:
+            poll(lambda: rec.frames_written >= 10 and win.webcam_panel.worker.isRunning(), recorded)
+
+    QTimer.singleShot(0, start)
+    code = app.exec()
+    out("EXEC", code, win.isVisible(), win.webcam_panel.worker.isRunning())
+    crash_log.uninstall(crash)
+    return code
+
+
+sys.exit(main())                                       # pencere main() yerelinde: dönünce bırakılır (app.main gibi)
+'''
+
+
+@pytest.mark.parametrize("scenario", ["kayit-surerken", "kaydedilirken", "kapanis-hatasi"])
+def test_quitting_while_recording_or_saving_exits_cleanly(tmp_path, scenario):
+    """Gerçek olay döngüsü, ayrı süreçte (Qt'nin 'QThread: Destroyed…' ile süreci düşürmesi süreç içinde görünmez).
+    QApplication.quit (macOS'ta ⌘Q bu yoldan pencerelere kapanma olayı gönderir) kayıt sürerken ya da kaydedilirken:
+    pencere kayıt bitene dek açık kalır, sonra kendisi kapanır; çıkış kodu 0, ara dosyalar birleşip silinmiş.
+    Kapanışta kayıt durdurma patlasa da kamera iş parçacığı durur, hata söylenir ve günlüğe yazılır, süreç düşmez."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    from matematigin_mantigi.core.recorder import find_ffmpeg
+    if scenario != "kapanis-hatasi" and find_ffmpeg() is None:
+        pytest.skip("ffmpeg yok")
+    root = Path(__file__).resolve().parents[1]
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", XDG_CONFIG_HOME=str(tmp_path / "cfg"),
+               PYTHONPATH=os.pathsep.join(p for p in (str(root), os.environ.get("PYTHONPATH", "")) if p))
+    p = subprocess.run([sys.executable, "-c", CLOSE_CHILD, str(tmp_path), scenario], cwd=root, env=env,
+                       capture_output=True, text=True, timeout=120)
+    lines = p.stdout.splitlines()
+    assert p.returncode == 0, (p.returncode, p.stdout, p.stderr[-2000:])
+    assert "QThread: Destroyed" not in p.stderr and "ZAMAN_ASIMI" not in p.stdout, (p.stdout, p.stderr[-2000:])
+    assert "KAMERA True" in lines and "EXEC 0 False False" in lines, lines      # kamera çalışıyordu; durdu
+    asked = [line for line in lines if line.startswith("SORU")]
+    assert asked == ([] if scenario == "kaydedilirken" else ["SORU Kayıt sürüyor, durdurulup çıkılsın mı?"]), lines
+    if scenario == "kapanis-hatasi":
+        assert [line for line in lines if line.startswith("UYARI")] == [
+            "UYARI Kayıt hatası Kayıt kapatılamadı: PermissionError: [Errno 13] Permission denied: 'kayit.mp4'"]
+        assert "pencere kapanışı" in (tmp_path / "hatalar.log").read_text(encoding="utf-8")
+        return
+    assert "KAYDEDILIRKEN True finalizing Kayıt kaydediliyor… bitince pencere kapanacak" in lines, lines
+    assert not [line for line in lines if line.startswith("UYARI")], lines
+    names = sorted(p.name for p in (tmp_path / "rec").iterdir())
+    assert len(names) == 2 and names[0].endswith(".log") and names[1].endswith(".mp4"), names   # birleşti, silindi

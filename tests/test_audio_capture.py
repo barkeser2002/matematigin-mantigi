@@ -1,3 +1,5 @@
+import errno
+import threading
 import time
 import wave
 
@@ -5,6 +7,67 @@ import numpy as np
 import pytest
 
 from matematigin_mantigi.core import audio_capture as ac
+
+
+class FakeSoundDevice:
+    """Gerçek AudioCapture'ı sürmek için sahte sounddevice modülü (monkeypatch ac._sd). InputStream geri çağrıyı
+    ayrı iş parçacığından 20 ms'lik bloklarla besler; `blocks` blok verip susar. Mikrofon çekilince (USB kablosu,
+    AirPods koptu) CoreAudio'da akış açık kalır, geri çağrı gelmez, stop() ve close() normal döner: aynısı.
+    Blok sayısı sabit, beslemede bekleme yok: sonuç duvar saatine bağlı değil."""
+
+    RATE, BLOCK = 48000, 960                          # 20 ms
+
+    class _TimeInfo:                                  # sürücü zaman bilgisi vermiyor (0): gecikme tahminle
+        inputBufferAdcTime = 0.0
+        currentTime = 0.0
+
+    def __init__(self, blocks: int):
+        self.blocks = blocks
+        self.fed = threading.Event()                  # bütün bloklar geri çağrıya verildi
+        fake = self
+
+        class InputStream:
+            def __init__(self, device, samplerate, channels, dtype, latency, callback):
+                self.cb, self.channels = callback, channels
+                self._t = threading.Thread(target=self._feed, daemon=True)
+
+            def start(self):
+                self._t.start()
+
+            def _feed(self):
+                block = np.full((fake.BLOCK, self.channels), 1000, np.int16)
+                for _ in range(fake.blocks):
+                    self.cb(block, fake.BLOCK, fake._TimeInfo(), None)
+                fake.fed.set()                        # ... ve mikrofon susar; akış yine de "açık"
+
+            def stop(self):
+                self._t.join(10)
+
+            def close(self):
+                pass
+        self.InputStream = InputStream
+
+    @staticmethod
+    def query_hostapis():
+        return [{"name": "Core Audio"}]
+
+    @staticmethod
+    def query_devices(*a, **k):
+        d = {"name": "USB Mikrofon", "max_input_channels": 1, "hostapi": 0, "default_samplerate": 48000.0}
+        return d if (a or k) else [d]
+
+
+def disk_full_after(monkeypatch, nbytes: int) -> None:
+    """WAV yazımı nbytes ses verisinden sonra OSError(ENOSPC) verir (disk doldu): yazıcı iş parçacığının ölümü."""
+    real = wave.Wave_write.writeframes
+    written = [0]
+
+    def writeframes(self, data):
+        if written[0] + len(data) > nbytes:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        written[0] += len(data)
+        return real(self, data)
+    monkeypatch.setattr(wave.Wave_write, "writeframes", writeframes)
 
 
 def test_list_and_resolve_prefer_wasapi_on_windows(monkeypatch):
@@ -155,6 +218,51 @@ def test_capture_writes_wav_and_measures_first_sample(tmp_path, monkeypatch):
     with wave.open(str(tmp_path / "a.wav")) as w:
         assert w.getframerate() == 48000 and w.getnframes() == res.samples and w.getsampwidth() == 2
     assert 0 < res.wall_duration < 5
+
+
+# --- #1: WAV yazıcısı ölürse sebep kaydediciye ulaşır (denetim rec#1 ikinci kipi) ----------------------------
+
+def test_writer_thread_error_reaches_stop_instead_of_dying_silently(tmp_path, monkeypatch):
+    """WAV yazıcı iş parçacığı yazım hatasıyla (disk dolu) ölünce istisna yalnız iş parçacığı kancasına gidiyordu:
+    stop() normal dönüyor, kaydedici sesin yarıda kaldığını bilmiyordu. Şimdi sebep AudioResult.error ile döner, o
+    ana dek yazılan ses WAV'da okunur kalır, traceback hatalar.log'a gider (log_handled). İş parçacığından istisna
+    kaçmaz: genel 'Beklenmeyen hata' kutusu kayıt sürerken tahtanın üstünde açılmaz, kayıt sonunda söylenir."""
+    from matematigin_mantigi.core import crash_log
+    leaked, logged = [], []
+    monkeypatch.setattr(threading, "excepthook", lambda args: leaked.append(args.exc_value))
+    monkeypatch.setattr(crash_log, "log_handled", lambda exc, where="": logged.append(exc))
+    sd = FakeSoundDevice(blocks=50)
+    monkeypatch.setattr(ac, "_sd", lambda: sd)
+    disk_full_after(monkeypatch, 10 * 960 * 2)                  # 10 blok (0,2 sn) yazılır, sonra disk dolu
+    cap = ac.AudioCapture("USB Mikrofon")
+    cap.start(tmp_path / "a.wav")
+    assert sd.fed.wait(10)
+    res = cap.stop()
+    assert res.error == "[Errno 28] No space left on device"
+    assert res.samples == 10 * 960 and res.first_sample_monotonic is not None
+    with wave.open(str(tmp_path / "a.wav")) as w:
+        assert w.getnframes() == 10 * 960                       # yazılabilen ses dosyada, başlık geçerli
+    assert leaked == [] and len(logged) == 1 and isinstance(logged[0], OSError)
+
+
+def test_wav_close_error_is_returned_not_raised(tmp_path, monkeypatch):
+    """Disk doluyken WAV'ın kapanışı (tampon boşaltma, başlık) da OSError verir. stop() bunu fırlatırsa kaydedici
+    'Mikrofon kapatılamadı' der, yazılmış sesi hiç birleştirmez. stop() sonucu yine döndürür, sebep error'da."""
+    real_close, raised = wave.Wave_write.close, []
+
+    def close(self):
+        real_close(self)
+        if not raised:                                          # yalnız ilk kapanış (__del__ yeniden çağırır)
+            raised.append(True)
+            raise OSError(errno.ENOSPC, "No space left on device")
+    monkeypatch.setattr(wave.Wave_write, "close", close)
+    sd = FakeSoundDevice(blocks=10)
+    monkeypatch.setattr(ac, "_sd", lambda: sd)
+    cap = ac.AudioCapture("USB Mikrofon")
+    cap.start(tmp_path / "a.wav")
+    assert sd.fed.wait(10)
+    res = cap.stop()
+    assert raised and res.error == "[Errno 28] No space left on device" and res.samples == 10 * 960
 
 
 @pytest.mark.skipif(not ac.list_input_devices(), reason="mikrofon yok")

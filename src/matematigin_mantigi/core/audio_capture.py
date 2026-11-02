@@ -14,6 +14,8 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 
+from matematigin_mantigi.core import crash_log
+
 
 @dataclass
 class AudioResult:
@@ -25,6 +27,7 @@ class AudioResult:
     stopped_monotonic: float
     overflows: int = 0
     dropped_blocks: int = 0
+    error: str | None = None          # WAV yazılamadı (disk dolu...): samples o ana dek yazılabilen ses
 
     @property
     def duration(self) -> float:
@@ -36,6 +39,11 @@ class AudioResult:
         if self.first_sample_monotonic is None:
             return 0.0
         return max(0.0, self.stopped_monotonic - self.first_sample_monotonic)
+
+
+def _reason(err: BaseException) -> str:
+    """Hatanın kısa metni ('[Errno 28] No space left on device'); boşsa türün adı."""
+    return str(err) or type(err).__name__
 
 
 def _sd():
@@ -124,6 +132,7 @@ class AudioCapture:
         self.samples = 0
         self.overflows = 0
         self.dropped_blocks = 0
+        self.error: str | None = None          # WAV yazıcısının hatası (disk dolu...); stop() AudioResult'a taşır
         self.samplerate = 48000
         self._stream = None
         self._wav: wave.Wave_write | None = None
@@ -192,16 +201,24 @@ class AudioCapture:
             self.dropped_blocks += 1
 
     def _write_loop(self) -> None:
-        while True:
-            try:
-                block = self._q.get(timeout=0.2)
-            except queue.Empty:
-                if self._stop.is_set():
-                    return
-                continue
-            if self._wav is not None:
-                self._wav.writeframes(block.tobytes())
-                self.samples += len(block)
+        """Kuyruktaki blokları WAV'a yazar. Yazım hatası (disk dolu, dosya kilitlendi) iş parçacığını sessizce
+        öldürmez: sebep self.error'a, ayrıntı hatalar.log'a gider; stop() bunu AudioResult.error ile kaydediciye
+        taşır. Video etkilenmez: o ana dek yazılan ses birleştirilir, kalan kısım sessizlikle dolar. İstisna bu iş
+        parçacığından kaçmaz; genel uyarı kutusu kayıt sürerken tahtanın (kaydın) üstünde açılmasın."""
+        try:
+            while True:
+                try:
+                    block = self._q.get(timeout=0.2)
+                except queue.Empty:
+                    if self._stop.is_set():
+                        return
+                    continue
+                if self._wav is not None:
+                    self._wav.writeframes(block.tobytes())
+                    self.samples += len(block)
+        except Exception as err:  # noqa: BLE001 - sebep kayıt sonunda öğretmene söylenir
+            self.error = _reason(err)
+            crash_log.log_handled(err, "ses yazıcısı")
 
     def stop(self) -> AudioResult:
         stopped = time.monotonic()
@@ -216,7 +233,11 @@ class AudioCapture:
             self._writer.join(timeout=15)
             self._writer = None
         if self._wav is not None:
-            self._wav.close()
+            try:
+                self._wav.close()
+            except OSError as err:           # disk doluysa son tampon ve başlık da yazılamaz; yazılmış ses kalır
+                self.error = self.error or _reason(err)
+                crash_log.log_handled(err, "ses dosyası kapatılırken")
             self._wav = None
         return AudioResult(self.path or Path(), self.samplerate, self.channels, self.samples,
-                           self.first_sample_monotonic, stopped, self.overflows, self.dropped_blocks)
+                           self.first_sample_monotonic, stopped, self.overflows, self.dropped_blocks, self.error)

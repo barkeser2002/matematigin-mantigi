@@ -311,13 +311,22 @@ def build(args, fam, settings=None):
     win = make(args, fam)
     rec, wait = win.recorder, 3 * POLL_MS
 
+    def before_recording():
+        raise ValueError("kayıttan önce yapay hata")
+
     def boom():
         raise OSError("kayıt sırasında yapay yuva hatası")
 
+    def opened():
+        QTimer.singleShot(0, before_recording)
+        later(lambda: bool(boxes()), start)
+
     def start():
+        res["once"] = snapshot(win)
         win.toggle_recording(True)
+        res["baslar_baslamaz"] = snapshot(win)      # yoklamayı beklemeden: kaydın ilk karelerine girmesin
         QTimer.singleShot(0, boom)
-        later(lambda: win.toolbar.alert_label.isVisible(), lambda: QTimer.singleShot(wait, recording))
+        later(lambda: "2 uyarı" in win.toolbar.alert_label.text(), lambda: QTimer.singleShot(wait, recording))
 
     def recording():
         res["kayitta"] = snapshot(win)
@@ -334,7 +343,7 @@ def build(args, fam, settings=None):
         res["sonra"] = snapshot(win)
         done(win)
 
-    later(lambda: win.isFullScreen() and win.width() == 1920, start)
+    later(lambda: win.isFullScreen() and win.width() == 1920, opened)
     return win
 
 run(build)
@@ -378,15 +387,18 @@ def _run_app(tmp_path, body: str, screens: list) -> dict:
 
 
 def test_app_routes_notices_to_the_toolbar_while_recording_full_screen(tmp_path):
-    """B-1 uçtan uca (gerçek app.main, 1920x1080 tek ekran, tam ekran): kayıt sürerken yuvadaki hata kutu açmaz,
-    araç çubuğunun şeridine kısa satır yazılır; kayıt kaydedilirken (FINALIZING) de. Kayıt bitince şerit temizlenir,
-    kutu açılır ve kayıt düğmesini örtmez (eskiden sol altta, kayıt düğmesinin üstündeydi)."""
+    """B-1 uçtan uca (gerçek app.main, 1920x1080 tek ekran, tam ekran): kayıttan önce açılmış kutu kayıt başlar
+    başlamaz (yoklamayı beklemeden, ilk karelere girmeden) gizlenir; kayıt sürerken yuvadaki hata kutu açmaz, araç
+    çubuğunun şeridine kısa satır yazılır; kayıt kaydedilirken (FINALIZING) de. Kayıt bitince şerit temizlenir, kutu
+    iki uyarıyla açılır ve kayıt düğmesini örtmez (eskiden sol altta, kayıt düğmesinin üstündeydi)."""
     res = _run_app(tmp_path, _RECORDING_FULL_SCREEN, _FHD)
-    strip = "⚠ Beklenmeyen hata — ayrıntı kayıt bitince"
+    assert res["once"]["kutu"] == 1 and res["baslar_baslamaz"]["kutu"] == 0, res
+    strip = "⚠ 2 uyarı — ayrıntı kayıt bitince"
     assert (res["kayitta"]["kutu"], res["kayitta"]["serit"]) == (0, strip), res["kayitta"]
     assert (res["kaydedilirken"]["kutu"], res["kaydedilirken"]["serit"]) == (0, strip), res["kaydedilirken"]
     after = res["sonra"]
-    assert after["kutu"] == 1 and "kayıt sırasında yapay yuva hatası" in after["metin"] and after["serit"] is None
+    assert after["kutu"] == 1 and after["serit"] is None, after
+    assert "kayıttan önce yapay hata" in after["metin"] and "kayıt sırasında yapay yuva hatası" in after["metin"]
     box, button, screen = QRect(*after["cerceve"]), QRect(*after["kayit_dugmesi"]), QRect(*after["ekranlar"][0])
     assert screen.contains(box) and not box.intersects(button), after
 

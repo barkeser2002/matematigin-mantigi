@@ -115,6 +115,11 @@ class ErrorNotice(QObject):
         self._is_recording, self._show_alert = is_recording, show_alert
         self._update_polling()
 
+    def recording_changed(self) -> None:
+        """Kayıt başlamış ya da bitmiş olabilir: yoklamayı beklemeden bakar (app.py kayıt rozetinin tikine bağlar; rozet
+        kayıt başlar başlamaz tik atar). Görünür kutu kaydın ilk karelerine girmeden gizlenir."""
+        self._poll()
+
     def post(self, title: str, text: str, key: str | None = None) -> None:
         """Herhangi bir iş parçacığından güvenle çağrılır; istisna fırlatmaz."""
         try:

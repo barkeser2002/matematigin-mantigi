@@ -220,6 +220,27 @@ def test_box_destroyed_with_its_temporary_modal_parent_is_shown_again(qtbot):
     assert _visible_boxes() == []
 
 
+def test_box_never_activates_or_raises_itself(qtbot, monkeypatch):
+    """Kutu odağı çalmaz (kalem ve kısayollar tahtada kalır). Offscreen QPA gösterilen her pencereyi etkinleştirdiği
+    için odak burada ölçülemez: kutuyu etkinleştiren ya da öne alan bir çağrı hiçbir yolda yapılmamalı (ilk gösterim,
+    görünür kutunun metni değişirken, kayıttan sonra yeniden gösterilirken)."""
+    calls = []
+    monkeypatch.setattr(QMessageBox, "activateWindow", lambda self: calls.append("activateWindow"))
+    monkeypatch.setattr(QMessageBox, "raise_", lambda self: calls.append("raise_"))
+    notice, _ = _notice(qtbot)
+    rec, _alerts = _route(notice)
+    notice.post("Beklenmeyen hata", "ilk", "k1")
+    qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)
+    qtbot.addWidget(notice.box)
+    notice.post("Düzen kaydedilemedi", "ikinci", "k2")
+    qtbot.waitUntil(lambda: notice.box.text() == "ikinci", timeout=2000)
+    rec[0] = True
+    qtbot.waitUntil(lambda: _visible_boxes() == [], timeout=2000)
+    rec[0] = False
+    qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)
+    assert calls == [] and notice.box.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+
+
 # --- gerçek app.main: kayıt yolu ve yerleşim bağlaması --------------------------------------------------------
 _FHD = [dict(name="S1", x=0, y=0, width=1920, height=1080, logicalDpi=96, logicalBaseDpi=96, dpr=1)]
 _DUAL = _FHD + [dict(name="S2", x=1920, y=0, width=1440, height=900, logicalDpi=96, logicalBaseDpi=96, dpr=1)]

@@ -181,6 +181,40 @@ def test_open_exception_is_reported_and_thread_ends(qtbot):
     assert w.wait(2000)
 
 
+def test_open_exception_releases_the_half_opened_source(qtbot):
+    """Açılış yarıda patlarsa da (sürücü kamerayı yarım açmış olabilir) kaynak bırakılır: kamera başka bir uygulamaya
+    ve yeniden denemeye kilitli kalmasın. Bırakma satırı silinince hiçbir test düşmüyordu."""
+    cam = _BrokenCamera("open")
+    w = CameraWorker(cam, ChromaParams())
+    with qtbot.waitSignal(w.cameraError, timeout=3000):
+        w.start()
+    assert w.wait(2000) and cam.released
+
+
+def test_sparse_frame_errors_do_not_add_up_to_a_camera_failure(qtbot):
+    """Sayaç 'art arda' hatayı sayar, her başarılı karede sıfırlanır: ders boyunca arada bir bozuk gelen kareler
+    (burada her ikinci kare) toplamda MAX_FRAME_ERRORS'u kat kat aşsa da kamera 'alınamadı' diye kapanmaz. Sıfırlama
+    silinince hiçbir test düşmüyordu."""
+    class EveryOtherFrameBroken(FakeCamera):
+        def __init__(self):
+            super().__init__(frames=100_000); self.calls = 0; self.errors = 0
+
+        def read(self):
+            self.calls += 1
+            if self.calls % 2 == 0:
+                self.errors += 1
+                raise ValueError("arada bir bozuk kare")
+            return super().read()
+    cam = EveryOtherFrameBroken()
+    w = CameraWorker(cam, ChromaParams(), out_width=160, target_fps=200)
+    errors = []
+    w.cameraError.connect(errors.append)
+    w.start()
+    qtbot.waitUntil(lambda: errors or cam.errors > 2 * CameraWorker.MAX_FRAME_ERRORS, timeout=10000)
+    assert errors == [] and w.isRunning()
+    w.stop(); assert w.wait(2000)
+
+
 @pytest.fixture
 def crash_logged(tmp_path):
     """Hata kancası tmp_path'e kurulur; sys/threading kancaları (global durum) test sonunda geri gelir."""

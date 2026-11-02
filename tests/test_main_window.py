@@ -324,6 +324,36 @@ def test_real_recorder_with_audio_muxes_and_cleans_up(window, qtbot, tmp_path):
     assert frames > 10
 
 
+def test_microphone_cut_warning_reaches_the_status_line(window, qtbot, tmp_path, monkeypatch):
+    """Mikrofon kayıt sırasında kesilince (gerçek AudioCapture, sahte sounddevice, gerçek ffmpeg) kayıt videonun
+    tam uzunluğunda kaydedilir ve uyarı durum satırına ulaşır: 'Kayıt kaydedildi: … · UYARI: Mikrofon kayıt
+    sırasında kesildi (…)'. Video sağlam olduğu için 'Kayıt hatası' penceresi açılmaz."""
+    import pytest
+    from PyQt6.QtWidgets import QMessageBox
+    from matematigin_mantigi.core import audio_capture as ac
+    from matematigin_mantigi.core.recorder import MssFfmpegRecorder, find_ffmpeg
+    from tests.test_audio_capture import FakeSoundDevice
+    from tests.test_recorder import stepping_clock, synthetic_grabber, wait_until
+    if find_ffmpeg() is None:
+        pytest.skip("ffmpeg yok")
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: shown.append(a[1:3])))
+    sd = FakeSoundDevice(blocks=15)                                       # 0,3 sn ses, sonra mikrofon susar
+    monkeypatch.setattr(ac, "_sd", lambda: sd)
+    window.settings.audio_device = "USB Mikrofon"
+    rec = window.recorder = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber,
+                                              out_height=0, audio_device="USB Mikrofon", clock=stepping_clock())
+    tb = window.toolbar
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    wait_until(lambda: rec.frames_written >= 3 * rec.fps and sd.fed.is_set())   # 3 sn video (ayardaki fps)
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=20000)
+    text = window.work_area.status_label.text()
+    assert text.startswith(f"Kayıt kaydedildi: {rec.last_path}"), text
+    assert "UYARI: Mikrofon kayıt sırasında kesildi (0:00. dakikadan sonra ses yok)" in text, text
+    assert shown == [] and rec.last_path.exists() and not list(rec.last_path.parent.glob("*.video.mp4"))
+
+
 # --- #2: kayıt kaydedilirken yeni kayıt yok; uyarı araç çubuğunda (denetim app#1, e2e#2) -----------------------
 
 def test_r_while_previous_recording_is_saving_starts_nothing_and_warns_in_toolbar(window, qtbot, tmp_path,

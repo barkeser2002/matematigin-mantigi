@@ -1,13 +1,16 @@
 import itertools
+import re
 import subprocess
 import threading
 import time
+import wave
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from matematigin_mantigi.core import audio_capture as ac
 from matematigin_mantigi.core.recorder import (MssFfmpegRecorder, NullRecorder, RecordRect, RecorderError,
                                                audio_rate_correction, ffmpeg_args, find_ffmpeg, mux_args, record_rect_for)
 from matematigin_mantigi.ui.record_badge import RecordBadge
@@ -178,8 +181,10 @@ def test_grab_screen_returns_bgra():
 
 
 class FakeAudioCapture:
-    """Gerçek mikrofon yerine 1 kHz sinüs üretir; ilk örnek zamanı start() anıdır."""
+    """Gerçek mikrofon yerine 1 kHz sinüs üretir; ilk örnek zamanı start() anıdır. limit (sn) verilirse kayıt ne
+    kadar sürerse sürsün yalnız ilk limit saniyelik ses gelir (mikrofon sonra kesildi)."""
     instances: list = []
+    limit: float | None = None
 
     def __init__(self, device):
         self.device = device
@@ -196,6 +201,8 @@ class FakeAudioCapture:
         from matematigin_mantigi.core.audio_capture import AudioResult
         stopped = time.monotonic()
         n = int((stopped - self.first_sample_monotonic) * self.samplerate)
+        if self.limit is not None:
+            n = min(n, int(self.limit * self.samplerate))
         t = np.arange(n) / self.samplerate
         pcm = (np.sin(2 * np.pi * 1000 * t) * 12000).astype(np.int16)
         with wave.open(str(self.path), "wb") as w:
@@ -258,8 +265,9 @@ def wait_until(cond, timeout: float = 15.0) -> None:
 
 
 class SlowMux:
-    """Uzun dersin ses birleştirmesini taklit eder: kaydedicinin subprocess.run çağrısı (ffmpeg mux) test
-    release() diyene dek bekler. entered: kapanış birleştirmeye vardı. Duvar saatine değil olaya bağlı."""
+    """Uzun dersin ses birleştirmesini taklit eder: kaydedicinin birleştirme komutu (subprocess.run, -shortest'lı
+    ffmpeg mux) test release() diyene dek bekler. entered: kapanış birleştirmeye vardı. Duvar saatine değil olaya
+    bağlı. Diğer ffmpeg çağrıları (süre ölçümü) beklemeden geçer, calls'a sayılmaz."""
 
     def __init__(self, monkeypatch):
         self.entered, self._go = threading.Event(), threading.Event()
@@ -267,6 +275,8 @@ class SlowMux:
         real_run = subprocess.run
 
         def run(args, *a, **k):
+            if "-shortest" not in args:
+                return real_run(args, *a, **k)
             self.calls += 1
             self.entered.set()
             assert self._go.wait(30), "test birleştirmeyi bırakmadı"
@@ -413,3 +423,216 @@ def test_exception_while_finalizing_still_returns_recorder_to_idle(tmp_path, mon
     assert rec.state is RecorderState.RECORDING
     wait_until(lambda: rec.frames_written >= 3)
     assert rec.stop().exists() and rec.state is RecorderState.IDLE
+
+
+# --- #1: birleştirme videoyu asla kısaltmaz (denetim rec#1, e2e#1; kıdemli incelemenin Critical 1'i) ---------
+
+MIC_CUT = re.compile(r"Mikrofon kayıt sırasında kesildi \(0:0[01]\. dakikadan sonra ses yok\)")
+
+
+def _raw_files(path: Path) -> tuple[Path, Path]:
+    """Son dosyanın ara dosyaları: kayit_<saat>.video.mp4 (ham video) ve kayit_<saat>.wav (ses)."""
+    return path.with_name(path.stem + ".video.mp4"), path.with_suffix(".wav")
+
+
+def _record_with_real_audio_capture(tmp_path, monkeypatch, blocks: int, seconds: float, fps: int = 20):
+    """Gerçek AudioCapture (yalnız sounddevice sahte, `blocks` x 20 ms ses verip susar) + gerçek ffmpeg ile kayıt.
+    Video uzunluğu yazılan kare sayısıyla beklenir (olay); duvar saatine bağlı eşik yok. Dönüş: (kaydedici, yol)."""
+    from tests.test_audio_capture import FakeSoundDevice
+    sd = FakeSoundDevice(blocks)
+    monkeypatch.setattr(ac, "_sd", lambda: sd)
+    rec = MssFfmpegRecorder(lambda: tmp_path, fps=fps, grabber=synthetic_grabber, out_height=0,
+                            audio_device="USB Mikrofon", clock=stepping_clock())        # varsayılan: AudioCapture
+    rec.start(RecordRect(0, 0, 160, 120))
+    wait_until(lambda: rec.frames_written >= seconds * fps and sd.fed.is_set())
+    return rec, rec.stop()
+
+
+@pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
+def test_microphone_that_goes_quiet_mid_lesson_does_not_cut_the_video(tmp_path, monkeypatch):
+    """Mikrofon ders ortasında çekilince (USB kablosu, AirPods) PortAudio akışı açık kalır ama geri çağrı gelmez,
+    stop() normal döner. -shortest birleşik dosyayı sesin bittiği yerde kesiyordu: 5 sn'lik kayıt ~1,4 sn çıkıyor,
+    tam uzunluktaki ara video siliniyor, hiçbir hata bildirilmiyordu. Şimdi eksik ses sessizlikle dolar, dosya
+    videonun uzunluğunda biter, ara dosyalar silinir ve öğretmen sesin nereden sonra olmadığını görür."""
+    rec, path = _record_with_real_audio_capture(tmp_path, monkeypatch, blocks=75, seconds=5.0)   # 1,5 sn ses
+    exe, video_s = find_ffmpeg(), rec.frames_written / 20
+    v, a = _stream_seconds(exe, path, "-an"), _stream_seconds(exe, path, "-vn")
+    assert abs(v - video_s) < 0.15 and abs(a - v) < 0.15, (v, a, video_s)         # düzeltmesiz: v ≈ a ≈ 1,4 sn
+    assert rec.audio_result.samples == 75 * 960 and rec.error is None, rec.error
+    assert MIC_CUT.fullmatch(rec.audio_error or ""), rec.audio_error
+    assert not list(tmp_path.glob("*.video.mp4")) and not list(tmp_path.glob("*.wav"))    # dosya tam: silindi
+
+
+@pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
+def test_wav_writer_that_dies_mid_lesson_is_reported_and_does_not_cut_the_video(tmp_path, monkeypatch):
+    """Denetimin ikinci kipi: mikrofon canlı ama WAV yazıcı iş parçacığı 1,5 sn sonra OSError'la ölüyor (disk
+    hatası). Hata yalnız iş parçacığından stderr'e gidiyor, kaydediciye ulaşmıyor, dosya ~1,4 sn'ye kesiliyordu.
+    Şimdi sebep audio_error'da (durum satırına UYARI olarak gider), video tam uzunlukta kalır."""
+    from tests.test_audio_capture import disk_full_after
+    leaked = []
+    monkeypatch.setattr(threading, "excepthook", lambda args: leaked.append(args.exc_value))
+    disk_full_after(monkeypatch, 75 * 960 * 2)                  # 1,5 sn'lik ses yazılır, sonra disk dolu
+    rec, path = _record_with_real_audio_capture(tmp_path, monkeypatch, blocks=250, seconds=5.0)  # mikrofon canlı
+    exe, video_s = find_ffmpeg(), rec.frames_written / 20
+    v, a = _stream_seconds(exe, path, "-an"), _stream_seconds(exe, path, "-vn")
+    assert abs(v - video_s) < 0.15 and abs(a - v) < 0.15, (v, a, video_s)
+    assert leaked == [] and rec.error is None and rec.audio_result.samples == 75 * 960, (leaked, rec.error)
+    assert re.fullmatch(r"Ses dosyası yazılamadı: \[Errno 28\] No space left on device "
+                        r"\(0:0[01]\. dakikadan sonra ses yok\)", rec.audio_error or ""), rec.audio_error
+
+
+@pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
+def test_mux_that_comes_out_shorter_than_the_video_keeps_the_raw_files(tmp_path, monkeypatch):
+    """Güvenlik ağı: birleşik dosya (başka bir ffmpeg sürümünün davranışı, bozuk giriş...) videodan kısa çıkarsa
+    ara .video.mp4 ve .wav SİLİNMEZ, hata öğretmene ikisinin yerini söyler. Kısa çıktıyı gerçek ffmpeg üretir:
+    komuttan ses dolgusu (apad) çıkarılınca -shortest dosyayı bugünkü kusurdaki gibi sesin sonunda keser."""
+    from matematigin_mantigi.core import recorder as r
+    real_mux_args = r.mux_args
+
+    def unpadded(*a, **k):
+        args = real_mux_args(*a, **k)
+        i = args.index("-af") + 1
+        args[i] = ",".join(f for f in args[i].split(",") if not f.startswith("apad"))
+        return args
+
+    class QuietMic(FakeAudioCapture):
+        limit = 0.3                                             # 0,3 sn ses, sonra mikrofon kesildi
+    monkeypatch.setattr(r, "mux_args", unpadded)
+    rec = MssFfmpegRecorder(lambda: tmp_path, fps=20, grabber=synthetic_grabber, out_height=0,
+                            audio_device="Sahte Mikrofon", audio_factory=QuietMic, clock=stepping_clock())
+    rec.start(RecordRect(0, 0, 160, 120))
+    wait_until(lambda: rec.frames_written >= 40)               # 2 sn video
+    path = rec.stop()
+    video, wav = _raw_files(path)
+    assert path.exists() and video.exists() and wav.exists()    # hiçbir şey silinmedi
+    assert rec.error and "videodan kısa çıktı" in rec.error, rec.error
+    assert str(path) in rec.error and str(video) in rec.error and str(wav) in rec.error   # öğretmen yerlerini görür
+    exe = find_ffmpeg()
+    assert _stream_seconds(exe, path, "-an") < 1.0 <= _stream_seconds(exe, video, "-an")   # tam video ara dosyada
+
+
+@pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
+def test_microphone_that_gives_no_samples_at_all_keeps_the_full_video(tmp_path):
+    """Mikrofon açıldı ama hiç örnek gelmedi (samples=0, ör. macOS izni ya da sürücü): birleştirme denenmez, video
+    tam uzunlukta tek başına son dosya olur ve öğretmen sesin olmadığını görür."""
+    class SilentMic(FakeAudioCapture):
+        limit = 0.0
+    rec = MssFfmpegRecorder(lambda: tmp_path, fps=20, grabber=synthetic_grabber, out_height=0,
+                            audio_device="Sahte Mikrofon", audio_factory=SilentMic, clock=stepping_clock())
+    rec.start(RecordRect(0, 0, 160, 120))
+    wait_until(lambda: rec.frames_written >= 20)
+    path = rec.stop()
+    assert rec.error is None and rec.audio_error == "Ses kaydedilemedi (örnek yok)", (rec.error, rec.audio_error)
+    assert abs(_stream_seconds(find_ffmpeg(), path, "-an") - rec.frames_written / 20) < 0.15
+    assert not list(tmp_path.glob("*.video.mp4"))
+
+
+@pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
+@pytest.mark.parametrize("unmeasurable", ["ara video", "birleşik dosya"])
+def test_unmeasurable_duration_keeps_the_raw_files(tmp_path, monkeypatch, unmeasurable):
+    """Süre ölçülemezse (ffmpeg başlığı okuyamadı) birleşik dosyanın tam olduğu bilinmez: güvenli taraf, ara
+    dosyalar silinmez ve öğretmen yerlerini öğrenir. Ara video ölçülemezse dolgu duvar süresine göre yapılır."""
+    from matematigin_mantigi.core import recorder as r
+    real = r.media_duration
+
+    def media_duration(exe, path, **k):
+        if path.name.endswith(".video.mp4") == (unmeasurable == "ara video"):
+            return None
+        return real(exe, path, **k)
+    monkeypatch.setattr(r, "media_duration", media_duration)
+    rec = MssFfmpegRecorder(lambda: tmp_path, fps=20, grabber=synthetic_grabber, out_height=0,
+                            audio_device="Sahte Mikrofon", audio_factory=FakeAudioCapture, clock=stepping_clock())
+    rec.start(RecordRect(0, 0, 160, 120))
+    wait_until(lambda: rec.frames_written >= 10)
+    path = rec.stop()
+    video, wav = _raw_files(path)
+    assert path.exists() and video.exists() and wav.exists()
+    assert rec.error and "ölçülemedi" in rec.error and str(video) in rec.error and str(wav) in rec.error, rec.error
+    exe = find_ffmpeg()
+    v, a = _stream_seconds(exe, path, "-an"), _stream_seconds(exe, path, "-vn")
+    assert abs(v - rec.frames_written / 20) < 0.15 and abs(a - v) < 0.15, (v, a)   # birleştirme yine tam
+
+
+def test_mux_args_pads_missing_audio_with_silence_up_to_the_video(tmp_path):
+    """Mikrofon kesilince eksik ses sessizlikle dolar (apad), -shortest dosyayı videonun sonunda bitirir. Dolgu
+    sınırlı (whole_dur = video + 1 sn): sınırsız apad + -shortest + -c:v copy ffmpeg 7.0.2'de hiç bitmiyor (ses
+    kodlayıcısı sonsuz sessizlik üretirken çıktıya tek paket yazılmıyor). apad zincirin sonunda: hız düzeltmesi
+    (asetrate/aresample) ve fade-in'den sonra; -ss / -itsoffset girişte kalır, hizaya dokunmaz."""
+    v, a, out = tmp_path / "v.mp4", tmp_path / "a.wav", tmp_path / "o.mp4"
+    for offset, rate in ((0.25, None), (0.0, None), (-0.1, None), (0.0, 48003)):
+        args = mux_args("ffmpeg", v, a, out, offset, asetrate=rate, video_s=125.5)
+        af = args[args.index("-af") + 1].split(",")
+        assert af[-2:] == ["afade=t=in:st=0:d=0.01", "apad=whole_dur=126.500"], af
+        assert "-shortest" in args and args[-1] == str(out) and args.index("-i") < args.index("-af")
+    fixed = mux_args("ffmpeg", v, a, out, 0.0, asetrate=48003, video_s=10)
+    assert fixed[fixed.index("-af") + 1] == \
+        "asetrate=48003,aresample=48000,afade=t=in:st=0:d=0.01,apad=whole_dur=11.000"
+
+
+def _write_test_media(exe, video: Path, wav: Path, video_s: float, audio_s: float) -> None:
+    subprocess.run([exe, "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                    f"testsrc=s=160x120:r=20:d={video_s}", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(video)], check=True, capture_output=True)
+    n = int(audio_s * 48000)
+    pcm = (np.sin(2 * np.pi * 1000 * np.arange(n) / 48000) * 12000).astype(np.int16)
+    with wave.open(str(wav), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(48000); w.writeframes(pcm.tobytes())
+
+
+@pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
+@pytest.mark.parametrize("offset, rate", [(0.25, None), (-0.1, None), (0.0, 48480), (0.8, None)])
+def test_padded_mux_ends_with_the_video_on_every_alignment_path(tmp_path, offset, rate):
+    """Gerçek ffmpeg: 3 sn video + 0,5 sn ses. -ss (ses önce başladı), -itsoffset (geç başladı) ve asetrate
+    yollarında çıktı videonun uzunluğunda, ses de sona dek (sessizlikle) sürer; komut zamanında biter. 0,8: sesin
+    tamamı videodan önce (-ss WAV'ın sonunu aşar); ses izi yine tam uzunlukta sessizlik olur, birleştirme düşmez."""
+    exe = find_ffmpeg()
+    video, wav, out = tmp_path / "v.mp4", tmp_path / "a.wav", tmp_path / "o.mp4"
+    _write_test_media(exe, video, wav, 3.0, 0.5)
+    res = subprocess.run(mux_args(exe, video, wav, out, offset, asetrate=rate, video_s=3.0),
+                         capture_output=True, timeout=60)
+    assert res.returncode == 0, res.stderr[-300:]
+    v, a = _stream_seconds(exe, out, "-an"), _stream_seconds(exe, out, "-vn")
+    assert abs(v - 3.0) < 0.06 and abs(a - 3.0) < 0.1, (v, a)
+
+
+@pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
+def test_media_duration_reads_the_container_header(tmp_path):
+    """Süre ffmpeg'in başlık dökümünden okunur (ffprobe paketle gelmiyor). MP4'te yalnız moov kutusu okunur, video
+    çözülmez: 60 dakikalık 60 kare/sn dosyada ~0,1 sn. Okunamayan dosyada, yok olan dosyada, ffmpeg yokken None."""
+    from matematigin_mantigi.core.recorder import media_duration
+    exe = find_ffmpeg()
+    video, wav = tmp_path / "v.mp4", tmp_path / "a.wav"
+    _write_test_media(exe, video, wav, 2.5, 1.25)
+    assert media_duration(exe, video) == pytest.approx(2.5, abs=0.02)
+    assert media_duration(exe, wav) == pytest.approx(1.25, abs=0.02)
+    tagged = tmp_path / "etiketli.mp4"                          # etiket değerindeki "Duration:" sayılmaz
+    subprocess.run([exe, "-y", "-hide_banner", "-loglevel", "error", "-i", str(video), "-c", "copy", "-metadata",
+                    "comment=Duration: 09:09:09.00", str(tagged)], check=True, capture_output=True)
+    assert media_duration(exe, tagged) == pytest.approx(2.5, abs=0.02)
+    junk = tmp_path / "bozuk.mp4"
+    junk.write_bytes(b"\0" * 4096)
+    assert media_duration(exe, junk) is None and media_duration(exe, tmp_path / "yok.mp4") is None
+    assert media_duration(str(tmp_path / "ffmpeg-yok"), video) is None
+
+
+def test_clock_text_and_mic_cut_text():
+    """Sesin kesildiği an okunur 'dakika:saniye' (toplam dakika). Uyarı yalnız ses videodan 2 sn'den fazla erken
+    bitince: sürücü tamponu ve durdurma sırası (ses videodan sonra kapanır) yanlış uyarı vermesin."""
+    from matematigin_mantigi.core.recorder import clock_text, mic_cut_text
+    assert [clock_text(t) for t in (0, 1.4, 59.99, 61, 1215.7, 3600, 4530.2, -3)] == \
+        ["0:00", "0:01", "0:59", "1:01", "20:15", "60:00", "75:30", "0:00"]
+    assert mic_cut_text(3600.0, 1215.7) == "20:15. dakikadan sonra ses yok"     # 60 dk ders, 20. dakikada kesildi
+    assert mic_cut_text(300.0, 297.9) == "4:57. dakikadan sonra ses yok"
+    assert mic_cut_text(300.0, 298.5) is None and mic_cut_text(300.0, 300.4) is None
+    assert mic_cut_text(1.5, 0.0) is None                                         # 2 sn'den kısa kayıt
+
+
+def test_audio_end_in_video_follows_the_alignment_and_rate_fix():
+    """Sesin birleşik dosyada bittiği an: ses önce başladıysa baştaki fark atılır (-ss), geç başladıysa ses o kadar
+    geciktirilir (-itsoffset); hız düzeltmesi (asetrate) süreyi ölçülen gerçek hıza göre değiştirir."""
+    from matematigin_mantigi.core.audio_capture import AudioResult
+    from matematigin_mantigi.core.recorder import audio_end_in_video
+    ten = AudioResult(Path("a.wav"), 48000, 1, 480000, 0.0, 10.0)
+    assert audio_end_in_video(ten, 0.25) == pytest.approx(9.75)
+    assert audio_end_in_video(ten, -0.1) == pytest.approx(10.1)
+    assert audio_end_in_video(ten, 0.0, asetrate=48480) == pytest.approx(480000 / 48480)

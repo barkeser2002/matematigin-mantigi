@@ -35,8 +35,11 @@ def load_questions_or_samples(template: Path) -> tuple[list[Question], bool]:
     yarım kalmış, eksik sütun, okunamayan yol; her türlü hata) dosya adı ve sebep söylenir, uygulama örnek sorularla
     açılır (#17): yalnız QuestionTemplateError yakalandığı için yarım kalmış bir xlsx uygulamayı bir daha hiç açılmaz
     yapıyordu. O zaman ikinci değer False: pencere ve editör bunu bilir, editör örnek soruları o dosyanın (ya da
-    yedeğinin) gerçek sorularının üzerine yazmaz; dosya sonradan düzelirse onları yüklemeyi önerir (#4, Q1)."""
+    yedeğinin) gerçek sorularının üzerine yazmaz; dosya sonradan düzelirse onları yüklemeyi önerir (#4, Q1). Dosya
+    yok ama yedeği ya da iCloud yer tutucusu duruyorsa örnek şablon yazılmaz (U2, _samples_for_missing_file)."""
     try:
+        if not template.exists() and paths.missing_file_traces(template):
+            return _samples_for_missing_file(template)
         return load_questions(ensure_template(template)), True
     except Exception as err:  # noqa: BLE001 - açılış hiçbir soru dosyası yüzünden düşmez
         crash_log.log_handled(err, "soru dosyası")
@@ -48,10 +51,31 @@ def load_questions_or_samples(template: Path) -> tuple[list[Question], bool]:
         return list(SAMPLE_QUESTIONS), False
 
 
+def _samples_for_missing_file(template: Path) -> tuple[list[Question], bool]:
+    """Soru dosyası klasörde yok ama gerçek soruları başka yerde: önceki sürümün yedeği (öğretmen bozuk dosyayı
+    kaldırdı ya da taşıdı) ya da iCloud yer tutucusu (macOS 13 ve öncesinde iCloud dosyayı bu Mac'ten kaldırdı).
+    Eskiden yerine örnek şablon sessizce yazılıyor (paketlide gömülü şablon kopyalanıyor) ve dosya 'okundu'
+    sayılıyordu: editörün ilk Kaydet'i yedeği örneklerle eziyordu, gerçek sorular kayboluyordu (U2). Hiçbir şey
+    yazılmaz; uygulama örnek sorularla açılır, sorular dosyadan okunmamış sayılır: editör yedeği yüklemeyi önerir."""
+    lines = [f"Soru dosyası bulunamadı: {template.name}", f"Klasör: {template.parent}"]
+    if paths.icloud_placeholder(template).exists():
+        lines.append("Dosya bu bilgisayara henüz inmemiş, iCloud Drive'da duruyor: Finder'da açıp inmesini bekleyin, "
+                     "sonra uygulamayı yeniden açın.")
+    bak = backup_path(template)
+    if bak.exists():
+        lines.append(f"Önceki sürümün yedeği var: {bak.name} (adını {template.name} yapıp uygulamayı yeniden açın; "
+                     "soru editörü de yedekteki soruları yüklemeyi önerir).")
+    QMessageBox.warning(None, "Soru dosyası bulunamadı", "\n".join(lines) + "\n\nÖrnek sorularla devam ediliyor; "
+                        "örnekler gerçek soruların yerine yazılmaz.")
+    return list(SAMPLE_QUESTIONS), False
+
+
 def build_window(args: argparse.Namespace, fam: theme.FontFamilies, settings: AppSettings | None = None) -> MainWindow:
     settings = settings or AppSettings()
     if paths.is_frozen():
-        paths.ensure_user_data()            # .app: ~/Documents/Matematiğin Mantığı (şablon + görseller kopyalanır)
+        # .app: ~/Documents/Matematiğin Mantığı (şablon + görseller kopyalanır; şablon yalnız soru dosyasının yedeği ya
+        # da iCloud yer tutucusu da yokken)
+        paths.ensure_user_data()
     template = Path(args.sorular) if args.sorular else paths.default_template_path()
     questions, from_file = load_questions_or_samples(template)
     if args.kamera is not None:

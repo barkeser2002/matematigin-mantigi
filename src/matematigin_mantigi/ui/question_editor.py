@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (QApplication, QDialog, QFileDialog, QFrame, QHBoxLa
                              QListWidget, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QVBoxLayout,
                              QWidget)
 
+from matematigin_mantigi import paths
 from matematigin_mantigi.core import crash_log
 from matematigin_mantigi.core.models import OPTION_LETTERS, Question
 from matematigin_mantigi.core.question_loader import (EmptyTemplateError, QuestionTemplateError, UnreadableWriteError,
@@ -369,6 +370,15 @@ class QuestionEditorDialog(QDialog):
                 self.list_widget.setCurrentRow(i)
                 return
         name = self.questions_path.name
+        if not self.from_file and self._only_in_icloud():
+            # Asıl dosya iCloud'da (yer tutucusu klasörde): bu ada yazılan örnekler iCloud'daki gerçek dosyayla çakışır.
+            QMessageBox.warning(self, "Kaydedilmedi",
+                                f"{name} bu bilgisayara henüz inmemiş: iCloud Drive'da duruyor.\n\nUygulama açılışta "
+                                "onu okuyamadığı için örnek sorularla açılmıştı; örnekler iCloud'daki gerçek soruların "
+                                "yerine geçmesin diye hiçbir şey yazılmadı. Finder'da dosyayı açıp inmesini bekleyin, "
+                                "sonra yeniden Kaydet'e basın (editör dosyadaki soruları yüklemeyi önerir).\n\n"
+                                "Düzenlemeleriniz bu pencerede duruyor.")
+            return
         in_file, problem = self._read_target()
         if isinstance(problem, str):
             QMessageBox.warning(self, "Kaydedilmedi",
@@ -398,6 +408,13 @@ class QuestionEditorDialog(QDialog):
             return
         self.saved.emit(list(self.questions))
         self.accept()
+
+    def _only_in_icloud(self) -> bool:
+        """Soru dosyası klasörde yok, iCloud yer tutucusu var (macOS 13 ve öncesi: dosya bu Mac'e inmemiş; U2)."""
+        try:
+            return not self.questions_path.exists() and paths.icloud_placeholder(self.questions_path).exists()
+        except OSError:
+            return False
 
     def _read_target(self) -> tuple[list[Question], str | OSError | None]:
         """Kaydedilecek dosyanın şimdiki hâli: (içindeki sorular, sorun). Dosya yoksa ya da boş şablonsa ([], None):

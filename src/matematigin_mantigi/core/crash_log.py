@@ -59,9 +59,9 @@ class CrashLog:
         self._prev_hooks: tuple | None = None
 
     def record(self, exc_type, exc, tb, where: str = "", handled: bool = False) -> tuple[str, int, bool]:
-        """Hatayı günlüğe ekler; dönüş (anahtar, bu oturumda kaçıncı kez, günlüğe yazıldı mı). Aynı hata ilk kez
-        zaman damgası ve traceback'le, sonra yalnız 10., 100. … tekrarında tek satırla yazılır: saniyede 60 kez
-        patlayan bir çizim olayı bir saatlik derste diski doldurmasın."""
+        """Hatayı günlüğe ekler; dönüş (anahtar, bu oturumda kaçıncı kez, yazım hatasız mı: atlanan tekrarda da
+        True). Aynı hata ilk kez zaman damgası ve traceback'le, sonra yalnız 10., 100. … tekrarında tek satırla
+        yazılır: saniyede 60 kez patlayan bir çizim olayı bir saatlik derste diski doldurmasın."""
         key = signature(exc_type, tb)
         with self._lock:
             n = self.counts.get(key, 0) + 1

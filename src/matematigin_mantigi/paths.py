@@ -56,5 +56,5 @@ def default_layout_path() -> Path:
 
 
 def default_error_log_path() -> Path:
-    """Yakalanmamış hataların günlüğü (core/crash_log.py)."""
+    """Hata günlüğü (core/crash_log.py): yakalanmamış istisnalar ve ayrıntısı saklanan yakalanmış hatalar."""
     return data_dir() / "hatalar.log"

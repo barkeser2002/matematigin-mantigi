@@ -75,3 +75,19 @@ def test_place_outside_prefers_another_screen_then_the_toolbar_side():
     windowed = QRect(400, 220, 1280, 720)
     box = QRect(place_outside(size, windowed, [screen], screen), size)
     assert screen.contains(box) and not box.intersects(windowed)
+
+
+def test_box_lands_fully_on_screen_with_the_app_stylesheet(qtbot):
+    """QMessageBox son boyutunu ancak gösterilirken kesinleştirir. Gösterilmeden önceki tahminle konan kutu,
+    uygulamanın stil sayfasıyla büyüyünce ekranın altından taşıyor, Tamam düğmesi kesiliyordu (1920x1080 tam ekran
+    görsel kontrolünde 28 px)."""
+    from matematigin_mantigi.ui import theme
+    fam = theme.FontFamilies("Arial", "Arial", False)
+    notice, anchor = _notice(qtbot)
+    anchor.setStyleSheet(theme.build_stylesheet(fam))
+    notice.post("Beklenmeyen hata", "Bir hata oluştu ama uygulama çalışmaya devam ediyor; süren bir kayıt varsa "
+                "durdurulmadı.\n\nOSError: yapay yuva hatası\n\nAyrıntı: /Users/ogretmen/Documents/Matematiğin "
+                "Mantığı/hatalar.log", "k")
+    qtbot.waitUntil(lambda: notice.box is not None and notice.box.isVisible(), timeout=2000)
+    qtbot.addWidget(notice.box)
+    assert notice.box.screen().availableGeometry().contains(notice.box.frameGeometry())

@@ -117,14 +117,16 @@ class ErrorNotice(QObject):
             box.setWindowTitle(title)
             box.setText(text)
             if not box.isVisible():
-                box.adjustSize()
+                # Son boyut ancak gösterilirken kesinleşir (QMessageBox showEvent'te boyutlanır): önceden tahmin
+                # edilen boyutla konan kutu stil sayfasıyla büyüyüp ekrandan taşıyordu. Konum ilk çizimden önce,
+                # aynı olay turunda verilir.
+                box.show()
                 try:
-                    pos = self._position(box.size())
+                    pos = self._position(box.frameGeometry().size())
                     if pos is not None:
                         box.move(pos)
                 except Exception:  # noqa: BLE001 - konum hesaplanamazsa Qt'nin varsayılan yeri
                     pass
-                box.show()
         except Exception as err:  # noqa: BLE001 - uyarı gösterilemezse de uygulama düşmez
             _to_stderr(title, f"{text} (uyarı kutusu açılamadı: {err})")
 

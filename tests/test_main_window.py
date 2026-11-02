@@ -1270,6 +1270,34 @@ def test_close_error_is_reported_and_camera_and_settings_still_shut_down(window,
     assert [(type(e), where) for e, where in logged] == [(PermissionError, "pencere kapanışı")]
 
 
+def test_window_closed_while_the_result_is_shown_does_not_close_a_second_time(window, qtbot, monkeypatch):
+    """Kayıt bitince pencere kendisi kapanacakken sonuç penceresi (Kayıt hatası) açıkken pencere başka yoldan
+    kapanırsa (QApplication.quit, close()) kapanış bir kez olur: kamera kapatma ve ayar yazma bir kez koşar.
+    (_on_record_stopped sonradan yine close() çağırır; Qt kabul edilen kapanışta platform penceresini yok ettiği
+    için o çağrı olay göndermez. Bu kilit, kapanış akışı değişirse ikinci kapanışı yakalar.)"""
+    from PyQt6.QtWidgets import QMessageBox
+    from matematigin_mantigi.core.recorder import NullRecorder
+
+    class FailingBackgroundStop(NullRecorder):                        # kapanış _StopWorker'da, hatayla biter
+        stop_is_quick = False
+        error = "ffmpeg hata kodu 1: disk dolu"
+    shown = []
+
+    def warning(parent, title, text, *a, **k):
+        shown.append((title, text))
+        window.close()                                                # sonuç penceresi açıkken çıkış
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(warning))
+    _answer_close_question(monkeypatch, STOP_AND_QUIT)
+    shut, synced = _spy_shutdown(window, monkeypatch)
+    window.recorder = FailingBackgroundStop()
+    window.toggle_recording(True)
+    assert window.close() is False                                    # kayıt arka planda kaydediliyor
+    qtbot.waitUntil(lambda: bool(shown) and window._stop_worker is None, timeout=10000)
+    qtbot.wait(50)
+    assert shown == [("Kayıt hatası", "ffmpeg hata kodu 1: disk dolu")] and not window.isVisible()
+    assert shut == [()] and synced == [1], (shut, synced)
+
+
 def test_finished_stop_workers_do_not_pile_up_on_the_window(window, qtbot):
     """Her durdurma pencereye bir _StopWorker (QThread) çocuğu ekliyor, hiçbiri silinmiyordu. İş parçacığı bittikten
     sonra nesne de silinir (deleteLater)."""

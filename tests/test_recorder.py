@@ -951,6 +951,27 @@ def test_unexpected_failure_after_ffmpeg_started_leaks_nothing(tmp_path, monkeyp
     assert rec.stop().exists() and rec.error is None, rec.error
 
 
+
+def test_each_recordings_result_gets_its_own_entry_in_the_error_log(tmp_path, monkeypatch):
+    """hatalar.log aynı türden ve aynı kod yolundan gelen hatayı oturumda bir kez yazar, sonra yalnız 10., 100.
+    tekrarı (çizim olayındaki hata diski doldurmasın). Kayıt sonuçları traceback'siz aynı türle yazıldığı için hepsi
+    tek anahtara düşüyordu: oturumun ikinci kaydının hatası günlüğe hiç girmiyordu. Her kaydın sonucu kendi girdisini
+    alır; aynı kaydın sonucu iki kez yazılmaz. (Gerçek CrashLog: log_handled'in traceback'siz yolu da sınanır.)"""
+    from types import SimpleNamespace
+    from matematigin_mantigi.core import crash_log
+    log = crash_log.CrashLog(tmp_path / "hatalar.log")
+    monkeypatch.setattr(crash_log, "_active", log)
+    first = SimpleNamespace(final_path=tmp_path / "ders-1.mp4", error=None, audio_error="Mikrofon kesildi (00:12)")
+    second = SimpleNamespace(final_path=tmp_path / "ders-2.mp4", error="ffmpeg hata kodu 1: disk dolu",
+                             audio_error=None)
+    for s in (first, second, second):
+        MssFfmpegRecorder._log_result(s)
+    text = log.path.read_text(encoding="utf-8")
+    assert "ders-1.mp4 · ses: Mikrofon kesildi (00:12)" in text
+    assert "ders-2.mp4 · hata: ffmpeg hata kodu 1: disk dolu" in text, text
+    assert text.count("ffmpeg hata kodu 1: disk dolu") == 1, text
+
+
 @posix_only
 def test_recording_errors_reach_the_error_log_as_one_line(tmp_path, monkeypatch):
     """Kaydın sonu hatayla bittiyse (error) ya da ses uyarısı varsa (audio_error) hatalar.log'a tek satır düşer:

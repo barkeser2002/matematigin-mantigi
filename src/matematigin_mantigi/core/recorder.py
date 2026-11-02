@@ -67,6 +67,10 @@ class RecorderError(RuntimeError):
     pass
 
 
+class RecordingResult(RecorderError):
+    """hatalar.log'daki kayıt sonucu girdisi: bir kaydın hatası ve ses uyarısı, tek satır (fırlatılmaz)."""
+
+
 class Recorder(Protocol):
     def start(self, rect: RecordRect, fps: int = 60) -> None: ...
     def stop(self) -> Path | None: ...
@@ -544,7 +548,7 @@ class MssFfmpegRecorder:
         if proc is not None and not self._close_ffmpeg(s, proc):
             hung = True                              # EOF'tan sonra da kapanmadı: öldürüldü
         self._close_log(s)
-        if hung:
+        if hung:                                     # (yazıcının öldürmeden sonra yazdığı boru hatası sebep değil)
             s.error = self._hung_text(s)
             return
         if proc is not None and proc.returncode not in (0, None) and not s.error:
@@ -598,12 +602,17 @@ class MssFfmpegRecorder:
     @staticmethod
     def _log_result(s: _Session) -> None:
         """Kaydın hatası ve ses uyarısı hatalar.log'a tek satır (günlük kurulu değilse hiçbir şey): öğretmen 'Kayıt
-        hatası' penceresini okumadan kapatsa da sonradan ne olduğu görülür. İstisna fırlatmaz."""
+        hatası' penceresini okumadan kapatsa da sonradan ne olduğu görülür. Günlük aynı türden ve aynı yoldan gelen
+        hatayı oturumda bir kez yazar (sonra 10., 100. tekrarı); her kaydın sonucu ayrı bir olay olduğu için türün adı
+        kaydın dosya adını taşır, kendi anahtarını alır (yoksa oturumun ikinci kaydı günlüğe hiç girmiyordu).
+        İstisna fırlatmaz."""
         parts = [f"hata: {s.error}" if s.error else "", f"ses: {s.audio_error}" if s.audio_error else ""]
         text = " · ".join(p for p in parts if p)
         if text:
             line = " | ".join(p.strip() for p in f"{s.final_path.name} · {text}".splitlines() if p.strip())
-            crash_log.log_handled(RecorderError(line), "kayıt sonucu")
+            entry = type(RecordingResult.__name__, (RecordingResult,),
+                         {"__qualname__": f"{RecordingResult.__qualname__}[{s.final_path.name}]"})
+            crash_log.log_handled(entry(line), "kayıt sonucu")
 
     def _hung_text(self, s: _Session) -> str:
         kept = [p for p in (s.video_path, s.wav_path) if p is not None and p.exists()]

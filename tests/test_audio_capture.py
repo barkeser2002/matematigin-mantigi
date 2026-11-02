@@ -280,7 +280,10 @@ def test_capture_records_when_the_last_sample_arrived(tmp_path, monkeypatch):
     time.sleep(0.3)                                             # mikrofon sustu; durdurma sonra geliyor
     res = cap.stop()
     assert res.first_sample_monotonic < res.last_sample_monotonic <= fed
-    assert res.tail_gap == pytest.approx(res.stopped_monotonic - res.last_sample_monotonic) and res.tail_gap >= 0.3
+    # >= 0.3 - 0.02: Windows'ta (Python 3.12) time.monotonic() ~15,6 ms adımlıdır (GetTickCount64); 0,3 sn'lik
+    # uykudan sonra ölçülen fark bir adım kısa çıkabilir (Windows CI: 0.297).
+    assert res.tail_gap == pytest.approx(res.stopped_monotonic - res.last_sample_monotonic)
+    assert res.tail_gap >= 0.3 - 0.02
 
 
 # --- k1/k2: sürücü takılınca kapanış sınırlı, yarım açılış iz bırakmaz ---------------------------------------

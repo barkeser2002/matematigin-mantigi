@@ -176,6 +176,22 @@ def test_box_open_when_recording_starts_is_hidden_and_comes_back_after(qtbot):
     assert notice.box.text() == "kayıttan önce gelen" and alerts[-1] is None
 
 
+def test_prepare_recording_hides_the_box_before_the_first_frame_and_it_returns_if_recording_does_not_start(qtbot):
+    """P4: kaydedici ilk kareyi start() içinde yakalar; kutu ancak kayıt başladıktan sonra (rozetin ilk tiki) gizlenince
+    kaydın ilk karelerine giriyordu. prepare_recording() (start()'tan hemen önce, app.py bağlar) kutuyu hemen gizler,
+    uyarıyı şeride geçirir. Kayıt başlamazsa (başlatma hatası) yoklama kutuyu geri getirir: uyarı kaybolmaz."""
+    notice, _ = _notice(qtbot)
+    rec, alerts = _route(notice)
+    notice.post("Beklenmeyen hata", "kayıttan önce gelen", "k1")
+    qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)
+    qtbot.addWidget(notice.box)
+    notice.prepare_recording()                            # kaydedici henüz kayıtta değil (rec[0] False)
+    assert _visible_boxes() == [] and alerts == ["⚠ Beklenmeyen hata — ayrıntı kayıt bitince"]
+    qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)          # kayıt başlamadı: kutu geri gelir
+    qtbot.addWidget(notice.box)
+    assert notice.box.text() == "kayıttan önce gelen" and alerts[-1] is None
+
+
 def test_growing_box_is_moved_back_onto_the_screen(qtbot):
     """B-3: görünür kutuya daha uzun ikinci uyarı gelince kutu yerinde büyüyordu: alt köşeye konan kutunun alt kenarı
     ve Tamam düğmesi ekranın altından taşıyordu (1920x1080 tam ekranda 88 px). Görünürken de gerçek boyutla
@@ -366,12 +382,18 @@ _APP_PRELUDE = textwrap.dedent('''
         QApplication.instance().quit()
 
     class Rec(NullRecorder):
-        """Kayıt gerçek toggle_recording yolundan başlar/durur; kaydın kaydedilme anı (FINALIZING) elle sürülür."""
+        """Kayıt gerçek toggle_recording yolundan başlar/durur; kaydın kaydedilme anı (FINALIZING) elle sürülür.
+        first_frame: start() anında görünen kutu sayısı (gerçek kaydedici ilk kareyi start() içinde yakalar)."""
         forced = None
+        first_frame = None
 
         @property
         def state(self):
             return self.forced or NullRecorder.state.fget(self)
+
+        def start(self, rect, fps=60):
+            Rec.first_frame = len(boxes())
+            NullRecorder.start(self, rect, fps)
 
     def make(args, fam):
         # Ayarlar geçici ini dosyasında: Windows kayıt defterine / macOS plist'ine dokunulmaz.
@@ -404,6 +426,7 @@ def build(args, fam, settings=None):
     def start():
         res["once"] = snapshot(win)
         win.toggle_recording(True)
+        res["ilk_karede_kutu"] = Rec.first_frame    # kaydedicinin ilk karesi (start() içinde)
         res["baslar_baslamaz"] = snapshot(win)      # yoklamayı beklemeden: kaydın ilk karelerine girmesin
         QTimer.singleShot(0, boom)
         later(lambda: "2 uyarı" in win.toolbar.alert_label.text(), lambda: QTimer.singleShot(wait, recording))
@@ -467,12 +490,13 @@ def _run_app(tmp_path, body: str, screens: list) -> dict:
 
 
 def test_app_routes_notices_to_the_toolbar_while_recording_full_screen(tmp_path):
-    """B-1 uçtan uca (gerçek app.main, 1920x1080 tek ekran, tam ekran): kayıttan önce açılmış kutu kayıt başlar
-    başlamaz (yoklamayı beklemeden, ilk karelere girmeden) gizlenir; kayıt sürerken yuvadaki hata kutu açmaz, araç
-    çubuğunun şeridine kısa satır yazılır; kayıt kaydedilirken (FINALIZING) de. Kayıt bitince şerit temizlenir, kutu
-    iki uyarıyla açılır ve kayıt düğmesini örtmez (eskiden sol altta, kayıt düğmesinin üstündeydi)."""
+    """B-1 uçtan uca (gerçek app.main, 1920x1080 tek ekran, tam ekran): kayıttan önce açılmış kutu kaydedici ilk
+    kareyi yakalamadan (start() içinde; P4: eskiden rozetin ilk tikinde, start()'tan sonra) gizlenir; kayıt sürerken
+    yuvadaki hata kutu açmaz, araç çubuğunun şeridine kısa satır yazılır; kayıt kaydedilirken (FINALIZING) de. Kayıt
+    bitince şerit temizlenir, kutu iki uyarıyla açılır ve kayıt düğmesini örtmez (eskiden sol altta, kayıt düğmesinin
+    üstündeydi)."""
     res = _run_app(tmp_path, _RECORDING_FULL_SCREEN, _FHD)
-    assert res["once"]["kutu"] == 1 and res["baslar_baslamaz"]["kutu"] == 0, res
+    assert res["once"]["kutu"] == 1 and res["ilk_karede_kutu"] == 0 and res["baslar_baslamaz"]["kutu"] == 0, res
     strip = "⚠ 2 uyarı — ayrıntı kayıt bitince"
     assert (res["kayitta"]["kutu"], res["kayitta"]["serit"]) == (0, strip), res["kayitta"]
     assert (res["kaydedilirken"]["kutu"], res["kaydedilirken"]["serit"]) == (0, strip), res["kaydedilirken"]

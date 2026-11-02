@@ -323,6 +323,19 @@ class MainWindow(QMainWindow):
 
     # Kapanış kabul edildi (pencere kapanıyor; kamera ve ayarlar kapandı): app.main süreci bitirir.
     closed = pyqtSignal()
+    # Kayıt başlamak üzere: kaydedici ilk kareyi start() içinde, hemen yakalar. app.py uyarı kutusunu gizler.
+    recordingAboutToStart = pyqtSignal()
+
+    def _prepare_first_frame(self) -> None:
+        """Kayıt başlamadan hemen önce kayda girmemesi gerekenler ekrandan kalkar (P3, P4). Sahnedeki durum satırı
+        önceki kaydın sonucunu (dosyanın tam yolu, yani kullanıcı adı) taşıyabilir: olağan metnine döner ve HEMEN
+        çizilir (yalnız setText eski yazıyı ilk karede bırakırdı; kısalan yazının eski yeri de çizilir). Açık uyarı
+        kutusu recordingAboutToStart ile gizlenir (eskiden rozetin ilk tikinde, start() döndükten sonra)."""
+        status = self.work_area.status_label
+        before = status.geometry()
+        self._status("XP-Pen")
+        self.work_area.repaint(before.united(status.geometry()))
+        self.recordingAboutToStart.emit()
 
     def toggle_recording(self, on: bool) -> None:
         if self._record_saving():               # düğme kilitli; R de kapanan kaydın yollarına karışmasın (#2)
@@ -332,6 +345,7 @@ class MainWindow(QMainWindow):
         state = self.recorder.state
         if on and state is RecorderState.IDLE:
             rect = record_rect_for(self.work_area.recording_rect())
+            self._prepare_first_frame()
             try:
                 self.recorder.start(rect, fps=fps)
             except Exception as err:  # noqa: BLE001 - hiçbir başlatma hatası yuvadan kaçıp düğmeyi 'kayıtta' bırakmasın

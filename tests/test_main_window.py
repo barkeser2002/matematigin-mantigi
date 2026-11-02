@@ -470,6 +470,78 @@ def test_record_error_window_also_tells_what_happened_to_the_sound(window, qtbot
     assert "Ses birleştirilemedi: yapay sebep; ses ayrı dosyada duruyor" in text, text
 
 
+def _screen_pixels(widget, width: int):
+    """Ekranda (offscreen: pencerelerin son çizilmiş hâli) widget'ın sol üstünden başlayan `width` genişliğindeki
+    bant: kaydedicinin ilk karesinde ne göründüğü. Bant sabit genişlikte: yazı uzayıp kısalsa da aynı yer ölçülür."""
+    from PyQt6.QtCore import QPoint
+    from PyQt6.QtWidgets import QApplication
+    tl = widget.mapToGlobal(QPoint(0, 0))
+    return QApplication.primaryScreen().grabWindow(0, tl.x(), tl.y(), width, widget.height()).toImage()
+
+
+def test_saved_recording_path_is_off_the_board_before_the_next_recording_starts(window, monkeypatch):
+    """P3: başarılı kayıttan sonra durum satırına 'Kayıt kaydedildi: <tam yol>' yazılıyordu; durum satırı sahnede ve
+    kayda girer: sonraki kayıt başlarken satır böyle kaldığı için dosya yolu (kullanıcı adı) yeni videoya giriyordu.
+    Kayıt başlamadan satır olağan metnine döner ve ekrana çizilir: kaydedici ilk kareyi start() içinde, GUI'de
+    yakalar (yalnız setText ekrandaki eski yazıyı ilk karede bırakırdı)."""
+    from pathlib import Path
+    from matematigin_mantigi.core.recorder import NullRecorder
+    status = window.work_area.status_label
+
+    class Rec(NullRecorder):                          # start(): kaydedicinin ilk kareyi yakaladığı an
+        at_start: list = []
+
+        def start(self, rect, fps=60):
+            Rec.at_start.append((status.text(), _screen_pixels(status, 900)))
+            super().start(rect, fps)
+
+        def stop(self):
+            super().stop()
+            return Path("/Users/ogretmen/Documents/Matematiğin Mantığı/oturum/kayit_1.mp4")
+    window.recorder = Rec()
+    window.toggle_recording(True)
+    window.toggle_recording(False)
+    assert "kayit_1.mp4" in status.text()                             # kayıttan sonra öğretmen dosyanın yerini görür
+    window.repaint()                                                  # (ekranda da yazıyor)
+    window.toggle_recording(True)
+    window.toggle_recording(False)
+    (first_text, first_px), (second_text, second_px) = Rec.at_start
+    assert second_text == first_text and "ogretmen" not in second_text, Rec.at_start
+    assert second_px == first_px                                      # ilk karede de yol yok: olağan satır çizili
+
+
+def test_notice_box_open_when_recording_starts_is_not_in_the_first_frame(window, qtbot, tmp_path, monkeypatch):
+    """P4: kayıttan önce açık kalan uyarı kutusu kaydın ilk karelerine giriyordu (k001-k005; kutu hatalar.log'un tam
+    yolunu, yani kullanıcı adını taşır): kaydedici ilk kareyi start() içinde, GUI'de yakalar; kutu ise ancak kayıt
+    rozetinin ilk tikinde, start() döndükten sonra gizleniyordu. Kutu start()'tan önce gizlenir, uyarı şeride geçer;
+    kayıt bitince geri gelir."""
+    import pytest
+    from matematigin_mantigi.core.recorder import MssFfmpegRecorder, find_ffmpeg
+    from matematigin_mantigi.ui import error_notice
+    from tests.test_recorder import stepping_clock, synthetic_grabber
+    if find_ffmpeg() is None:
+        pytest.skip("ffmpeg yok")
+    shown = _capture_modals(monkeypatch)
+    _wired_notice(window, monkeypatch)
+    error_notice.post("Düzen kaydedilemedi", "duzen.json yazılamadı: erişim izni yok.", key="duzen")
+    qtbot.waitUntil(lambda: bool(_visible_message_boxes()), timeout=2000)
+    first_frame: list = []
+
+    def grabber(rect):
+        if not first_frame:                           # ilk çağrı start() içinde, GUI iş parçacığında
+            first_frame.append(len(_visible_message_boxes()))
+        return synthetic_grabber(rect)
+    window.recorder = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=10, grabber=grabber, out_height=0,
+                                        clock=stepping_clock())
+    window.toggle_recording(True)
+    strip = window.toolbar.alert_label.text()
+    window.toggle_recording(False)
+    qtbot.waitUntil(lambda: window.toolbar.record_button.isEnabled(), timeout=15000)
+    assert first_frame == [0] and strip == "⚠ Düzen kaydedilemedi — ayrıntı kayıt bitince", (first_frame, strip)
+    qtbot.waitUntil(lambda: bool(_visible_message_boxes()), timeout=2000)        # kayıt bitti: kutu geri geldi
+    assert "duzen.json yazılamadı" in _visible_message_boxes()[0].text() and shown == []
+
+
 # --- #2: kayıt kaydedilirken yeni kayıt yok; uyarı araç çubuğunda (denetim app#1, e2e#2) -----------------------
 
 def test_r_while_previous_recording_is_saving_starts_nothing_and_warns_in_toolbar(window, qtbot, tmp_path,

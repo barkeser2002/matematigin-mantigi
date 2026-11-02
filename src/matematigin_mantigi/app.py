@@ -97,8 +97,10 @@ def _wire_notice(notice: error_notice.ErrorNotice, win: MainWindow) -> None:
     notice.set_anchor(win, avoid=lambda: _recorded_rect(win), keep_clear=lambda: _toolbar_bottom(win))
     notice.set_recording_route(is_recording=lambda: win.recorder.state is not RecorderState.IDLE,
                                show_alert=lambda text: win.toolbar.set_alert(error_notice.ALERT_KEY, text))
-    # Kayıt rozeti kayıt başlar başlamaz (sonra saniyede bir) tik atar: kayıttan önce açılmış kutu yoklamayı
-    # beklemeden gizlenir, kaydın ilk karelerine girmez.
+    # Kaydedici ilk kareyi start() içinde yakalar: açık kutu start()'tan hemen önce gizlenir, ilk karelere girmez.
+    win.recordingAboutToStart.connect(notice.prepare_recording)
+    # Kayıt rozeti kayıt başlar başlamaz (sonra saniyede bir) tik atar: kayıt başlangıcı ve bitişi yoklamayı
+    # beklemeden de görülür.
     win.badge.ticked.connect(lambda _seconds: notice.recording_changed())
 
 

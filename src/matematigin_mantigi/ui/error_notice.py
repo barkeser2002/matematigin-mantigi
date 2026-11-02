@@ -7,8 +7,9 @@ olmaz. Kutu odağı çalmaz (kalem ve kısayollar tahtada kalır).
 
 Uyarılar kayda girmeyen yerde (tasarım, "Temel ilke"): kayıt sürerken (kayıt kaydedilirken de) kutu hiç açılmaz;
 uyarı araç çubuğunun kırmızı şeridine kısa bir satır olarak yazılır ve kayıt bitince kutuyla gösterilir. Kayıt kutu
-açıkken başlarsa kutu gizlenir, kayıttan sonra yeniden gelir. Kayıt dışında kutu, kayda giren sahneyle en az çakışan
-ve araç çubuğunun altını (uyarı şeridi + kayıt düğmesi) örtmeyen yere konur.
+açıkken başlarsa kutu kaydedici ilk kareyi yakalamadan gizlenir (prepare_recording), kayıttan sonra yeniden gelir.
+Kayıt dışında kutu, kayda giren sahneyle en az çakışan ve araç çubuğunun altını (uyarı şeridi + kayıt düğmesi)
+örtmeyen yere konur.
 
 Ana pencere kapanınca (gizlenince) kutu da kapanır ve o sürede hiçbir pencere açılmaz: gizli ana pencerenin çocuğu
 olarak gösterilen kutu Qt'nin otomatik çıkışını kuyruktan siliyordu, pencere kapanıyor ama süreç çıkmıyordu. Pencere
@@ -137,8 +138,21 @@ class ErrorNotice(QObject):
 
     def recording_changed(self) -> None:
         """Kayıt başlamış ya da bitmiş olabilir: yoklamayı beklemeden bakar (app.py kayıt rozetinin tikine bağlar; rozet
-        kayıt başlar başlamaz tik atar). Görünür kutu kaydın ilk karelerine girmeden gizlenir."""
+        kayıt başlar başlamaz tik atar)."""
         self._poll()
+
+    def prepare_recording(self) -> None:
+        """Kayıt başlamak üzere (MainWindow.recordingAboutToStart; app.py bağlar): kaydedici ilk kareyi start() içinde,
+        hemen yakalar. Görünür kutu ŞİMDİ gizlenir, uyarı şeride geçer; Tamam'a basılmadığı için kayıt bitince yeniden
+        gösterilir. Kayıt başlamazsa (başlatma hatası) yoklama kutuyu hemen geri getirir. Eskiden kutu ancak rozetin
+        ilk tikinde, start() döndükten sonra gizleniyor, kaydın ilk karelerine giriyordu (kutu hatalar.log'un tam
+        yolunu, yani kullanıcı adını taşır). İstisna fırlatmaz."""
+        try:
+            if self._stash_box():
+                self._update_alert()
+        except Exception as err:  # noqa: BLE001 - kayıt başlatmayı hiçbir koşulda engellemez
+            _to_stderr("Uyarı kutusu", f"gizlenemedi: {err}")
+        self._update_polling()
 
     def post(self, title: str, text: str, key: str | None = None) -> None:
         """Herhangi bir iş parçacığından güvenle çağrılır; istisna fırlatmaz."""

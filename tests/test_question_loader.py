@@ -1,9 +1,11 @@
 import errno
 import json
 import os
+import struct
 import subprocess
 import sys
 import textwrap
+import zipfile
 from pathlib import Path
 
 import openpyxl
@@ -213,6 +215,31 @@ def test_disk_full_in_the_middle_of_a_write_keeps_the_file_and_the_backup(tmp_pa
 
 
 # --- açılış: soru dosyası okunamazsa uygulama örnek sorularla açılır (#17) -----------------------------------
+CORRUPT = "dosya bozuk ya da yazımı yarıda kalmış"
+SHEET = "xl/worksheets/sheet1.xml"
+
+
+def _rewrite_sheet(p: Path, change) -> None:
+    """xlsx'i sayfa XML'i change(bayt) ile değişmiş olarak yeniden paketler (diğer üyeler aynen)."""
+    with zipfile.ZipFile(p) as z:
+        items = [(info, z.read(info.filename)) for info in z.infolist()]
+    with zipfile.ZipFile(p, "w", zipfile.ZIP_DEFLATED) as z:
+        for info, data in items:
+            z.writestr(info, change(data) if info.filename == SHEET else data)
+
+
+def _flip_compressed_sheet_bytes(p: Path) -> None:
+    """Sayfanın sıkıştırılmış verisinin ortasındaki baytları bozar (diskte/eşitlemede bozulma): zlib.error."""
+    data = bytearray(p.read_bytes())
+    with zipfile.ZipFile(p) as z:
+        info = z.getinfo(SHEET)
+    name_len, extra_len = struct.unpack("<HH", data[info.header_offset + 26: info.header_offset + 30])
+    start = info.header_offset + 30 + name_len + extra_len + info.compress_size // 3
+    for k in range(start, start + 40):
+        data[k] ^= 0x5A
+    p.write_bytes(bytes(data))
+
+
 def _broken(kind: str, p: Path) -> None:
     if kind == "yarim":                          # yazımı yarıda kalmış xlsx (s03: 5575 -> 2289 bayt)
         write_questions(p, SAMPLE_QUESTIONS)
@@ -223,14 +250,22 @@ def _broken(kind: str, p: Path) -> None:
         p.mkdir()
     elif kind == "sutun":                        # başka bir çizelge: zorunlu sütun eksik
         wb = openpyxl.Workbook(); wb.active.append(["id", "soru"]); wb.save(p)
+    elif kind == "yarim-sayfa":                  # sayfa XML'i yarıda kesilmiş (yarım kopya/eşitleme): ParseError
+        write_questions(p, SAMPLE_QUESTIONS * 20)
+        _rewrite_sheet(p, lambda xml: xml[: len(xml) // 2])
+    elif kind == "bozuk-sikistirma":             # sıkıştırılmış veri bozuk: zlib.error
+        write_questions(p, SAMPLE_QUESTIONS * 20)
+        _flip_compressed_sheet_bytes(p)
 
 
-@pytest.mark.parametrize("kind", ["yarim", "metin", "klasor", "sutun"])
+@pytest.mark.parametrize("kind", ["yarim", "metin", "klasor", "sutun", "yarim-sayfa", "bozuk-sikistirma"])
 def test_unreadable_question_file_opens_with_samples_and_names_the_file(tmp_path, monkeypatch, kind):
     """#17: açılış yalnız QuestionTemplateError'ı yakalıyordu; yarım kalmış xlsx (KeyError), xlsx olmayan dosya
     (BadZipFile) ya da okunamayan yol uygulamayı açılmaz yapıyordu (çıkış 1, pencere yok). Her hatada dosya adı ve
     sebep söylenir, uygulama örnek sorularla açılır; yedek varsa nerede olduğu da söylenir. Sorular dosyadan
-    okunmadığı da söylenir (Q1): editör örnekleri o dosyanın üzerine yazmasın."""
+    okunmadığı da söylenir (Q1): editör örnekleri o dosyanın üzerine yazmasın. Q4: yarım sayfa XML'i (ParseError) ve
+    bozuk sıkıştırma (zlib.error) da 'ParseError: unclosed token…' gibi ham metinle değil, dosyanın bozuk olduğuyla
+    söylenir."""
     from PyQt6.QtWidgets import QMessageBox
     from matematigin_mantigi import app as app_mod
     shown = []
@@ -242,8 +277,10 @@ def test_unreadable_question_file_opens_with_samples_and_names_the_file(tmp_path
     assert app_mod.load_questions_or_samples(p) == (list(SAMPLE_QUESTIONS), False)
     assert len(shown) == 1 and "sorular.xlsx" in shown[0][1] and "Sebep:" in shown[0][1]
     assert "sorular.xlsx.bak" in shown[0][1] and "Örnek sorularla" in shown[0][1]
-    if kind in ("yarim", "metin"):
-        assert "bozuk" in shown[0][1]
+    if kind in ("yarim", "metin", "yarim-sayfa", "bozuk-sikistirma"):
+        assert CORRUPT in shown[0][1], shown[0][1]
+    elif kind == "sutun":
+        assert "Eksik sütun" in shown[0][1], shown[0][1]
 
 
 @pytest.mark.parametrize("kind", ["var", "yok"])

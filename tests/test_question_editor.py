@@ -390,16 +390,32 @@ def test_unexpected_save_error_shows_a_message_and_keeps_the_dialog(qtbot, tmp_p
 
 
 # --- okunamayan soru dosyasının üzerine yazılmaz (#4) ---------------------------------------------------------
-@pytest.mark.parametrize("kind", ["yarim", "sutun"])
+CORRUPT = "dosya bozuk ya da yazımı yarıda kalmış"
+
+
+def _half_sheet(path: Path) -> None:
+    """Sayfa XML'i yarıda kesilmiş xlsx (yarım kopya ya da eşitleme): okurken ParseError."""
+    write_questions(path, SAMPLE_QUESTIONS * 20)
+    with zipfile.ZipFile(path) as z:
+        items = [(info, z.read(info.filename)) for info in z.infolist()]
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for info, data in items:
+            z.writestr(info, data[: len(data) // 2] if info.filename == "xl/worksheets/sheet1.xml" else data)
+
+
+@pytest.mark.parametrize("kind", ["yarim", "sutun", "yarim-sayfa"])
 def test_save_does_not_overwrite_an_unreadable_question_file(qtbot, tmp_path, monkeypatch, kind):
     """#4: açılışta okunamayan soru dosyası (uygulama örnek sorularla açılır) editörde Kaydet'le örnek soruların
     altında kalıyordu; öğretmenin gerçek soruları o dosyada olabilir (yazımı yarıda kalmış xlsx, sütunları farklı
     kendi çizelgesi). Kaydet o dosyanın üzerine yazmaz, sebebi ve ne yapılacağını söyler, pencere açık kalır;
-    öğretmen dosyayı düzeltip ya da kaldırıp yeniden Kaydet'e basınca yazılır."""
+    öğretmen dosyayı düzeltip ya da kaldırıp yeniden Kaydet'e basınca yazılır. Q4: sebep anlaşılır (yarım sayfa
+    XML'inde 'ParseError: unclosed token…' değil, dosyanın bozuk olduğu)."""
     path = tmp_path / "sorular_sablon.xlsx"
     if kind == "yarim":
         write_questions(path, SAMPLE_QUESTIONS)
         path.write_bytes(path.read_bytes()[:2289])
+    elif kind == "yarim-sayfa":
+        _half_sheet(path)
     else:
         wb = openpyxl.Workbook()
         wb.active.append(["id", "soru", "ogretmen_notu"]); wb.active.append(["S1", "Gerçek soru", "not"])
@@ -411,6 +427,7 @@ def test_save_does_not_overwrite_an_unreadable_question_file(qtbot, tmp_path, mo
     d.saved.connect(saved.append)
     d.save_button.click()
     assert shown and shown[0][0] == "Kaydedilmedi" and "sorular_sablon.xlsx okunamıyor" in shown[0][1]
+    assert (CORRUPT if kind != "sutun" else "Eksik sütun") in shown[0][1], shown[0][1]
     assert path.read_bytes() == before and d.isVisible() and saved == []
     path.rename(tmp_path / "eski_sorular.xlsx")                      # öğretmen dosyayı klasörden kaldırdı
     d.save_button.click()
@@ -425,6 +442,34 @@ def test_save_fills_an_empty_template(qtbot, tmp_path, monkeypatch):
     d, _ = _dialog(qtbot, tmp_path)
     d.save_button.click()
     assert shown == [] and len(load_questions(path)) == 3
+
+
+def _corrupt_errors() -> list:
+    import zlib
+    from xml.etree.ElementTree import ParseError
+    from openpyxl.utils.exceptions import InvalidFileException
+    return [zipfile.BadZipFile("File is not a zip file"), KeyError("There is no item named 'xl/workbook.xml'"),
+            InvalidFileException("openpyxl does not support .tmp file format"),
+            ParseError("unclosed token: line 1, column 34430"),
+            zlib.error("Error -3 while decompressing data: invalid distance too far back"),
+            EOFError("Compressed file ended before the end-of-stream marker was reached")]
+
+
+@pytest.mark.parametrize("err", _corrupt_errors(), ids=["BadZipFile", "KeyError", "InvalidFileException", "ParseError",
+                                                         "zlib.error", "EOFError"])
+def test_corrupt_file_errors_are_described_as_corrupt(err):
+    """Q4: okuma sırasında bozuk ya da yarım kalmış dosyanın verdiği her hata (zip yapısı, eksik üye, yarım sayfa
+    XML'i, bozuk sıkıştırma, erken biten akış) açılış uyarısında ve editörde aynı anlaşılır sebebe eşlenir."""
+    from matematigin_mantigi.ui.question_editor import describe_load_error
+    assert describe_load_error(err).startswith(CORRUPT)
+
+
+def test_other_load_errors_keep_their_own_reason():
+    from matematigin_mantigi.core.question_loader import QuestionTemplateError
+    from matematigin_mantigi.ui.question_editor import describe_load_error
+    assert describe_load_error(QuestionTemplateError("Eksik sütun(lar): cevap")) == "Eksik sütun(lar): cevap"
+    assert describe_load_error(PermissionError(errno.EACCES, "Permission denied")).startswith("erişim izni yok")
+    assert describe_load_error(RuntimeError("beklenmeyen")) == "RuntimeError: beklenmeyen"
 
 
 # --- örnek sorularla açılmış uygulama gerçek soruları ezmez (Q1) --------------------------------------------------

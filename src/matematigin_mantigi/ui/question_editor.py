@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import re
 import zipfile
+import zlib
 from pathlib import Path
 from typing import Sequence
+from xml.etree.ElementTree import ParseError
 
 from openpyxl.utils.exceptions import InvalidFileException
 from PyQt6.QtCore import QRegularExpression, Qt, pyqtSignal
@@ -26,13 +28,19 @@ from matematigin_mantigi.ui.theme import FontFamilies
 RELOAD_FROM_FILE, LOAD_BACKUP, KEEP_EDITING = "Dosyadan yeniden yükle", "Yedekten yükle", "Kaydetmeden dön"
 
 
+# Bozuk ya da yazımı/kopyası yarıda kalmış xlsx'in okurken verdiği hatalar: zip yapısı yok (BadZipFile), üye eksik
+# (KeyError), uzantı/biçim (InvalidFileException), sayfa XML'i yarım (ParseError), sıkıştırılmış veri bozuk
+# (zlib.error), akış erken bitmiş (EOFError; ör. eşitleme dosyayı okurken kısalttı).
+_CORRUPT_FILE_ERRORS = (zipfile.BadZipFile, KeyError, InvalidFileException, ParseError, zlib.error, EOFError)
+
+
 def describe_load_error(err: Exception) -> str:
     """Soru dosyası okunamadığında öğretmenin anlayacağı kısa sebep (açılış uyarısı ve editör aynı metni verir)."""
     if isinstance(err, QuestionTemplateError):
         return str(err)
     if isinstance(err, OSError):
         return describe_os_error(err)
-    if isinstance(err, (zipfile.BadZipFile, KeyError, InvalidFileException)):
+    if isinstance(err, _CORRUPT_FILE_ERRORS):
         return "dosya bozuk ya da yazımı yarıda kalmış; Excel dosyası olarak açılamıyor"
     return f"{type(err).__name__}: {err}"
 

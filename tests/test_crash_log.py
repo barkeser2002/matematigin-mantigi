@@ -166,6 +166,7 @@ def test_half_written_question_file_still_opens_the_app_with_samples(tmp_path):
     assert "PENCERE True ['S1', 'S2', 'S3']" in r.stdout
     warning = next(ln for ln in r.stdout.splitlines() if ln.startswith("UYARI"))
     assert "sorular.xlsx" in warning and "Sebep:" in warning and "Örnek sorularla" in warning
+    assert "dosya bozuk ya da yazımı yarıda kalmış" in warning, warning
     assert "yakalanan hata (soru dosyası" in (tmp_path / "hatalar.log").read_text(encoding="utf-8")
 
 

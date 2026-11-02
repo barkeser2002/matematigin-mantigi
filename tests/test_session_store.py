@@ -1,5 +1,6 @@
 from datetime import datetime
 
+import pytest
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QImage
 
@@ -28,3 +29,15 @@ def test_unsafe_ids_are_sanitised(tmp_path, qapp):
     store = SessionStore(tmp_path)
     p = store.save_snapshot("S/1:x", white())
     assert p.name == "S_1_x_01.png" and p.exists()
+
+
+def test_failed_save_does_not_consume_a_number(tmp_path, qapp, monkeypatch):
+    """Yazılamayan görüntü sıra numarası tüketmesin: sonraki başarılı kayıt S1_02 değil S1_01 olur (klasörde
+    S1_01'siz bir S1_02 öğretmeni şaşırtır)."""
+    store = SessionStore(tmp_path)
+    monkeypatch.setattr(QImage, "save", lambda *a, **k: False)
+    with pytest.raises(OSError):
+        store.save_snapshot("S1", white())
+    monkeypatch.undo()
+    assert store.count("S1") == 0
+    assert store.save_snapshot("S1", white()).name == "S1_01.png"

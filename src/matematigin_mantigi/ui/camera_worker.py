@@ -14,6 +14,7 @@ from PyQt6.QtGui import QImage
 
 from dataclasses import replace
 
+from matematigin_mantigi.core import crash_log
 from matematigin_mantigi.core.chroma_key import ChromaParams, apply_chroma_key_bgra, estimate_key_hue
 
 
@@ -98,6 +99,7 @@ class CameraWorker(QThread):
     opened = pyqtSignal(int, int)
     keyHueDetected = pyqtSignal(int)          # kenarlardan ölçülen perde tonu (OpenCV birimi)
     AUTO_KEY_EVERY = 90                       # kare; ~3 sn'de bir yeniden ölç
+    MAX_FRAME_ERRORS = 30                     # art arda bu kadar kare alınamaz/işlenemezse akış hata verip durur
 
     def __init__(self, source: FrameSource, params: ChromaParams, chroma_enabled: bool = True,
                  out_width: int = 640, target_fps: int = 30, auto_key: bool = True, parent=None,
@@ -155,37 +157,70 @@ class CameraWorker(QThread):
                 return False
         return False
 
+    def _deliver(self, frame: np.ndarray) -> None:
+        frame = resize_to_width(frame, self._out_width)
+        try:
+            self._maybe_calibrate(frame)
+        except Exception as err:  # noqa: BLE001 - ton ölçülemezse eski ton kalır; kare yine gösterilir
+            crash_log.log_handled(err, "perde tonu ölçümü")
+        self._frames += 1
+        if self._chroma:
+            self.frameReady.emit(to_qimage_bgra(apply_chroma_key_bgra(frame, self._params)))
+        else:
+            self.frameReady.emit(to_qimage_bgr(frame))
+
+    def _release(self) -> None:
+        try:
+            self._source.release()
+        except Exception as err:  # noqa: BLE001 - kapanıştaki sürücü hatası da iş parçacığından kaçmasın
+            crash_log.log_handled(err, "kamera kapanışı")
+
     def run(self) -> None:
+        # run()'dan kaçan istisna PyQt6'da qFatal ile uygulamayı (süren kayıtla) düşürür, kanca kuruluyken de
+        # iş parçacığı sessizce ölüp panel son karede donar. Her hata burada yakalanır: tek bozuk kare atlanır,
+        # kalıcı hata panele anlaşılır cameraError olarak gider; ayrıntı (traceback) hatalar.log'a.
         self._abort = False
-        if not self._open_with_retries():
+        try:
+            opened = self._open_with_retries()
+        except Exception as err:  # noqa: BLE001
+            crash_log.log_handled(err, "kamera açılışı")
+            self.cameraError.emit("Kamera açılamadı")
+            self._release()
+            return
+        if not opened:
             self.cameraError.emit("Kamera bulunamadı")
             return
         self._running = True
-        misses, announced = 0, False
+        misses, failures, announced = 0, 0, False
         try:
             while self._running:
                 t0 = time.monotonic()
-                frame = self._source.read()
-                if frame is None:
-                    misses += 1
-                    if misses > 30:
-                        self.cameraError.emit("Kamera akışı kesildi")
+                try:
+                    frame = self._source.read()
+                    if frame is None:
+                        misses += 1
+                        if misses > 30:
+                            self.cameraError.emit("Kamera akışı kesildi")
+                            break
+                        self.msleep(5)
+                        continue
+                    misses = 0
+                    if not announced:
+                        self.opened.emit(int(frame.shape[1]), int(frame.shape[0]))
+                        announced = True
+                    self._deliver(frame)
+                    failures = 0
+                except Exception as err:  # noqa: BLE001 - sürücü/OpenCV hatası: kare atlanır
+                    failures += 1
+                    if failures == 1:                  # aynı arıza dizisi günlüğe bir kez
+                        crash_log.log_handled(err, "kamera karesi")
+                    if failures > self.MAX_FRAME_ERRORS:
+                        self.cameraError.emit("Kamera görüntüsü alınamadı")
                         break
                     self.msleep(5)
                     continue
-                misses = 0
-                if not announced:
-                    self.opened.emit(int(frame.shape[1]), int(frame.shape[0]))
-                    announced = True
-                frame = resize_to_width(frame, self._out_width)
-                self._maybe_calibrate(frame)
-                self._frames += 1
-                if self._chroma:
-                    self.frameReady.emit(to_qimage_bgra(apply_chroma_key_bgra(frame, self._params)))
-                else:
-                    self.frameReady.emit(to_qimage_bgr(frame))
                 rest = self._period - (time.monotonic() - t0)
                 if rest > 0:
                     self.msleep(int(rest * 1000))
         finally:
-            self._source.release()
+            self._release()

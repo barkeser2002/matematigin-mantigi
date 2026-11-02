@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Sequence
 
 import openpyxl
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Font
 
 from matematigin_mantigi.core.models import SAMPLE_QUESTIONS, Question
@@ -16,10 +17,18 @@ OPTIONAL_COLUMNS = ("ipucu4", "a", "b", "c", "d", "gorsel")
 ALL_COLUMNS = REQUIRED_COLUMNS + OPTIONAL_COLUMNS
 _WIDTHS = {"id": 8, "konu": 16, "sinif": 8, "soru": 60, "ipucu1": 40, "ipucu2": 40, "ipucu3": 40,
            "cevap": 16, "ipucu4": 40, "a": 14, "b": 14, "c": 14, "d": 14, "gorsel": 28}
+_LINE_BREAK_CONTROLS = str.maketrans({"\x0b": "\n", "\x0c": "\n"})   # Word/PowerPoint satır sonu, sayfa sonu
 
 
 class QuestionTemplateError(ValueError):
     pass
+
+
+def clean_text(text: str) -> str:
+    """Excel hücresine yazılamayan kontrol karakterlerini temizler (openpyxl bunlarda IllegalCharacterError
+    fırlatır): dikey sekme ve sayfa sonu (Word/PowerPoint'ten kopyalanan satır sonları) satır sonu olur, gerisi
+    (\\x00-\\x1f) atılır. Sekme ve satır sonu korunur."""
+    return ILLEGAL_CHARACTERS_RE.sub("", text.translate(_LINE_BREAK_CONTROLS))
 
 
 def write_questions(path: Path, questions: Sequence[Question]) -> Path:

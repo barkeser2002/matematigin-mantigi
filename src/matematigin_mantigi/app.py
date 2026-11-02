@@ -4,17 +4,18 @@ import argparse
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, qInstallMessageHandler
+from PyQt6.QtCore import QRect, Qt, qInstallMessageHandler
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from matematigin_mantigi import paths
+from matematigin_mantigi.core import crash_log
 from matematigin_mantigi.core.models import SAMPLE_QUESTIONS
 from matematigin_mantigi.core.question_loader import QuestionTemplateError, ensure_template, load_questions
 from matematigin_mantigi.core.recorder import MssFfmpegRecorder
 from matematigin_mantigi.core.session_store import SessionStore
 from matematigin_mantigi.core.settings import AppSettings
-from matematigin_mantigi.ui import theme
+from matematigin_mantigi.ui import error_notice, theme
 from matematigin_mantigi.ui.camera_worker import OpenCvSource
 from matematigin_mantigi.ui.main_window import MainWindow
 
@@ -65,11 +66,22 @@ def _qt_message_filter(mode, context, message: str) -> None:
     print(message, file=sys.stderr)
 
 
+def _recorded_rect(win: MainWindow) -> QRect:
+    """Kayda giren sahne (ekran koordinatı): uyarı kutusu bununla en az çakışacak yere konur."""
+    x, y, w, h, _ = win.work_area.recording_rect()
+    return QRect(x, y, w, h)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
+    # Önce hata kancası: açılış hataları da hatalar.log'a düşer; yuvadaki yakalanmamış istisna PyQt6'nın qFatal'ıyla
+    # uygulamayı (ve süren kaydı) öldürmez. Qt'ye dokunmadığı için QApplication'dan önce kurulabilir.
+    crash = crash_log.install(paths.default_error_log_path())
     qInstallMessageHandler(_qt_message_filter)
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(argv)
+    notice = error_notice.install()            # GUI iş parçacığında; kancanın modal olmayan uyarısı buradan açılır
+    crash.notify = notice.post
     if hasattr(app.styleHints(), "setColorScheme"):      # Qt >= 6.8
         app.styleHints().setColorScheme(Qt.ColorScheme.Light)   # tema açık renkli; sistem koyu modu paleti ezmesin
     app.setApplicationName("Matematiğin Mantığı")
@@ -77,5 +89,6 @@ def main(argv: list[str] | None = None) -> int:
     app.setFont(theme.font(fam, 13))            # varsayılan aile; stil sayfası font-family kullanmaz
     app.setStyleSheet(theme.build_stylesheet(fam))
     win = build_window(parse_args(argv), fam)
+    notice.set_anchor(win, avoid=lambda: _recorded_rect(win))
     win.show()
     return app.exec()

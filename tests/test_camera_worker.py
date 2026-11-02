@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from PyQt6.QtGui import QImage
 
 from conftest import FakeCamera
@@ -113,3 +114,113 @@ def test_stop_aborts_open_retries(qtbot, dead_camera):
     w.start(); qtbot.wait(150)
     w.stop()
     assert w.wait(2000)
+
+
+# --- run() içindeki hatalar iş parçacığını sessizce öldürmesin (#3) ------------------------------------------
+class _BrokenCamera(FakeCamera):
+    """mode='read': sürücü her karede istisna fırlatır (ör. cv2.error); mode='frame': kare bozuk (tek kanallı),
+    işlerken OpenCV patlar; mode='open': açılış istisna fırlatır."""
+
+    def __init__(self, mode: str):
+        super().__init__(frames=10_000)
+        self.mode = mode
+
+    def open(self) -> bool:
+        if self.mode == "open":
+            raise RuntimeError("yapay açılış hatası")
+        return super().open()
+
+    def read(self):
+        if self.mode == "read":
+            import cv2
+            raise cv2.error("yapay sürücü hatası")
+        frame = super().read()
+        return frame[:, :, 0] if frame is not None else None    # (h, w): BGR beklenen yerde tek kanal
+
+
+@pytest.mark.parametrize("mode", ["read", "frame"])
+def test_persistent_frame_error_is_reported_and_thread_ends_cleanly(qtbot, mode):
+    """run() korumasızdı: sürücü/OpenCV istisnası iş parçacığından kaçıyor, PyQt6 qFatal ile uygulamayı (süren
+    kayıtla) düşürüyordu; kanca kuruluyken de panel son karede donup kalırdı. Artık art arda bozuk karelerden sonra
+    anlaşılır cameraError ve kaynak bırakılır."""
+    cam = _BrokenCamera(mode)
+    w = CameraWorker(cam, ChromaParams(), out_width=160, target_fps=200)
+    with qtbot.waitSignal(w.cameraError, timeout=5000) as sig:
+        w.start()
+    assert sig.args[0] == "Kamera görüntüsü alınamadı"
+    assert w.wait(2000) and cam.released
+
+
+def test_single_bad_frame_is_skipped_and_stream_continues(qtbot):
+    """Tek bir bozuk kare akışı öldürmesin: atlanır, sonraki karelerle görüntü sürer."""
+    class Glitch(FakeCamera):
+        def __init__(self):
+            super().__init__(frames=10_000); self.calls = 0
+
+        def read(self):
+            self.calls += 1
+            if self.calls == 3:
+                raise ValueError("tek bozuk kare")
+            return super().read()
+    w = CameraWorker(Glitch(), ChromaParams(), out_width=160, target_fps=200)
+    frames, errors = [], []
+    w.frameReady.connect(lambda _img: frames.append(1))
+    w.cameraError.connect(errors.append)
+    w.start()
+    qtbot.waitUntil(lambda: len(frames) >= 10, timeout=3000)
+    assert errors == [] and w.isRunning()
+    w.stop(); assert w.wait(2000)
+
+
+def test_open_exception_is_reported_and_thread_ends(qtbot):
+    cam = _BrokenCamera("open")
+    w = CameraWorker(cam, ChromaParams())
+    with qtbot.waitSignal(w.cameraError, timeout=3000) as sig:
+        w.start()
+    assert sig.args[0] == "Kamera açılamadı"
+    assert w.wait(2000)
+
+
+@pytest.fixture
+def crash_logged(tmp_path):
+    """Hata kancası tmp_path'e kurulur; sys/threading kancaları (global durum) test sonunda geri gelir."""
+    import sys
+    import threading
+    from matematigin_mantigi.core import crash_log
+    prev = (sys.excepthook, threading.excepthook)
+    notes = []
+    log = crash_log.install(tmp_path / "hatalar.log", notify=lambda *a: notes.append(a))
+    yield log, notes
+    crash_log.uninstall(log)
+    sys.excepthook, threading.excepthook = prev
+
+
+def test_handled_camera_error_is_logged_but_never_reaches_the_excepthook(qtbot, crash_logged):
+    """Kendi hatasını yakalayan yol hatayı kancaya bırakmaz (uyarı kutusu açılmaz); ayrıntı yine hatalar.log'da."""
+    log, notes = crash_logged
+    w = CameraWorker(_BrokenCamera("read"), ChromaParams(), target_fps=200)
+    with qtbot.waitSignal(w.cameraError, timeout=5000):
+        w.start()
+    assert w.wait(2000)
+    text = log.path.read_text(encoding="utf-8")
+    assert "yakalanan hata (kamera" in text and "yapay sürücü hatası" in text
+    assert text.count("Traceback (most recent call last)") == 1         # 31 bozuk kare, tek kayıt
+    assert notes == []
+
+
+def test_failing_key_hue_estimate_does_not_stop_the_stream(qtbot, monkeypatch):
+    """Perde tonu ölçümü patlarsa yalnız ölçüm atlanır: kare yine gösterilir, akış durmaz (ölçüm her karede yeniden
+    denenip 30 kare sonra kamerayı 'alınamadı' diye kapatmamalı)."""
+    from matematigin_mantigi.ui import camera_worker as cw
+
+    def boom(_frame):
+        raise ValueError("yapay ölçüm hatası")
+    monkeypatch.setattr(cw, "estimate_key_hue", boom)
+    w = CameraWorker(FakeCamera(frames=10_000), ChromaParams(), out_width=160, target_fps=200)
+    frames, errors = [], []
+    w.frameReady.connect(lambda _img: frames.append(1))
+    w.cameraError.connect(errors.append)
+    w.start()
+    qtbot.waitUntil(lambda: len(frames) >= 60, timeout=5000)
+    assert errors == []
+    w.stop(); assert w.wait(2000)

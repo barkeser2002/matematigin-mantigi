@@ -3,7 +3,12 @@
 `post()` her iş parçacığından çağrılabilir (hata kancası kamera/kayıt iş parçacığından da gelir); kutu her zaman
 GUI iş parçacığında, olay döngüsünün bir sonraki turunda açılır (kancanın içinden pencere kurulmaz). Aynı anahtar
 oturumda bir kez gösterilir ve hep aynı kutu kullanılır: aynı hata art arda yüzlerce kez gelse de pencere yağmuru
-olmaz. Kutu odağı çalmaz (kalem ve kısayollar tahtada kalır) ve kayda giren sahneyle en az çakışan yere konur.
+olmaz. Kutu odağı çalmaz (kalem ve kısayollar tahtada kalır).
+
+Uyarılar kayda girmeyen yerde (tasarım, "Temel ilke"): kayıt sürerken (kayıt kaydedilirken de) kutu hiç açılmaz;
+uyarı araç çubuğunun kırmızı şeridine kısa bir satır olarak yazılır ve kayıt bitince kutuyla gösterilir. Kayıt kutu
+açıkken başlarsa kutu gizlenir, kayıttan sonra yeniden gelir. Kayıt dışında kutu, kayda giren sahneyle en az çakışan
+ve araç çubuğunun altını (uyarı şeridi + kayıt düğmesi) örtmeyen yere konur.
 """
 from __future__ import annotations
 
@@ -12,11 +17,14 @@ import sys
 from typing import Callable, Sequence
 
 from PyQt6 import sip
-from PyQt6.QtCore import QObject, QPoint, QRect, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, QPoint, QRect, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
 
 _MARGIN = 8
+POLL_MS = 200               # kayıt başladı mı / bitti mi yoklaması; yalnız bekleyen uyarı ya da görünür kutu varken
+_MAX_ITEMS = 4              # kayıttan sonra tek kutuda gösterilen en çok uyarı (kutu ekrana sığsın)
+ALERT_KEY = "uyari-kutusu"  # araç çubuğu uyarı şeridinde bu kaynağın anahtarı (app.py bağlar)
 _OS_REASONS = {
     errno.EACCES: "erişim izni yok ya da dosya başka bir programda açık",
     errno.EPERM: "erişim izni yok",
@@ -26,6 +34,8 @@ _OS_REASONS = {
     errno.ENOTDIR: "yolda klasör yerine bir dosya var",
 }
 
+Items = dict[str, tuple[str, str]]          # anahtar -> (başlık, metin); sıra geliş sırası
+
 
 def describe_os_error(err: OSError) -> str:
     """Dosya hatasının öğretmenin anlayacağı kısa Türkçe sebebi; bilinmeyen hatada sistemin kendi metni."""
@@ -33,11 +43,13 @@ def describe_os_error(err: OSError) -> str:
     return reason or err.strerror or str(err) or type(err).__name__
 
 
-def place_outside(size: QSize, avoid: QRect | None, screens: Sequence[QRect], home: QRect) -> QPoint:
-    """Kutunun sol üst köşesi: kayda giren dikdörtgenle (avoid) en az çakışan aday. Adaylar sırayla her ekranın
-    (önce pencerenin ekranı `home`) sol alt, sol üst (araç çubuğu tarafı), sağ alt ve sağ üst köşesi; eşitlikte
-    sıradaki ilk aday kazanır. Tek ekranda tam ekran sahne neredeyse her yeri kapladığından kutu kısmen kayda
-    girebilir; sahnesiz ikinci bir ekran varsa kutu oraya gider."""
+def place_outside(size: QSize, avoid: QRect | None, screens: Sequence[QRect], home: QRect,
+                  keep_clear: QRect | None = None) -> QPoint:
+    """Kutunun sol üst köşesi. Adaylar sırayla her ekranın (önce pencerenin ekranı `home`) sol alt, sol üst (araç
+    çubuğu tarafı), sağ alt ve sağ üst köşesi. Önce `keep_clear`'ı (araç çubuğunun altı: uyarı şeridi ve kayıt
+    düğmesi) örtmeyen, sonra kayda giren dikdörtgenle (avoid) en az çakışan aday kazanır; eşitlikte sıradaki ilk aday.
+    Tek ekranda tam ekran sahne neredeyse her yeri kapladığından kutu (kayıt dışında) sahneye binebilir; sahnesiz
+    ikinci bir ekran varsa kutu oraya gider."""
     w, h = size.width(), size.height()
     cands: list[QPoint] = []
     for g in [home] + [s for s in screens if s != home]:
@@ -45,12 +57,25 @@ def place_outside(size: QSize, avoid: QRect | None, screens: Sequence[QRect], ho
         top, bottom = g.top() + _MARGIN, g.top() + g.height() - h - _MARGIN
         cands += [QPoint(left, bottom), QPoint(left, top), QPoint(right, bottom), QPoint(right, top)]
 
-    def overlap(p: QPoint) -> int:
-        if avoid is None:
+    def overlap(p: QPoint, rect: QRect | None) -> int:
+        if rect is None:
             return 0
-        r = QRect(p, size).intersected(avoid)
+        r = QRect(p, size).intersected(rect)
         return max(0, r.width()) * max(0, r.height())
-    return min(cands, key=overlap)
+    return min(cands, key=lambda p: (overlap(p, keep_clear), overlap(p, avoid)))
+
+
+def _compose(items: Items) -> tuple[str, str]:
+    """Kutunun başlığı ve metni. Kayıt sürerken biriken birden çok uyarı tek kutuda, başlıklarıyla alt alta (en
+    yenileri; kutu ekrana sığsın diye en çok _MAX_ITEMS)."""
+    entries = list(items.values())
+    if len(entries) == 1:
+        return entries[0]
+    shown = entries[-_MAX_ITEMS:]
+    parts = [f"{title}:\n{text}" for title, text in shown]
+    if len(entries) > len(shown):
+        parts.insert(0, f"(Önceki {len(entries) - len(shown)} uyarı burada gösterilmiyor.)")
+    return f"{len(entries)} uyarı", "\n\n".join(parts)
 
 
 class ErrorNotice(QObject):
@@ -64,14 +89,31 @@ class ErrorNotice(QObject):
         # olay döngüsünün bir sonraki turunda işlenir.
         self._requested.connect(self._show, Qt.ConnectionType.QueuedConnection)
         self.box: QMessageBox | None = None
-        self._shown: set[str] = set()
+        self._shown: set[str] = set()                 # gösterilen ya da gösterilmeyi bekleyen anahtarlar
+        self._current: Items = {}                     # görünen kutunun içeriği; Tamam'a basılınca boşalır
+        self._pending: Items = {}                     # kayıt sürerken gelenler: kayıt bitince gösterilir
         self._anchor: QWidget | None = None
         self._avoid: Callable[[], QRect | None] | None = None
+        self._keep_clear: Callable[[], QRect | None] | None = None
+        self._is_recording: Callable[[], bool] | None = None
+        self._show_alert: Callable[[str | None], None] | None = None
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(POLL_MS)
+        self._poll_timer.timeout.connect(self._poll)
 
-    def set_anchor(self, widget: QWidget | None, avoid: Callable[[], QRect | None] | None = None) -> None:
-        """widget: kutunun sahibi (ana pencere; tam ekranda kutu onun üstünde kalsın). avoid: kayda giren dikdörtgen
-        (ekran koordinatında), kutu onunla en az çakışacak yere konur."""
-        self._anchor, self._avoid = widget, avoid
+    def set_anchor(self, widget: QWidget | None, avoid: Callable[[], QRect | None] | None = None,
+                   keep_clear: Callable[[], QRect | None] | None = None) -> None:
+        """widget: kutunun sahibi (ana pencere; tam ekranda kutu onun üstünde kalsın). avoid: kayda giren dikdörtgen,
+        keep_clear: kutunun örtmemesi gereken yer (araç çubuğunun altı); ikisi de ekran koordinatında."""
+        self._anchor, self._avoid, self._keep_clear = widget, avoid, keep_clear
+
+    def set_recording_route(self, is_recording: Callable[[], bool] | None,
+                            show_alert: Callable[[str | None], None] | None) -> None:
+        """is_recording: kayıt sürüyor mu (kaydedilirken de evet). show_alert(metin | None): araç çubuğunun uyarı
+        şeridine yazar / şeritten kaldırır. Kayıt sürerken kutu açılmaz, uyarı şeride gider; kayıt bitince bekleyen
+        uyarılar kutuyla gösterilir (bunu bekleyen uyarı varken çalışan kısa aralıklı yoklama yakalar)."""
+        self._is_recording, self._show_alert = is_recording, show_alert
+        self._update_polling()
 
     def post(self, title: str, text: str, key: str | None = None) -> None:
         """Herhangi bir iş parçacığından güvenle çağrılır; istisna fırlatmaz."""
@@ -82,6 +124,35 @@ class ErrorNotice(QObject):
 
     def _live(self, w: QWidget | None) -> QWidget | None:
         return None if w is None or sip.isdeleted(w) else w
+
+    def _recording(self) -> bool:
+        if self._is_recording is None:
+            return False
+        try:
+            return bool(self._is_recording())
+        except Exception:  # noqa: BLE001 - sorulamazsa kutu gösterilir: uyarı kaybolmasın
+            return False
+
+    def _show(self, title: str, text: str, key: str) -> None:
+        if key in self._shown:                     # aynı uyarı bu oturumda gösterildi: yeni pencere açılmaz
+            return
+        self._shown.add(key)
+        self._deliver({key: (title, text)})
+
+    def _deliver(self, items: Items) -> None:
+        try:
+            if self._recording():
+                # Kayıt sürüyor: kutu kayda girer (sahnenin üstünde, kayıt düğmesini ve şeridi örterek, hatalar.log'un
+                # yolunu videoya yazarak). Uyarı şeride; ayrıntı kayıt bitince kutuyla.
+                self._stash_box()
+                self._pending.update(items)
+                self._update_alert()
+            else:
+                self._display(items)
+        except Exception as err:  # noqa: BLE001 - uyarı gösterilemezse de uygulama düşmez
+            title, text = next(iter(items.values()), ("Uyarı", ""))
+            _to_stderr(title, f"{text} (uyarı kutusu açılamadı: {err})")
+        self._update_polling()
 
     def _ensure_box(self) -> QMessageBox:
         # Modal bir pencere (ör. soru editörü) açıksa kutu onun çocuğu olur: yoksa modal pencere kutuyu tıklanamaz
@@ -96,8 +167,27 @@ class ErrorNotice(QObject):
         box.setModal(False)                                        # QMessageBox varsayılanı modal
         box.setWindowModality(Qt.WindowModality.NonModal)
         box.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)   # kalemden/kısayollardan odak çalmaz
+        box.finished.connect(self._on_box_finished)
         self.box = box
         return box
+
+    def _display(self, items: Items) -> None:
+        box = self._ensure_box()
+        self._current = dict(items)
+        title, text = _compose(self._current)
+        box.setWindowTitle(title)
+        box.setText(text)
+        if not box.isVisible():
+            # Son boyut ancak gösterilirken kesinleşir (QMessageBox showEvent'te boyutlanır): önceden tahmin
+            # edilen boyutla konan kutu stil sayfasıyla büyüyüp ekrandan taşıyordu. Konum ilk çizimden önce,
+            # aynı olay turunda verilir.
+            box.show()
+            try:
+                pos = self._position(box.frameGeometry().size())
+                if pos is not None:
+                    box.move(pos)
+            except Exception:  # noqa: BLE001 - konum hesaplanamazsa Qt'nin varsayılan yeri
+                pass
 
     def _position(self, size: QSize) -> QPoint | None:
         anchor = self._live(self._anchor)
@@ -105,30 +195,65 @@ class ErrorNotice(QObject):
         if screen is None:
             return None
         avoid = self._avoid() if self._avoid is not None else None
+        keep = self._keep_clear() if self._keep_clear is not None else None
         return place_outside(size, avoid, [s.availableGeometry() for s in QGuiApplication.screens()],
-                             screen.availableGeometry())
+                             screen.availableGeometry(), keep)
 
-    def _show(self, title: str, text: str, key: str) -> None:
-        if key in self._shown:                     # aynı uyarı bu oturumda gösterildi: yeni pencere açılmaz
+    # --- kayıt yolu: şerit, bekleyen uyarılar, yoklama ---------------------------------------------------------
+    def _stash_box(self) -> bool:
+        """Kutu görünürken kayıt başladı: kutu kayda girmesin; içeriği kayıt bitince yeniden gösterilir."""
+        box = self._live(self.box)
+        if box is None or not box.isVisible():
+            return False
+        stash, self._current = self._current, {}
+        box.hide()                                  # QDialog.hide finished yaymaz: içerik 'görüldü' sayılmaz
+        self._pending = {**stash, **self._pending}
+        return True
+
+    def _update_alert(self) -> None:
+        if self._show_alert is None:
             return
-        self._shown.add(key)
+        n = len(self._pending)
+        if n == 0:
+            text = None
+        else:
+            what = next(iter(self._pending.values()))[0] if n == 1 else f"{n} uyarı"
+            text = f"⚠ {what} — ayrıntı kayıt bitince"
         try:
-            box = self._ensure_box()
-            box.setWindowTitle(title)
-            box.setText(text)
-            if not box.isVisible():
-                # Son boyut ancak gösterilirken kesinleşir (QMessageBox showEvent'te boyutlanır): önceden tahmin
-                # edilen boyutla konan kutu stil sayfasıyla büyüyüp ekrandan taşıyordu. Konum ilk çizimden önce,
-                # aynı olay turunda verilir.
-                box.show()
-                try:
-                    pos = self._position(box.frameGeometry().size())
-                    if pos is not None:
-                        box.move(pos)
-                except Exception:  # noqa: BLE001 - konum hesaplanamazsa Qt'nin varsayılan yeri
-                    pass
-        except Exception as err:  # noqa: BLE001 - uyarı gösterilemezse de uygulama düşmez
-            _to_stderr(title, f"{text} (uyarı kutusu açılamadı: {err})")
+            self._show_alert(text)
+        except Exception:  # noqa: BLE001 - şerit yazılamazsa (kapanış) uyarı yine bekler
+            pass
+
+    def _poll(self) -> None:
+        """Bekleyen uyarı ya da görünür kutu varken çalışır: kayıt başladıysa görünür kutu gizlenir, kayıt bittiyse
+        şerit temizlenir ve bekleyenler kutuyla gösterilir. İş kalmayınca zamanlayıcı durur."""
+        try:
+            if self._recording():
+                if self._stash_box():
+                    self._update_alert()
+            elif self._pending:
+                items, self._pending = self._pending, {}
+                self._update_alert()
+                self._display(items)
+        except Exception as err:  # noqa: BLE001 - zamanlayıcı yuvası hiçbir koşulda istisna fırlatmaz
+            _to_stderr("Uyarı kutusu", f"gösterilemedi: {err}")
+        self._update_polling()
+
+    def _update_polling(self) -> None:
+        try:
+            box = self._live(self.box)
+            busy = self._is_recording is not None and bool(self._pending or (box is not None and box.isVisible()))
+            if busy and not self._poll_timer.isActive():
+                self._poll_timer.start()
+            elif not busy and self._poll_timer.isActive():
+                self._poll_timer.stop()
+        except Exception:  # noqa: BLE001 - (kapanışta silinmiş zamanlayıcı)
+            pass
+
+    # --- kutunun kapanışı ---------------------------------------------------------------------------------------
+    def _on_box_finished(self, *_) -> None:
+        self._current = {}                          # Tamam (ya da Esc): uyarı görüldü
+        self._update_polling()
 
 
 def _to_stderr(title: str, text: str) -> None:

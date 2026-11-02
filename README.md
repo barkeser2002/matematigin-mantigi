@@ -166,9 +166,15 @@ parçacığında koşar; yakalama fps'nin altında kalırsa kareler çoğaltıl�
 Mikrofon ffmpeg'e değil, uygulama içinde PortAudio (sounddevice) ile alınır: ffmpeg'in avfoundation girişi tek
 tampon tutar ve video karesi geciktiğinde onu düşürür (cızırtı, birikince kayma). PortAudio geri çağrısı örnekleri
 dakikalarca yer olan bir kuyruğa koyar, ayrı iş parçacığı WAV yazar; ilk örneğin zamanı ölçülür. Durdurunca ffmpeg
-videoyu kopyalayıp sesi ölçülen farkla hizalar (48 kHz AAC 160 kb/s), ara `.video.mp4`/`.wav` dosyaları silinir;
-10 dakikadan uzun kayıtlarda mikrofon saati kayması da (ppm düzeyi) `asetrate` ile düzeltilir. ffmpeg'in çıktısı
-`kayit_<saat>.log` dosyasına gider. Durdurma birkaç saniye (uzun derste onlarca saniye) sürebilir: arayüz donmaz,
+videoyu kopyalayıp sesi ölçülen farkla hizalar (48 kHz AAC 160 kb/s); ara `.video.mp4`/`.wav` dosyaları yalnız
+birleşik dosyanın süresi videonunkiyle aynı ölçülünce silinir (süre ffmpeg'in dosya başlığından okunur, 60 dakikalık
+derste de saniyenin altında). 10 dakikadan uzun kayıtlarda mikrofon saati kayması da (ppm düzeyi) `asetrate` ile
+düzeltilir. Birleştirme videoyu asla kısaltmaz: mikrofon kayıt sırasında kesilirse (kablo çekildi, Bluetooth/AirPods
+koptu) ya da ses dosyası yazılamazsa (disk dolu) eksik ses sessizlikle doldurulur, video tam uzunlukta kalır ve durum
+satırı uyarır ("UYARI: Mikrofon kayıt sırasında kesildi (20:15. dakikadan sonra ses yok)", "UYARI: Ses dosyası
+yazılamadı: …"). Birleşik dosya yine de videodan kısa çıkarsa ya da süresi ölçülemezse ham video ve ses silinmez;
+"Kayıt hatası" penceresi üç dosyanın da yerini yazar. ffmpeg'in çıktısı `kayit_<saat>.log` dosyasına gider.
+Durdurma birkaç saniye (uzun derste onlarca saniye) sürebilir: arayüz donmaz,
 kayıt düğmesinin üstünde kırmızı "Kayıt kaydediliyor…" şeridi görünür ve kayıt bitene kadar ne düğme ne R yeni kayıt
 başlatır (kapanan dersin dosyaları yenisine karışmasın). Şerit araç çubuğunda olduğu için kayda girmez (tahtadaki
 durum satırı ve rozet girer). Kayıt başlatılamazsa (ffmpeg yok, kayıt klasörü ya da dosyası açılamıyor: disk dolu,

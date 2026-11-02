@@ -3,13 +3,15 @@
 MssFfmpegRecorder: ekranın tahta bölgesini mss ile yakalar (yakalama iş parçacığı), sabit tempolu yazıcı iş
 parçacığı en yeni kareyi boru ile ffmpeg'e verir (yakalama yavaşsa kare çoğaltılır; süre duvar saatiyle aynı kalır).
 Ses ffmpeg'e DEĞİL, uygulama içinde PortAudio ile WAV'a alınır (core/audio_capture.py); durdurunca ffmpeg videoyu
-kopyalayıp sesi ölçülen zaman farkıyla hizalayarak tek MP4'e birleştirir.
+kopyalayıp sesi ölçülen zaman farkıyla hizalayarak tek MP4'e birleştirir. Birleştirme videoyu asla kısaltmaz: eksik
+ses sessizlikle dolar, birleşik dosyanın süresi ölçülür; kısa çıkarsa ya da ölçülemezse ham video ve WAV silinmez.
 
 Durum: IDLE -> RECORDING -> FINALIZING -> IDLE. Kapanış (ffmpeg kapanışı + ses birleştirme) uzun derste onlarca
 saniye sürer; bu sürede yeni kayıt başlamaz. Her kaydın yolları ve sonuçları kendi _Session nesnesindedir.
 """
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -191,12 +193,21 @@ def ffmpeg_args(exe: str, width: int, height: int, fps: int, out: Path,
     return args
 
 
+PAD_MARGIN_S = 1.0      # ses dolgusu videodan bu kadar uzun: -shortest dosyayı her zaman videonun sonunda bitirir
+MIC_GAP_S = 2.0         # ses videodan bundan fazla erken bitiyorsa mikrofon kayıt sırasında kesilmiştir
+SHORT_MUX_S = 1.0       # birleşik dosya videodan bundan fazla kısaysa (kısa kayıtta: sürenin 1/4'ü) ham dosyalar kalır
+
+
 def mux_args(exe: str, video: Path, audio: Path, out: Path, offset_s: float,
-             asetrate: int | None = None, out_rate: int = 48000) -> list[str]:
+             asetrate: int | None = None, out_rate: int = 48000, video_s: float | None = None) -> list[str]:
     """Video (kopya) + WAV -> MP4 (AAC). offset_s > 0: ses videodan önce başladı, başı atılır (-ss);
     offset_s < 0: ses geç başladı, geciktirilir (-itsoffset). asetrate: ölçülen gerçek örnekleme hızı
     (mikrofon saati kaymasını düzeltir; ppm düzeyi, duyulmaz). Ses girişi -f wav ile açılır: biçim tahmine
-    bırakılırsa ffmpeg 9.0.2 düz WAV'ı mpegts sanıp düşüyor (imageio-ffmpeg 0.8.0)."""
+    bırakılırsa ffmpeg 9.0.2 düz WAV'ı mpegts sanıp düşüyor (imageio-ffmpeg 0.8.0).
+    video_s: videonun süresi. Verilince ses, zincirin sonunda (hız düzeltmesi ve fade-in'den sonra) sessizlikle
+    video_s + PAD_MARGIN_S'ye dek doldurulur (apad), -shortest dosyayı videonun sonunda bitirir: mikrofon kayıt
+    ortasında kesilse de video kısalmaz (#1). Dolgu bilerek sınırlı: sınırsız apad + -shortest + -c:v copy ffmpeg
+    7.0.2'de hiç bitmiyor (ses kodlayıcısı sonsuz sessizlik üretirken çıktıya tek paket yazılmıyor)."""
     args = [exe, "-y", "-hide_banner", "-loglevel", "warning", "-nostats", "-i", str(video)]
     if offset_s >= 0:
         args += ["-ss", f"{offset_s:.3f}", "-f", "wav", "-i", str(audio)]
@@ -205,9 +216,57 @@ def mux_args(exe: str, video: Path, audio: Path, out: Path, offset_s: float,
     af = ["afade=t=in:st=0:d=0.01"]                  # -ss kesim noktasındaki tek örneklik tıkı yumuşatır (10 ms)
     if asetrate:
         af = [f"asetrate={asetrate}", f"aresample={out_rate}", *af]
+    if video_s is not None:
+        af.append(f"apad=whole_dur={video_s + PAD_MARGIN_S:.3f}")
     args += ["-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-af", ",".join(af)]
     args += ["-ar", str(out_rate), "-c:a", "aac", "-b:a", "160k", "-shortest", "-movflags", "+faststart", str(out)]
     return args
+
+
+_DURATION = re.compile(rb"^\s*Duration: (\d+):(\d\d):(\d\d(?:\.\d+)?)", re.M)    # kendi satırı: etiket değeri değil
+
+
+def media_duration(exe: str, path: Path, timeout: float = 30.0) -> float | None:
+    """Dosyanın süresi (sn), ffmpeg'in giriş başlığı dökümünden ('Duration: 01:00:00.00'); ffprobe paketle gelmiyor.
+    MP4'te yalnız moov kutusu okunur: video çözülmez, paketler taranmaz. 60 dakikalık 60 kare/sn dosyada ~0,1 sn
+    (paketleri okumak 600 MB'ta ~6 sn sürüyor; 1440p60 bir ders ~7 GB). Okunamazsa ya da süre yoksa (N/A) None."""
+    try:
+        res = subprocess.run([exe, "-hide_banner", "-nostdin", "-i", str(path)], capture_output=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = _DURATION.search(res.stderr)                 # çıktı dosyası verilmediği için ffmpeg 1 ile çıkar: beklenen
+    if m is None:
+        return None
+    h, mi, sec = m.groups()
+    return int(h) * 3600 + int(mi) * 60 + float(sec)
+
+
+def clock_text(seconds: float) -> str:
+    """Süre okunur 'dakika:saniye' (toplam dakika, saniye aşağı yuvarlanır): 1215.7 -> '20:15', 4530 -> '75:30'."""
+    s = max(0, int(seconds))
+    return f"{s // 60}:{s % 60:02d}"
+
+
+def audio_end_in_video(audio: AudioResult, offset_s: float, asetrate: int | None = None) -> float:
+    """Sesin birleşik dosyada (videonun zaman ekseninde) bittiği an, sn. offset_s > 0 ise baştan atılır (-ss), < 0 ise
+    ses geciktirilir (-itsoffset): ikisinde de 'süre - offset_s'. asetrate süreyi ölçülen gerçek hıza göre değiştirir
+    (-ss payının hızla ölçeklenmesi ppm düzeyinde, yok sayılır)."""
+    rate = asetrate or audio.samplerate
+    return (audio.samples / float(rate) if rate else 0.0) - offset_s
+
+
+def mic_cut_text(video_s: float, audio_end_s: float) -> str | None:
+    """Ses videodan MIC_GAP_S'den fazla erken bitiyorsa '<dk:sn>. dakikadan sonra ses yok', yoksa None. Pay: sürücü
+    tamponu ve durdurma sırası yüzünden ses videodan biraz önce ya da sonra biter; bu bir kesilme değil. Payın
+    altındaki çok kısa kayıtta uyarı çıkmaz (videonun kendisi korunur, yalnız bilgi eksik kalır)."""
+    if video_s - audio_end_s <= MIC_GAP_S:
+        return None
+    return f"{clock_text(audio_end_s)}. dakikadan sonra ses yok"
+
+
+def _joined(*parts: str | None) -> str | None:
+    """Boş olmayan uyarıları '; ' ile birleştirir: sonraki bir uyarı öncekini silmesin."""
+    return "; ".join(p for p in parts if p) or None
 
 
 def audio_rate_correction(result: AudioResult, min_duration: float = 600.0, min_ppm: float = 100.0) -> int | None:
@@ -474,31 +533,57 @@ class MssFfmpegRecorder:
         return s.audio_result
 
     def _mux(self, s: _Session, audio: AudioResult) -> None:
-        """Video (kopya) + WAV -> son MP4. Başarısızsa yalnız video dosyası sonuç olur."""
+        """Video (kopya) + WAV -> son MP4. Birleştirme başarısızsa yalnız video dosyası sonuç olur. Birleştirme
+        videoyu asla kısaltmaz (#1): eksik ses sessizlikle dolar; ara dosyalar yalnız birleşik dosyanın videonun
+        tam uzunluğunda olduğu ölçülünce silinir. Mikrofon kesildiyse ya da WAV yazılamadıysa audio_error söyler."""
         exe = self._ffmpeg_exe or find_ffmpeg()
         video, out = s.video_path, s.final_path
+        if audio.error:                              # WAV yazıcısı öldü (disk dolu...): o ana dek yazılan ses kalır
+            s.audio_error = s.audio_error or f"Ses dosyası yazılamadı: {audio.error}"
         if not exe or audio.samples <= 0 or not audio.path.exists():
             s.audio_error = s.audio_error or "Ses kaydedilemedi (örnek yok)"
             video.replace(out)
             return
+        video_s = media_duration(exe, video)         # ara videonun gerçek süresi: dolgu ve doğrulama ölçüsü
+        length = video_s if video_s is not None else s.duration     # ölçülemezse duvar süresi (video ondan uzun değil)
         t0 = s.video_t0 if s.video_t0 is not None else (audio.first_sample_monotonic or 0.0)
         offset = t0 - (audio.first_sample_monotonic if audio.first_sample_monotonic is not None else t0)
-        args = mux_args(exe, video, audio.path, out, offset, asetrate=audio_rate_correction(audio))
+        rate = audio_rate_correction(audio)
+        cut = mic_cut_text(length, audio_end_in_video(audio, offset, rate))
+        if cut:                                      # yazıcı hatası varsa sebep odur; yalnız yeri eklenir
+            s.audio_error = f"{s.audio_error} ({cut})" if s.audio_error else f"Mikrofon kayıt sırasında kesildi ({cut})"
+        args = mux_args(exe, video, audio.path, out, offset, asetrate=rate, video_s=length)
         try:
             res = subprocess.run(args, capture_output=True, timeout=max(120, int(s.duration * 2)))
         except (OSError, subprocess.SubprocessError) as err:
-            s.audio_error = f"Ses birleştirilemedi: {err}"
+            s.audio_error = _joined(f"Ses birleştirilemedi: {err}", s.audio_error)
             video.replace(out)
             return
         if res.returncode != 0 or not out.exists():
-            s.audio_error = "Ses birleştirilemedi: " + res.stderr.decode("utf-8", "replace").strip()[-300:]
+            reason = res.stderr.decode("utf-8", "replace").strip()[-300:]
+            s.audio_error = _joined(f"Ses birleştirilemedi: {reason}", s.audio_error)
             video.replace(out)
+            return
+        out_s = media_duration(exe, out)
+        if video_s is None or out_s is None:         # doğrulanamayan dosya için tek tam kopyayı silme
+            self._keep_raw(s, audio, "Birleştirilen kaydın süresi ölçülemedi, tam olduğu doğrulanamadı")
+            return
+        if out_s < video_s - min(SHORT_MUX_S, video_s / 4):
+            self._keep_raw(s, audio, f"Birleştirilen kayıt videodan kısa çıktı ({clock_text(out_s)} / "
+                                     f"{clock_text(video_s)})")
             return
         for p in (video, audio.path):
             try:
                 p.unlink()
             except OSError:
                 pass
+
+    def _keep_raw(self, s: _Session, audio: AudioResult, why: str) -> None:
+        """Birleşik dosyaya güvenilemiyor: ham video ve WAV silinmez, hata (arayüzde 'Kayıt hatası') üç dosyanın da
+        yerini söyler. Birleşik dosya da kalır; öğretmen hangisini kullanacağını görür."""
+        text = (f"{why}: {s.final_path}\nHam video ve ses silinmedi; kaydın tamamı bu dosyalarda:\n"
+                f"{s.video_path}\n{audio.path}")
+        s.error = f"{s.error}\n\n{text}" if s.error else text
 
     def _grab_loop(self, s: _Session, rect: RecordRect, w: int, h: int, fps: int) -> None:
         """Yakalama iş parçacığı: en fazla fps hızında kare alır, en yenisini bırakır."""

@@ -29,6 +29,7 @@ class AudioResult:
     dropped_blocks: int = 0
     error: str | None = None          # WAV yazılamadı (disk dolu...): samples o ana dek yazılabilen ses
     last_sample_monotonic: float | None = None    # son bloğun sonu (ilk örnekle aynı zaman tabanı); bilinmiyorsa None
+    close_error: str | None = None    # ses sürücüsü akışı kapatamadı (takıldı ya da hata verdi); ses o ana dek tam
 
     @property
     def duration(self) -> float:
@@ -144,6 +145,7 @@ class AudioCapture:
     """Tek kayıt için mikrofon yakalayıcı: start(wav_yolu) ... stop() -> AudioResult."""
 
     QUEUE_BLOCKS = 8192          # ~20 ms'lik bloklar: dakikalarca yer; yazıcı iş parçacığı takılsa bile örnek düşmez
+    STREAM_STOP_S = 5.0          # sürücünün akışı kapatması (Pa_StopStream/CloseStream) için en uzun bekleme
 
     def __init__(self, device: str | None = None, channels: int = 1):
         self.device = device
@@ -154,6 +156,7 @@ class AudioCapture:
         self.overflows = 0
         self.dropped_blocks = 0
         self.error: str | None = None          # WAV yazıcısının hatası (disk dolu...); stop() AudioResult'a taşır
+        self.close_error: str | None = None    # akış kapanmadı (sürücü takıldı ya da hata verdi); stop() taşır
         self.samplerate = 48000
         self._stream = None
         self._wav: wave.Wave_write | None = None
@@ -163,6 +166,8 @@ class AudioCapture:
         self.path: Path | None = None
 
     def start(self, path: Path) -> None:
+        """WAV'ı açar, yazıcı iş parçacığını ve akışı başlatır. Bir adım düşerse (aygıt meşgul ya da çıkarıldı:
+        PaErrorCode -9985) yarım açılış geri alınır, istisna yine fırlar (_abandon_start)."""
         sd = _sd()
         idx, info = self._pick_device(sd)
         self.samplerate = int(info.get("default_samplerate") or 48000)     # aygıtın kendi hızı: yeniden örnekleme yok
@@ -170,16 +175,43 @@ class AudioCapture:
         self.channels = channels
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._wav = wave.open(str(self.path), "wb")
-        self._wav.setnchannels(channels)
-        self._wav.setsampwidth(2)
-        self._wav.setframerate(self.samplerate)
-        self._stop.clear()
-        self._writer = threading.Thread(target=self._write_loop, daemon=True)
-        self._writer.start()
-        self._stream = sd.InputStream(device=idx, samplerate=self.samplerate, channels=channels, dtype="int16",
-                                      latency="high", callback=self._callback)
-        self._stream.start()
+        try:
+            self._wav = wave.open(str(self.path), "wb")
+            self._wav.setnchannels(channels)
+            self._wav.setsampwidth(2)
+            self._wav.setframerate(self.samplerate)
+            self._stop.clear()
+            self._writer = threading.Thread(target=self._write_loop, daemon=True)
+            self._writer.start()
+            self._stream = sd.InputStream(device=idx, samplerate=self.samplerate, channels=channels, dtype="int16",
+                                          latency="high", callback=self._callback)
+            self._stream.start()
+        except BaseException:
+            self._abandon_start()
+            raise
+
+    def _abandon_start(self) -> None:
+        """Yarım açılışı geri alır (k2): açılan akış kapanır, yazıcı durur, WAV kapanıp silinir (içinde ses yok).
+        Eskiden her başarısız denemede bir yazıcı iş parçacığı ve açık 0 B'lık WAV kalıyordu; Windows'ta dosya
+        kilitli kalıyordu. İstisna fırlatmaz: asıl hata start()'tan fırlar."""
+        stream, self._stream = self._stream, None
+        if stream is not None:
+            self._close_stream(stream)
+        self._stop.set()
+        if self._writer is not None:
+            self._writer.join(timeout=5)
+            self._writer = None
+        if self._wav is not None:
+            try:
+                self._wav.close()
+            except Exception:  # noqa: BLE001 - kapatılamayan boş WAV: silmeyi yine dene
+                pass
+            self._wav = None
+        if self.path is not None:
+            try:
+                self.path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _pick_device(self, sd) -> tuple[int | None, dict]:
         """Aygıtı sağlam çöz: seçilen ad, sonra PortAudio varsayılanı, o da yoksa listedeki ilk mikrofon.
@@ -246,14 +278,36 @@ class AudioCapture:
             self.error = _reason(err)
             crash_log.log_handled(err, "ses yazıcısı")
 
+    def _close_stream(self, stream) -> str | None:
+        """Akışı (Pa_StopStream + Pa_CloseStream) yardımcı iş parçacığında kapatır, en çok STREAM_STOP_S bekler; sorun
+        metni ya da None döner. Bu adım kapanışın tek sınırsız adımıydı (k1): USB mikrofon çekilince takılan sürücüde
+        stop() hiç dönmüyordu. Akıştan istisna gelirse de (sounddevice hatayı varsayılan olarak yutar; başka bir
+        sürüm ya da sarmalayıcı fırlatabilir) WAV kapanmadan fırlıyor, ses hiç birleşmiyordu. Takılan iş parçacığı
+        geride kalır (daemon); geri çağrı gelirse kuyruğa düşer, kimse okumaz, zararsız."""
+        problems: list[str] = []
+        done = threading.Event()
+
+        def close() -> None:
+            for step in (stream.stop, stream.close):
+                try:
+                    step()
+                except Exception as err:  # noqa: BLE001 - sebep sonuca, ayrıntı hatalar.log'a
+                    problems.append(_reason(err))
+                    crash_log.log_handled(err, "mikrofon akışı kapatılırken")
+            done.set()
+        threading.Thread(target=close, daemon=True, name="mikrofon-akışı-kapanış").start()
+        if not done.wait(self.STREAM_STOP_S):
+            limit = f"{self.STREAM_STOP_S:g}".replace(".", ",")
+            return f"ses sürücüsü akışı kapatamadı ({limit} sn içinde yanıt vermedi)"
+        return "; ".join(problems) or None
+
     def stop(self) -> AudioResult:
+        """Akışı kapatır (sınırlı: _close_stream), kuyrukta kalanı WAV'a yazıp dosyayı kapatır ve sonucu döner. Sürücü
+        takılsa ya da hata verse de o ana dek gelen ses yazılır; sorun close_error'da. İstisna fırlatmaz."""
         stopped = time.monotonic()
         if self._stream is not None:
-            try:
-                self._stream.stop()
-                self._stream.close()
-            finally:
-                self._stream = None
+            self.close_error = self._close_stream(self._stream)
+            self._stream = None
         self._stop.set()
         if self._writer is not None:
             self._writer.join(timeout=15)
@@ -267,4 +321,4 @@ class AudioCapture:
             self._wav = None
         return AudioResult(self.path or Path(), self.samplerate, self.channels, self.samples,
                            self.first_sample_monotonic, stopped, self.overflows, self.dropped_blocks, self.error,
-                           self.last_sample_monotonic)
+                           self.last_sample_monotonic, self.close_error)

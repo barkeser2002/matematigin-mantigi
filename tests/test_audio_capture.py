@@ -283,6 +283,63 @@ def test_capture_records_when_the_last_sample_arrived(tmp_path, monkeypatch):
     assert res.tail_gap == pytest.approx(res.stopped_monotonic - res.last_sample_monotonic) and res.tail_gap >= 0.3
 
 
+# --- k1/k2: sürücü takılınca kapanış sınırlı, yarım açılış iz bırakmaz ---------------------------------------
+
+def _wav_frames(path) -> int:
+    with wave.open(str(path), "rb") as w:
+        return w.getnframes()
+
+
+@pytest.mark.parametrize("driver", ["takılıyor", "hata veriyor"])
+def test_stop_keeps_the_sound_when_the_driver_hangs_or_fails_closing_the_stream(tmp_path, monkeypatch, driver):
+    """k1: akışın kapanması (Pa_StopStream) kapanışın sınırsız adımıydı: USB mikrofon çekilince takılan sürücüde stop()
+    hiç dönmüyor, kaydedici sonsuza dek 'kaydediliyor'da kalıyordu. Akıştan istisna gelince de (sounddevice varsayılan
+    olarak yutar; başka bir sürüm fırlatabilir) stop() WAV'ı kapatmadan fırlatıyor, kaydedici sesi hiç
+    birleştirmiyordu. Şimdi akış yardımcı iş parçacığında en çok STREAM_STOP_S beklenir; takılsa da hata verse de o
+    ana dek gelen ses WAV'a yazılıp dosya kapanır, sonuç döner ve sorun close_error'da."""
+    release = threading.Event()
+    sd = FakeSoundDevice(blocks=10)
+
+    def stop(stream):
+        if driver == "takılıyor":
+            release.wait(30)                                    # sürücü takıldı (test sonunda bırakılır)
+        else:
+            raise RuntimeError("Error stopping stream: Unanticipated host error [PaErrorCode -9999]")
+    sd.InputStream.stop = stop
+    monkeypatch.setattr(ac, "_sd", lambda: sd)
+    monkeypatch.setattr(ac.AudioCapture, "STREAM_STOP_S", 0.3)
+    cap = ac.AudioCapture("USB Mikrofon")
+    cap.start(tmp_path / "a.wav")
+    assert sd.fed.wait(10)
+    try:
+        res = cap.stop()
+    finally:
+        release.set()
+    assert res.samples == 10 * 960 and _wav_frames(tmp_path / "a.wav") == 10 * 960     # o ana dek gelen ses tam
+    assert res.error is None                                                            # WAV sağlam
+    expected = "0,3 sn içinde yanıt vermedi" if driver == "takılıyor" else "Unanticipated host error"
+    assert res.close_error and expected in res.close_error, res.close_error
+
+
+def test_start_that_cannot_open_the_stream_leaves_nothing_behind(tmp_path, monkeypatch):
+    """k2: InputStream açılamayınca (aygıt meşgul ya da çıkarıldı: PaErrorCode -9985) WAV açık, yazıcı iş parçacığı
+    canlı kalıyordu; her denemede bir tane daha, Windows'ta açık WAV kilitli, klasörde 0 B'lık WAV. Şimdi start()
+    yarım açılışını temizler: istisna yine fırlar, yazıcı durur, WAV kapanıp silinir."""
+    sd = FakeSoundDevice(blocks=0)
+
+    class Busy:
+        def __init__(self, *a, **k):
+            raise RuntimeError("Error opening InputStream: Device unavailable [PaErrorCode -9985]")
+    sd.InputStream = Busy
+    monkeypatch.setattr(ac, "_sd", lambda: sd)
+    cap = ac.AudioCapture("USB Mikrofon")
+    with pytest.raises(RuntimeError, match="Device unavailable"):
+        cap.start(tmp_path / "a.wav")
+    assert cap._writer is None or not cap._writer.is_alive()
+    assert cap._wav is None and not (tmp_path / "a.wav").exists()
+    assert not [t for t in threading.enumerate() if getattr(getattr(t, "_target", None), "__self__", None) is cap]
+
+
 @pytest.mark.skipif(not ac.list_input_devices(), reason="mikrofon yok")
 def test_real_microphone_short_capture(tmp_path):
     import sounddevice

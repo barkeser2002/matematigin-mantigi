@@ -401,3 +401,103 @@ def test_failed_mux_does_not_move_the_raw_video_and_names_both_files(tmp_path, m
     assert re.search(re.escape(f"{video} (video ") + r"0:0\d\)", err), err
     assert re.search(re.escape(f"{wav} (ses sağlam, ") + r"0:0\d\)", err), err
     assert abs(_stream_seconds(find_ffmpeg(), video, "-an") - rec.frames_written / 20) < 0.15    # video tam
+
+
+# --- k1/k2: mikrofonun kapanışı sınırlı, yarım açılan mikrofon iz bırakmaz -----------------------------------
+
+@needs_ffmpeg
+def test_microphone_that_never_closes_does_not_hold_the_video_and_its_file_is_named(tmp_path, monkeypatch):
+    """k1 (son inceleme s5): mikrofonun kapanması kapanışın tek sınırsız adımıydı ve ffmpeg'e EOF'tan ÖNCE koşuyordu:
+    ses sürücüsü stop()'ta takılınca kaydedici sonsuza dek 'kaydediliyor'da kalıyor, ffmpeg EOF almadığı için video
+    bitmiyordu (moov yok). Şimdi mikrofon yardımcı iş parçacığında kapanır, ffmpeg beklemeden EOF alır; mikrofon
+    AUDIO_STOP_S içinde kapanmazsa video sessiz kaydedilir, hata sesin ayrı dosyada durduğunu ve yerini söyler."""
+    from matematigin_mantigi.core import recorder as r
+    release, entered = threading.Event(), threading.Event()
+
+    class StuckMic(FakeAudioCapture):
+        def start(self, path):                                          # gerçek yakalayıcı gibi WAV başta açılır
+            super().start(path)
+            with wave.open(str(path), "wb") as w:
+                w.setnchannels(1); w.setsampwidth(2); w.setframerate(48000); w.writeframes(bytes(9600))
+
+        def stop(self):
+            entered.set()
+            release.wait(60)                                            # sürücü takıldı (test sonunda bırakılır)
+            return super().stop()
+    monkeypatch.setattr(r, "AUDIO_STOP_S", 1.0)                         # gerçek sınır 25 sn
+    rec = MssFfmpegRecorder(lambda: tmp_path, fps=20, grabber=synthetic_grabber, out_height=0,
+                            audio_device="Sahte Mikrofon", audio_factory=StuckMic, clock=stepping_clock())
+    rec.start(RecordRect(0, 0, 160, 120))
+    wait_until(lambda: rec.frames_written >= 20)
+    try:
+        path = rec.stop()
+        assert entered.is_set() and not release.is_set()                # mikrofon hâlâ takılı, kapanış bitti
+    finally:
+        release.set()
+    assert rec.state is RecorderState.IDLE
+    exe = find_ffmpeg()
+    assert abs(_stream_seconds(exe, path, "-an") - rec.frames_written / 20) < 0.15    # video bitti (EOF aldı)
+    _, wav = _raw_files(path)
+    err = rec.error or ""
+    assert re.match(r"Mikrofon \d+ sn içinde kapanmadı \(ses sürücüsü yanıt vermedi\); ses videoya eklenemedi\. "
+                    r"Video sessiz kaydedildi: ", err), err
+    assert f"{path}\nSes ayrı dosyada (silinmedi): {wav}" in err, err
+
+
+@needs_ffmpeg
+def test_driver_that_hangs_closing_the_stream_still_gives_a_recording_with_sound(tmp_path, monkeypatch):
+    """k1, gerçek AudioCapture: sürücü akışı kapatırken takılırsa (s5) AudioCapture STREAM_STOP_S sonra o ana dek gelen
+    sesi WAV'a yazıp kapatır; kayıt sesiyle birleştirilir, durum satırı mikrofonun düzgün kapanmadığını söyler."""
+    from matematigin_mantigi.core import audio_capture as ac
+    from tests.test_audio_capture import FakeSoundDevice
+    release = threading.Event()
+    sd = FakeSoundDevice(blocks=50)                                     # 1 sn ses
+    sd.InputStream.stop = lambda stream: release.wait(60)
+    monkeypatch.setattr(ac, "_sd", lambda: sd)
+    monkeypatch.setattr(ac.AudioCapture, "STREAM_STOP_S", 0.5)
+    rec = MssFfmpegRecorder(lambda: tmp_path, fps=20, grabber=synthetic_grabber, out_height=0,
+                            audio_device="USB Mikrofon", clock=stepping_clock())
+    rec.start(RecordRect(0, 0, 160, 120))
+    assert sd.fed.wait(10)
+    wait_until(lambda: rec.frames_written >= 20)
+    try:
+        path = rec.stop()
+    finally:
+        release.set()
+    assert rec.error is None, rec.error
+    assert rec.audio_result.samples == 50 * 960
+    assert "Mikrofon düzgün kapanmadı (ses sürücüsü akışı kapatamadı (0,5 sn içinde yanıt vermedi))" in (
+        rec.audio_error or ""), rec.audio_error
+    assert _stream_seconds(find_ffmpeg(), path, "-vn") >= 0.9            # ses birleşik dosyada
+
+
+@needs_ffmpeg
+def test_microphone_that_cannot_open_leaks_no_writer_and_leaves_no_wav(tmp_path, monkeypatch):
+    """k2 (son inceleme s6): InputStream açılamayınca her denemede bir yazıcı iş parçacığı ve açık 0 B'lık WAV
+    kalıyordu (Windows'ta kilitli). Şimdi kayıt sessiz sürer, iz kalmaz."""
+    from matematigin_mantigi.core import audio_capture as ac
+    from tests.test_audio_capture import FakeSoundDevice
+    sd = FakeSoundDevice(blocks=0)
+
+    class Busy:
+        def __init__(self, *a, **k):
+            raise RuntimeError("Error opening InputStream: Device unavailable [PaErrorCode -9985]")
+    sd.InputStream = Busy
+    monkeypatch.setattr(ac, "_sd", lambda: sd)
+
+    def writers() -> int:
+        return sum(1 for t in threading.enumerate() if getattr(getattr(t, "_target", None), "__name__", "") ==
+                   "_write_loop")
+    before = writers()
+    rec = MssFfmpegRecorder(lambda: tmp_path, fps=20, grabber=synthetic_grabber, out_height=0,
+                            audio_device="USB Mikrofon", clock=stepping_clock())
+    for _ in range(2):
+        rec.start(RecordRect(0, 0, 160, 120))
+        wait_until(lambda: rec.frames_written >= 5)
+        path = rec.stop()
+        assert rec.audio_error == "Mikrofon açılamadı: Error opening InputStream: Device unavailable [PaErrorCode " \
+                                  "-9985]", rec.audio_error
+        assert path.exists() and rec.error is None, rec.error
+    assert writers() == before
+    assert not list(tmp_path.glob("*.wav"))
+

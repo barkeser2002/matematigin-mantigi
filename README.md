@@ -208,7 +208,10 @@ yerlerini yazar. Kodlayıcı gerçek zamana yetişemezse (yazılan kare duvar sa
 kareler yazılmaz (2 sn'den azsa yazılır): video düğmeye basılan andan erken biter, birleşik dosyada ses yine sonuna
 dek sürer (son kare ekranda kalır) ve durum satırı uyarır ("UYARI: Görüntü kodlayıcısı kayda yetişemedi: …"). Ara
 video moov'u sona yazar (`+faststart` yok: kapanışta 7 GB'lık dosyayı yeniden yazmak dakikalar sürebiliyordu);
-faststart yalnız birleşik dosyada. Kayıt başlatılamazsa (ffmpeg yok, kayıt
+faststart yalnız birleşik dosyada. Mikrofon videoyla aynı anda, ayrı iş parçacığında kapanır: ses sürücüsü akışı
+kapatırken takılırsa (USB mikrofon çekildi) 5 sn sonra o ana dek gelen sesle devam edilir ve durum satırı uyarır;
+mikrofon 25 sn içinde hiç kapanmazsa video sessiz kaydedilir, pencere ses dosyasının yerini yazar. Mikrofon
+açılamazsa kayıt sessiz sürer, geride ses dosyası ya da iş parçacığı kalmaz. Kayıt başlatılamazsa (ffmpeg yok, kayıt
 klasörü ya da dosyası açılamıyor: disk dolu, izin yok; beklenmeyen bir hata da) sebebi bir pencerede yazar, açılmış
 ffmpeg ve mikrofon kapatılır, araç çubuğu "KAYIT"a döner. Kayıt hataları, ses uyarıları ve kayıt yolunda yakalanan
 istisnalar veri klasöründeki `hatalar.log`'a da yazılır. Windows'ta ffmpeg çağrıları konsol penceresi açmaz.

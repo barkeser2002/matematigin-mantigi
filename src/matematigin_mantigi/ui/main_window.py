@@ -60,6 +60,7 @@ SAVING_ALERT = "Kayıt kaydediliyor…"   # kapanış (ffmpeg + ses birleştirme
 CLOSING_ALERT = "Kayıt kaydediliyor… bitince pencere kapanacak"     # pencere kapatılmak istendi, kayıt bekleniyor
 STOP_AND_QUIT, KEEP_RECORDING = "Durdur ve çık", "Kayda devam et"   # kayıt sürerken kapatma sorusunun düğmeleri
 # Kayıt pencerelerinin metni kendi başına anlaşılır olmalı: Qt macOS'ta QMessageBox başlığını göstermez.
+START_FAILED = "Kayıt başlamadı."
 RECORD_FAILED = "Kayıt düzgün tamamlanamadı."
 
 
@@ -365,16 +366,18 @@ class MainWindow(QMainWindow):
 
     def _record_start_failed(self, err: Exception) -> None:
         """Kayıt başlamadı: araç çubuğu 'kayıt yok'a döner, sebep pencerede (her denemede), ayrıntı hatalar.log'da.
-        OSError (disk, izin) ve beklenmeyen hata da buraya gelir: yuvadan kaçıp düğmeyi 'kayıtta' bırakmasın."""
+        OSError (disk, izin) ve beklenmeyen hata da buraya gelir: yuvadan kaçıp düğmeyi 'kayıtta' bırakmasın. Metin
+        başlıksız da anlaşılır: Qt macOS'ta QMessageBox başlığını göstermez ('Beklenmeyen hata: …' tek başına
+        neyin olmadığını söylemiyordu)."""
         self.toolbar.set_recording(False)
         crash_log.log_handled(err, "kayıt başlatma")
         if isinstance(err, RecorderError):
-            text = str(err)
+            reason = str(err)
         elif isinstance(err, OSError):
-            text = f"Kayıt dosyası yazılamadı: {err}\n{DISK_HINT}"
+            reason = f"Kayıt dosyası yazılamadı: {err}\n{DISK_HINT}"
         else:
-            text = f"Beklenmeyen hata: {exception_text(err)}"
-        QMessageBox.warning(self, "Kayıt başlatılamadı", text)
+            reason = f"Beklenmeyen hata: {exception_text(err)}"
+        QMessageBox.warning(self, "Kayıt başlatılamadı", f"{START_FAILED}\n{reason}")
 
     def _on_record_stopped(self, path) -> None:
         worker, exc = self._stop_worker, None
@@ -441,17 +444,22 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Kayıt kaydedildi", text)
 
     def _report_record_result(self, path, exc: str | None) -> None:
-        """Hata pencerede (o an kayıt yok); başarı ve ses uyarısı durum satırında."""
+        """Hata pencerede (o an kayıt yok), ses uyarısıyla birlikte. Başarı durum satırında; başarılı kaydın ses uyarısı
+        (mikrofon kesildi) uyarı kutusunda: durum satırı sahnede, sonraki kayda girer ve uyarı taşımaz (Temel ilke).
+        Eskiden hata varken ses uyarısı atılıyordu (ffmpeg kayıt ortasında ölünce yalnız 'ffmpeg borusu kapandı'
+        görünüyordu); başarıda da yalnız durum satırındaydı."""
         err, audio_err = self._record_problems(exc)
         if err:
-            QMessageBox.warning(self, "Kayıt hatası", err)
+            QMessageBox.warning(self, "Kayıt hatası", _record_error_text(err, audio_err))
             return
-        if path is None:
-            return
-        parts = self._record_details()
+        if path is not None:
+            details = self._record_details()
+            self.work_area.set_status(f"Kayıt kaydedildi: {path}" + (" · " + " · ".join(details) if details else ""))
         if audio_err:
-            parts.append(f"UYARI: {audio_err}")
-        self.work_area.set_status(f"Kayıt kaydedildi: {path}" + (" · " + " · ".join(parts) if parts else ""))
+            # Her kaydın uyarısı kendi anahtarıyla: aynı anahtar oturumda bir kez gösterilir.
+            where = f"Kayıt kaydedildi: {path}\n" if path is not None else ""
+            error_notice.post("Kayıtta ses sorunu", f"{where}{_sound_text(audio_err)}",
+                              key=f"kayit-sesi:{path if path is not None else audio_err}")
 
     def _check_recorder(self, _seconds: int) -> None:
         """Yazıcı borusu koptuysa (ffmpeg çöktü) kaydı hemen kapat ve kullanıcıya söyle."""

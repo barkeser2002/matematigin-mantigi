@@ -4,6 +4,7 @@ from PyQt6.QtGui import QColor
 
 from matematigin_mantigi.core import layout_model as lm
 from matematigin_mantigi.core.models import SAMPLE_QUESTIONS, HintMaskMode, QuestionStatus, Tool
+from matematigin_mantigi.ui.main_window import RECORD_FAILED
 
 
 @pytest.fixture(autouse=True)
@@ -335,7 +336,7 @@ def test_recorder_error_reverts_button(window, qtbot, monkeypatch):
     monkeypatch.setattr(window.recorder, "start", boom)
     qtbot.mouseClick(window.toolbar.record_button, Qt.MouseButton.LeftButton)
     assert not window.recorder.is_recording and not window.toolbar.record_button.isChecked()
-    assert shown and "ffmpeg" in shown[0]
+    assert shown and shown[0].startswith("Kayıt başlamadı") and "ffmpeg bulunamadı" in shown[0], shown
 
 
 def test_real_recorder_through_window(window, qtbot, tmp_path):
@@ -383,20 +384,20 @@ def test_real_recorder_with_audio_muxes_and_cleans_up(window, qtbot, tmp_path):
     assert frames > 10
 
 
-def test_microphone_cut_warning_reaches_the_status_line(window, qtbot, tmp_path, monkeypatch):
+def test_microphone_cut_warning_reaches_the_notice_box_not_the_board(window, qtbot, tmp_path, monkeypatch):
     """Mikrofon kayıt sırasında kesilince (gerçek AudioCapture, sahte sounddevice, gerçek ffmpeg) kayıt videonun
-    tam uzunluğunda kaydedilir ve uyarı durum satırına ulaşır: 'Kayıt kaydedildi: … · UYARI: Mikrofon kayıt
-    sırasında kesildi (…)'. Video sağlam olduğu için 'Kayıt hatası' penceresi açılmaz."""
+    tam uzunluğunda kaydedilir; ses uyarısı uyarı kutusuna gider, dosyanın yeriyle. Eskiden yalnız durum satırına
+    ('… · UYARI: Mikrofon kayıt sırasında kesildi') yazılıyordu: durum satırı sahnede, sonraki kayda girer ve uyarı
+    yeri değildir (Temel ilke). Video sağlam olduğu için 'Kayıt hatası' penceresi açılmaz."""
     import pytest
-    from PyQt6.QtWidgets import QMessageBox
     from matematigin_mantigi.core import audio_capture as ac
     from matematigin_mantigi.core.recorder import MssFfmpegRecorder, find_ffmpeg
     from tests.test_audio_capture import FakeSoundDevice
     from tests.test_recorder import stepping_clock, synthetic_grabber, wait_until
     if find_ffmpeg() is None:
         pytest.skip("ffmpeg yok")
-    shown = []
-    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: shown.append(a[1:3])))
+    shown = _capture_modals(monkeypatch)
+    posted = _capture_notices(monkeypatch)
     sd = FakeSoundDevice(blocks=15)                                       # 0,3 sn ses, sonra mikrofon susar
     monkeypatch.setattr(ac, "_sd", lambda: sd)
     window.settings.audio_device = "USB Mikrofon"
@@ -407,10 +408,66 @@ def test_microphone_cut_warning_reaches_the_status_line(window, qtbot, tmp_path,
     wait_until(lambda: rec.frames_written >= 3 * rec.fps and sd.fed.is_set())   # 3 sn video (ayardaki fps)
     qtbot.keyClick(window, Qt.Key.Key_R)
     qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=20000)
+    assert rec.audio_error and "Mikrofon kayıt sırasında kesildi" in rec.audio_error, rec.audio_error
     text = window.work_area.status_label.text()
-    assert text.startswith(f"Kayıt kaydedildi: {rec.last_path}"), text
-    assert "UYARI: Mikrofon kayıt sırasında kesildi (0:00. dakikadan sonra ses yok)" in text, text
+    assert text.startswith(f"Kayıt kaydedildi: {rec.last_path}") and rec.audio_error not in text, text
+    assert len(posted) == 1 and rec.audio_error in posted[0][1] and str(rec.last_path) in posted[0][1], posted
     assert shown == [] and rec.last_path.exists() and not list(rec.last_path.parent.glob("*.video.mp4"))
+
+
+def test_microphone_warning_of_each_saved_recording_is_shown_outside_the_board(window, monkeypatch):
+    """P2: başarılı kaydın ses uyarısı durum satırında değil uyarı kutusunda (kayıt bitti: açık yerde). Her kaydın
+    uyarısı ayrı anahtarla gelir: aynı anahtarla oturumun ikinci kaydının uyarısı hiç gösterilmezdi."""
+    from pathlib import Path
+    from matematigin_mantigi.core.recorder import NullRecorder
+
+    class MicCut(NullRecorder):                       # anında durur; sonuç alanları bu testin kendi metni
+        audio_error = None
+        count = 0
+
+        def stop(self):
+            super().stop()
+            MicCut.count += 1
+            self.audio_error = f"Mikrofon kayıt sırasında kesildi (yapay {MicCut.count})"
+            return Path("oturum") / f"kayit_{MicCut.count}.mp4"
+    shown = _capture_modals(monkeypatch)
+    posted = _capture_notices(monkeypatch)
+    window.recorder = MicCut()
+    for _ in range(2):
+        window.toggle_recording(True)
+        window.toggle_recording(False)
+    status = window.work_area.status_label.text()
+    assert "kayit_2.mp4" in status and "Mikrofon" not in status and "UYARI" not in status, status
+    assert shown == [] and len(posted) == 2 and posted[0][2] != posted[1][2], posted
+    for i, (_title, text, _key) in enumerate(posted, start=1):
+        assert f"Mikrofon kayıt sırasında kesildi (yapay {i})" in text and f"kayit_{i}.mp4" in text, text
+
+
+def test_record_error_window_also_tells_what_happened_to_the_sound(window, qtbot, monkeypatch):
+    """P2: ffmpeg kayıt ortasında ölünce (mikrofonlu kayıt) 'Kayıt hatası' penceresi yalnız 'ffmpeg borusu kapandı:
+    ayrıntı yok' diyordu; kaydedicinin ses uyarısı (ses ayrı dosyada, birleştirilemedi) atılıyordu. Pencere ikisini
+    birlikte söyler. P6: metin başlıksız da anlaşılır (Qt macOS'ta QMessageBox başlığını göstermez)."""
+    from matematigin_mantigi.core.recorder import NullRecorder
+
+    class PipeDied(NullRecorder):                     # kapanış _StopWorker'da; kendi metinleri (kaydedicininki değil)
+        stop_is_quick = False
+        error = audio_error = None
+
+        def stop(self):
+            super().stop()
+            self.error = "yapay boru hatası: ayrıntı yok"
+            self.audio_error = "Ses birleştirilemedi: yapay sebep; ses ayrı dosyada duruyor"
+            return None
+    shown = _capture_modals(monkeypatch)
+    window.recorder = PipeDied()
+    tb = window.toolbar
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=10000)
+    assert len(shown) == 1, shown
+    text = shown[0][1]
+    assert text.startswith(RECORD_FAILED) and "yapay boru hatası: ayrıntı yok" in text, text
+    assert "Ses birleştirilemedi: yapay sebep; ses ayrı dosyada duruyor" in text, text
 
 
 # --- #2: kayıt kaydedilirken yeni kayıt yok; uyarı araç çubuğunda (denetim app#1, e2e#2) -----------------------
@@ -564,8 +621,8 @@ def test_exception_while_saving_is_shown_and_window_does_not_stay_locked(window,
     monkeypatch.setattr(Path, "replace", busy)                 # mikrofonsuz kayıt: .video.mp4 -> .mp4 patlar
     qtbot.keyClick(window, Qt.Key.Key_R)
     qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=20000)
-    assert shown and shown[0][0] == "Kayıt hatası" and "dosya kullanımda" in shown[0][1]
-    assert shown[0][1] == rec.error and f"Kayıt klasörü: {tmp_path / 'rec'}" in rec.error, shown
+    assert shown and shown[0][1].startswith(RECORD_FAILED) and "dosya kullanımda" in shown[0][1], shown
+    assert rec.error in shown[0][1] and f"Kayıt klasörü: {tmp_path / 'rec'}" in rec.error, shown
     assert (PermissionError, "kayıt kapanışı") in [(type(e), where) for e, where in logged]
     assert tb.alert_label.isHidden() and rec.state is RecorderState.IDLE
     monkeypatch.setattr(Path, "replace", real_replace)
@@ -592,7 +649,7 @@ def test_record_start_oserror_is_shown_and_toolbar_returns_to_idle(window, qtbot
     monkeypatch.setattr(window.recorder, "start", disk_full)
     tb = window.toolbar
     qtbot.mouseClick(tb.record_button, Qt.MouseButton.LeftButton)
-    assert shown and shown[0][0] == "Kayıt başlatılamadı"
+    assert shown and shown[0][1].startswith("Kayıt başlamadı"), shown        # başlıksız da anlaşılır (macOS)
     assert "Kayıt dosyası yazılamadı" in shown[0][1] and "No space left on device" in shown[0][1]
     assert window.recorder.state is RecorderState.IDLE and not window.badge.active
     assert not tb.record_button.isChecked() and tb.record_label.text() == "KAYIT"
@@ -616,7 +673,8 @@ def test_unexpected_record_start_error_is_shown_logged_and_toolbar_returns_to_id
     monkeypatch.setattr(window.recorder, "start", boom)
     tb = window.toolbar
     qtbot.mouseClick(tb.record_button, Qt.MouseButton.LeftButton)
-    assert shown == [("Kayıt başlatılamadı", "Beklenmeyen hata: RuntimeError: can't start new thread")]
+    assert [text for _title, text in shown] == [
+        "Kayıt başlamadı.\nBeklenmeyen hata: RuntimeError: can't start new thread"]      # başlıksız da anlaşılır
     assert not tb.record_button.isChecked() and tb.record_label.text() == "KAYIT" and not window.badge.active
     qtbot.keyClick(window, Qt.Key.Key_R)                                  # R aynı yoldan; ikinci deneme de sessiz değil
     assert len(shown) == 2 and not tb.record_button.isChecked()
@@ -644,7 +702,7 @@ def test_stop_error_without_message_is_still_shown_and_logged(window, qtbot, mon
     qtbot.keyClick(window, Qt.Key.Key_R)
     qtbot.keyClick(window, Qt.Key.Key_R)
     qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=10000)
-    assert shown == [("Kayıt hatası", "OSError()")]
+    assert [text for _title, text in shown] == [f"{RECORD_FAILED}\nOSError()"]
     assert [(type(e), where) for e, where in logged] == [(OSError, "kayıt kapanışı")]
 
 
@@ -670,7 +728,7 @@ def test_ffmpeg_dying_at_start_shows_why_and_where_the_sound_is(window, qtbot, t
     wait_until(lambda: rec.failed)
     window.badge.tick()                                                 # _check_recorder kaydı kapatır
     qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=10000)
-    assert len(shown) == 1 and shown[0][0] == "Kayıt hatası", shown
+    assert len(shown) == 1 and shown[0][1].startswith(RECORD_FAILED), shown
     text = shown[0][1]
     assert "No space left on device" in text and str(rec.last_path.with_suffix(".wav")) in text, text
     assert "No such file" not in text and rec.last_path.with_suffix(".wav").exists()
@@ -1225,7 +1283,7 @@ def _capture_modals(monkeypatch) -> list:
 
 
 def _wired_notice(window, monkeypatch):
-    """Gerçek uyarı kutusu, uygulamadaki gibi pencereye bağlı (app._wire_notice) ve modül düzeyindeki post()'un hedefi."""
+    """Gerçek uyarı kutusu: uygulamadaki gibi pencereye bağlı (app._wire_notice), modül düzeyindeki post()'un hedefi."""
     from matematigin_mantigi import app as app_mod
     from matematigin_mantigi.ui import error_notice
     notice = error_notice.ErrorNotice()
@@ -1354,8 +1412,8 @@ def test_close_error_is_reported_and_camera_and_settings_still_shut_down(window,
     window.close()
     assert len(asked) == 1 and not window.isVisible()
     assert shut == [()] and synced == [1]
-    assert shown == [("Kayıt hatası", "Kayıt kapatılamadı: PermissionError: [Errno 13] Permission denied: "
-                                     "'kayit.mp4'")], shown
+    assert [text for _title, text in shown] == [
+        "Kayıt kapatılamadı: PermissionError: [Errno 13] Permission denied: 'kayit.mp4'"], shown
     assert [(type(e), where) for e, where in logged] == [(PermissionError, "pencere kapanışı")]
 
 
@@ -1410,8 +1468,8 @@ def test_stop_and_quit_shows_the_result_and_the_waiting_notices_in_one_window_th
     """P1: 'Durdur ve çık'tan sonra kayıt başarıyla biterse pencere kapanıyor, mikrofon uyarısı ve kayıt sırasında
     biriken uyarılar ('Tahta görüntüsü kaydedilemedi') hiç görünmüyordu; hatayla biterse uyarı kutusu 'Kayıt hatası'
     penceresinin çocuğu olup onunla siliniyor, gizlenen ana pencerenin altında yeniden açılıyordu. Şimdi pencere
-    kapanmadan önce TEK pencerede: kaydın sonucu (dosya ya da hata), ses uyarısı ve bütün bekleyen uyarılar. Sonra pencere
-    kapanır; arkada kutu, şerit, yoklama kalmaz."""
+    kapanmadan önce TEK pencerede: kaydın sonucu (dosya ya da hata), ses uyarısı ve bütün bekleyen uyarılar. Sonra
+    pencere kapanır; arkada kutu, şerit, yoklama kalmaz."""
     from pathlib import Path
     from matematigin_mantigi.core.recorder import NullRecorder
     from matematigin_mantigi.ui import error_notice

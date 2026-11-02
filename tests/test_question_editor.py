@@ -1,10 +1,19 @@
+import errno
+import json
+import os
+import subprocess
+import sys
+import zipfile
+from pathlib import Path
+
+import openpyxl
 import pytest
 from PyQt6.QtCore import QLocale, Qt
 from PyQt6.QtGui import QImage
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
 from matematigin_mantigi.core.models import Question, SAMPLE_QUESTIONS
-from matematigin_mantigi.core.question_loader import load_questions, save_question_image
+from matematigin_mantigi.core.question_loader import load_questions, save_question_image, write_questions
 from matematigin_mantigi.ui.question_editor import QuestionEditorDialog, _display_id
 from matematigin_mantigi.ui.theme import FontFamilies
 
@@ -302,3 +311,118 @@ def test_image_copy_error_shows_message_and_keeps_previous_image(qtbot, tmp_path
     d.choose_image_button.click()
     assert shown and shown[0][0] == "Görsel eklenemedi" and "erişim izni yok" in shown[0][1]
     assert d.image_edit.text() == before and d.isVisible()
+
+
+# --- Kaydet yarıda kalırsa dosya bozulmaz, mesaj bunu doğru söyler (B-2) --------------------------------------
+def _existing(tmp_path) -> tuple:
+    path = tmp_path / "sorular_sablon.xlsx"
+    write_questions(path, SAMPLE_QUESTIONS)
+    return path, path.read_bytes()
+
+
+def test_save_failing_mid_write_keeps_the_file_and_says_so(qtbot, tmp_path, monkeypatch):
+    """B-2: Kaydet yazımın ortasında hata alınca (dolu disk) dosya yarım kalıyor, uyarı bunu söylemiyordu; Vazgeç'ten
+    sonra uygulama bir daha açılmıyordu. Artık dosya eski hâliyle kalır ve mesaj bunu söyler."""
+    path, before = _existing(tmp_path)
+    shown = _capture_warnings(monkeypatch)
+
+    def half_written(self, filename):
+        Path(filename).write_bytes(b"PK\x03\x04 yarim")
+        raise OSError(errno.ENOSPC, "No space left on device")
+    monkeypatch.setattr(openpyxl.Workbook, "save", half_written)
+    d, _ = _dialog(qtbot, tmp_path)
+    d.soru_edit.setPlainText("Yarıda kalan kayıt")
+    d.save_button.click()
+    assert shown and shown[0][0] == "Kaydedilemedi" and "diskte yer kalmadı" in shown[0][1]
+    assert "değişmedi" in shown[0][1] and d.isVisible()
+    assert path.read_bytes() == before and len(load_questions(path)) == 3
+
+
+def test_save_refused_while_open_in_excel_keeps_the_file(qtbot, tmp_path, monkeypatch):
+    """Windows'ta dosya Excel'de açıkken yeni sürüm yerine konamaz (os.replace PermissionError): dosya değişmez, mesaj
+    Excel'i kapatıp yeniden Kaydet'i söyler ve dosyanın değişmediğini bildirir."""
+    real_replace = os.replace
+    path, before = _existing(tmp_path)
+
+    def locked(src, dst, *a, **k):
+        if os.fspath(dst) == os.fspath(path):
+            raise PermissionError(13, "The process cannot access the file", os.fspath(dst))
+        return real_replace(src, dst, *a, **k)
+    monkeypatch.setattr(os, "replace", locked)
+    shown = _capture_warnings(monkeypatch)
+    d, _ = _dialog(qtbot, tmp_path)
+    d.soru_edit.setPlainText("Excel açıkken")
+    d.save_button.click()
+    assert shown and shown[0][0] == "Kaydedilemedi" and "Excel" in shown[0][1] and "değişmedi" in shown[0][1]
+    assert path.read_bytes() == before and d.isVisible()
+
+
+@pytest.mark.parametrize("err", [zipfile.BadZipFile("bozuk zip"), KeyError("xl/workbook.xml"),
+                                 ValueError("geçersiz hücre değeri")], ids=["BadZipFile", "KeyError", "ValueError"])
+def test_unexpected_save_error_shows_a_message_and_keeps_the_dialog(qtbot, tmp_path, monkeypatch, err):
+    """Kaydet yalnız OSError'ı yakalıyordu: çalışma kitabından gelen BadZipFile, KeyError ya da ValueError yuvadan
+    kaçıp genel hata kutusuna düşüyor, düzenlemeler pencereyle kayboluyordu. Hepsi mesajla, pencere açık kalır."""
+    from matematigin_mantigi.ui import question_editor
+
+    def boom(*_a, **_k):
+        raise err
+    monkeypatch.setattr(question_editor, "write_questions", boom)
+    shown = _capture_warnings(monkeypatch)
+    d, _ = _dialog(qtbot, tmp_path)
+    saved = []
+    d.saved.connect(saved.append)
+    d.save_button.click()
+    assert shown and shown[0][0] == "Kaydedilemedi" and "değişmedi" in shown[0][1]
+    assert d.isVisible() and saved == []
+
+
+# Kaydet'in gerçek hâli: yazımın ORTASINDA işletim sistemi hatası (RLIMIT_FSIZE, write() EFBIG). Ayrı süreçte.
+_SAVE_DISK_FULL = '''
+import json, random, resource, string, sys
+from pathlib import Path
+from PyQt6.QtWidgets import QApplication, QMessageBox
+from matematigin_mantigi.core.models import SAMPLE_QUESTIONS
+from matematigin_mantigi.core.question_loader import load_questions, write_questions
+from matematigin_mantigi.ui.question_editor import QuestionEditorDialog
+from matematigin_mantigi.ui.theme import FontFamilies
+
+app = QApplication(sys.argv)
+path = Path("sorular_sablon.xlsx")
+write_questions(path, SAMPLE_QUESTIONS)
+before = path.read_bytes()
+shown = []
+QMessageBox.warning = staticmethod(lambda _p, title, text, *a, **k: shown.append((title, text)))
+d = QuestionEditorDialog(load_questions(path), path, FontFamilies("Arial", "Arial", False))
+d.show()
+rnd = random.Random(0)
+d.soru_edit.setPlainText("Yeni düzenleme: " + "".join(rnd.choice(string.ascii_letters) for _ in range(6000)))
+soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+resource.setrlimit(resource.RLIMIT_FSIZE, (len(before) + 1500, hard))     # yedek sığar, yeni dosya sığmaz
+d.save_button.click()
+resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
+try:
+    loaded = len(load_questions(path))
+except Exception as err:
+    loaded = type(err).__name__
+res = {"uyari": shown, "acik": d.isVisible(), "ayni": path.read_bytes() == before, "yuklenen": loaded,
+       "dosyalar": sorted(p.name for p in Path(".").iterdir())}
+print("SONUC " + json.dumps(res, ensure_ascii=False), flush=True)
+'''
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="RLIMIT_FSIZE yalnız POSIX'te")
+def test_disk_full_mid_save_keeps_the_question_file_loadable(tmp_path):
+    """B-2 uçtan uca (inceleme s03): Kaydet yazımın ortasında EFBIG alınca soru dosyası yarım kalıyor (5575 -> 2289
+    bayt) ve uygulama bir daha açılmıyordu. Artık dosya bayt bayt aynı ve yüklenebilir, geçici dosya kalmaz, mesaj
+    dosyanın değişmediğini söyler, düzenlemeler pencerede durur."""
+    script = tmp_path / "calistir.py"
+    script.write_text(_SAVE_DISK_FULL, encoding="utf-8")
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", XDG_CONFIG_HOME=str(tmp_path / "cfg"))
+    r = subprocess.run([sys.executable, str(script)], cwd=tmp_path, env=env, capture_output=True, text=True,
+                       timeout=120)
+    line = next((ln for ln in r.stdout.splitlines() if ln.startswith("SONUC ")), None)
+    assert r.returncode == 0 and line is not None, f"çıkış {r.returncode}:\n{r.stdout}\n{r.stderr[-2000:]}"
+    res = json.loads(line[len("SONUC "):])
+    assert res["ayni"] and res["yuklenen"] == 3 and res["acik"], res
+    assert len(res["uyari"]) == 1 and res["uyari"][0][0] == "Kaydedilemedi" and "değişmedi" in res["uyari"][0][1]
+    assert res["dosyalar"] == ["calistir.py", "sorular_sablon.xlsx", "sorular_sablon.xlsx.bak"], res

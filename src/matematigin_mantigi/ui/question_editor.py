@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import zipfile
 from pathlib import Path
 from typing import Sequence
 
@@ -11,6 +12,7 @@ from PyQt6.QtWidgets import (QApplication, QDialog, QFileDialog, QFrame, QHBoxLa
                              QListWidget, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QVBoxLayout,
                              QWidget)
 
+from matematigin_mantigi.core import crash_log
 from matematigin_mantigi.core.models import OPTION_LETTERS, Question
 from matematigin_mantigi.core.question_loader import clean_text, save_question_image, write_questions
 from matematigin_mantigi.ui import theme
@@ -325,18 +327,22 @@ class QuestionEditorDialog(QDialog):
                 return
         try:
             write_questions(self.questions_path, self.questions)
-        except OSError as err:
+        except (OSError, zipfile.BadZipFile, KeyError, ValueError) as err:
             # Pencere açık kalır, saved yayılmaz: düzenlemeler bu pencerede durur, sorun giderilince yeniden Kaydet.
+            # Yazım geçici dosyaya yapılıp ancak tamamlanınca yerine konduğu için dosya her durumda değişmemiştir.
+            crash_log.log_handled(err, "soru editörü kaydı")
             QMessageBox.warning(self, "Kaydedilemedi", self._save_error_text(err))
             return
         self.saved.emit(list(self.questions))
         self.accept()
 
-    def _save_error_text(self, err: OSError) -> str:
+    def _save_error_text(self, err: Exception) -> str:
         head = f"Soru dosyası kaydedilemedi: {self.questions_path.name}"
+        kept = "Dosyadaki sorular değişmedi; düzenlemeleriniz bu pencerede duruyor"
         if isinstance(err, PermissionError):     # Windows'ta Excel dosyayı açık tuttukça kilitler
             return (f"{head}\n\nDosya Excel'de (ya da başka bir programda) açıksa kapatıp yeniden Kaydet'e basın; "
-                    "açık değilse bu klasöre yazma izni yok.\n\nDüzenlemeleriniz bu pencerede duruyor, hiçbiri "
-                    "kaybolmadı.")
-        return (f"{head}\nSebep: {describe_os_error(err)}\n\nDüzenlemeleriniz bu pencerede duruyor; sorunu "
-                "giderip yeniden Kaydet'e basın.")
+                    f"açık değilse bu klasöre yazma izni yok.\n\n{kept}, hiçbiri kaybolmadı.")
+        if isinstance(err, OSError):
+            return f"{head}\nSebep: {describe_os_error(err)}\n\n{kept}; sorunu giderip yeniden Kaydet'e basın."
+        return (f"{head}\nSebep: beklenmeyen hata ({type(err).__name__}: {err}).\n\n{kept}. Ayrıntı hatalar.log "
+                "dosyasında.")

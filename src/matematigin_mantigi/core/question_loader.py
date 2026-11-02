@@ -1,10 +1,13 @@
 """Excel şablonu: sütun doğrulama, örnek şablon üretme, soru yükleme/yazma."""
 from __future__ import annotations
 
+import contextlib
 import filecmp
+import os
+import secrets
 import shutil
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 import openpyxl
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
@@ -31,8 +34,35 @@ def clean_text(text: str) -> str:
     return ILLEGAL_CHARACTERS_RE.sub("", text.translate(_LINE_BREAK_CONTROLS))
 
 
+def backup_path(path: Path) -> Path:
+    """Soru dosyasının bir önceki sürümü: aynı klasörde <ad>.bak (ör. sorular_sablon.xlsx.bak)."""
+    path = Path(path)
+    return path.with_name(path.name + ".bak")
+
+
+def _replace_atomically(target: Path, write: Callable[[Path], object]) -> None:
+    """write(tmp) hedefin klasöründeki geçici bir dosyaya yazar; hedef ancak yazım tamamlanınca os.replace ile tek
+    adımda değişir. Yazım yarıda kalırsa (dolu disk, çıkarılan USB) hedef eski hâlinde kalır, geçici dosya silinir.
+    Windows'ta hedef başka bir programda (Excel) açıksa os.replace PermissionError verir; hedef yine değişmez."""
+    tmp = target.with_name(f".{target.name}.{secrets.token_hex(4)}.tmp")
+    try:
+        write(tmp)
+        if os.name == "posix" and target.exists():
+            with contextlib.suppress(OSError):      # izinler eski dosyanınki gibi kalsın
+                shutil.copymode(target, tmp)
+        os.replace(tmp, target)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
+        raise
+
+
 def write_questions(path: Path, questions: Sequence[Question]) -> Path:
-    """Soruları tüm sütunlarla yazar. Görsel yolu xlsx klasörüne göre göreli ise öyle bırakılır."""
+    """Soruları tüm sütunlarla yazar. Görsel yolu xlsx klasörüne göre göreli ise öyle bırakılır.
+
+    Yazım dosyayı yarıda bırakmaz (#29): önce dosyanın o anki hâli <ad>.bak'a kopyalanır, sonra yeni çalışma kitabı
+    aynı klasörde geçici dosyaya yazılıp os.replace ile yerine konur (yedek de aynı yolla). Herhangi bir adımda hata
+    olursa soru dosyası ve önceki yedek değişmez; OSError çağırana gider."""
     path = Path(path)
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -48,7 +78,9 @@ def write_questions(path: Path, questions: Sequence[Question]) -> Path:
     for i, col in enumerate(ALL_COLUMNS):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i + 1)].width = _WIDTHS[col]
     path.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(path)
+    if path.exists():
+        _replace_atomically(backup_path(path), lambda tmp: shutil.copy2(path, tmp))
+    _replace_atomically(path, wb.save)
     return path
 
 

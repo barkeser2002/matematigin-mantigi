@@ -7,6 +7,7 @@ olmaz. Kutu odağı çalmaz (kalem ve kısayollar tahtada kalır) ve kayda giren
 """
 from __future__ import annotations
 
+import errno
 import sys
 from typing import Callable, Sequence
 
@@ -16,6 +17,20 @@ from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
 
 _MARGIN = 8
+_OS_REASONS = {
+    errno.EACCES: "erişim izni yok ya da dosya başka bir programda açık",
+    errno.EPERM: "erişim izni yok",
+    errno.ENOSPC: "diskte yer kalmadı",
+    errno.EROFS: "disk salt okunur",
+    errno.ENOENT: "klasör ya da dosya bulunamadı",
+    errno.ENOTDIR: "yolda klasör yerine bir dosya var",
+}
+
+
+def describe_os_error(err: OSError) -> str:
+    """Dosya hatasının öğretmenin anlayacağı kısa Türkçe sebebi; bilinmeyen hatada sistemin kendi metni."""
+    reason = _OS_REASONS.get(err.errno) if err.errno is not None else None
+    return reason or err.strerror or str(err) or type(err).__name__
 
 
 def place_outside(size: QSize, avoid: QRect | None, screens: Sequence[QRect], home: QRect) -> QPoint:

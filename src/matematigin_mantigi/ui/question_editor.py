@@ -12,8 +12,9 @@ from PyQt6.QtWidgets import (QApplication, QDialog, QFileDialog, QFrame, QHBoxLa
                              QWidget)
 
 from matematigin_mantigi.core.models import OPTION_LETTERS, Question
-from matematigin_mantigi.core.question_loader import save_question_image, write_questions
+from matematigin_mantigi.core.question_loader import clean_text, save_question_image, write_questions
 from matematigin_mantigi.ui import theme
+from matematigin_mantigi.ui.error_notice import describe_os_error
 from matematigin_mantigi.ui.theme import FontFamilies
 
 
@@ -218,14 +219,18 @@ class QuestionEditorDialog(QDialog):
         # setText doğrulayıcıyı atlar: rakam dışı karakterler burada da atılır, okuma hiçbir girdide patlamaz.
         digits = "".join(ch for ch in self.sinif_edit.text() if ch in "0123456789")
         sinif = int(digits) if digits else None
+
+        def text(s: str) -> str:
+            # PDF/Word'den yapıştırılan kontrol karakterleri Kaydet'te openpyxl'i patlatıyordu: modelde hiç kalmasın.
+            return clean_text(s).strip()
         return Question(
-            id=self.id_edit.text().strip(),
-            konu=self.konu_edit.text().strip(),
+            id=text(self.id_edit.text()),
+            konu=text(self.konu_edit.text()),
             sinif=sinif,
-            soru=self.soru_edit.toPlainText().strip(),
-            hints=tuple(e.text().strip() for e in self.hint_edits),
-            cevap=self.cevap_edit.text().strip(),
-            options=tuple(e.text().strip() for e in self.option_edits),
+            soru=text(self.soru_edit.toPlainText()),
+            hints=tuple(text(e.text()) for e in self.hint_edits),
+            cevap=text(self.cevap_edit.text()),
+            options=tuple(text(e.text()) for e in self.option_edits),
             image=self._image_value or None,
         )
 
@@ -251,7 +256,14 @@ class QuestionEditorDialog(QDialog):
         path, _ = QFileDialog.getOpenFileName(self, "Soru görseli", "", "Görsel (*.png *.jpg *.jpeg)")
         if not path:
             return
-        self._image_value = save_question_image(Path(path), self.images_dir)
+        try:
+            value = save_question_image(Path(path), self.images_dir)
+        except OSError as err:
+            QMessageBox.warning(self, "Görsel eklenemedi",
+                                f"Görsel {self.images_dir.name} klasörüne kopyalanamadı.\n"
+                                f"Sebep: {describe_os_error(err)}\n\nSorunun görseli değişmedi.")
+            return
+        self._image_value = value
         self.image_edit.setText(self._image_value)
         self._update_preview()
 
@@ -311,6 +323,20 @@ class QuestionEditorDialog(QDialog):
                 QMessageBox.warning(self, "Eksik soru", f"{i + 1}. sıradaki sorunun metni boş; lütfen doldurun.")
                 self.list_widget.setCurrentRow(i)
                 return
-        write_questions(self.questions_path, self.questions)
+        try:
+            write_questions(self.questions_path, self.questions)
+        except OSError as err:
+            # Pencere açık kalır, saved yayılmaz: düzenlemeler bu pencerede durur, sorun giderilince yeniden Kaydet.
+            QMessageBox.warning(self, "Kaydedilemedi", self._save_error_text(err))
+            return
         self.saved.emit(list(self.questions))
         self.accept()
+
+    def _save_error_text(self, err: OSError) -> str:
+        head = f"Soru dosyası kaydedilemedi: {self.questions_path.name}"
+        if isinstance(err, PermissionError):     # Windows'ta Excel dosyayı açık tuttukça kilitler
+            return (f"{head}\n\nDosya Excel'de (ya da başka bir programda) açıksa kapatıp yeniden Kaydet'e basın; "
+                    "açık değilse bu klasöre yazma izni yok.\n\nDüzenlemeleriniz bu pencerede duruyor, hiçbiri "
+                    "kaybolmadı.")
+        return (f"{head}\nSebep: {describe_os_error(err)}\n\nDüzenlemeleriniz bu pencerede duruyor; sorunu "
+                "giderip yeniden Kaydet'e basın.")

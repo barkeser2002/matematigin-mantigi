@@ -215,3 +215,89 @@ def test_save_question_image_disambiguates(tmp_path):
     rel3 = save_question_image(c, images)
     assert rel3 == "sorular_gorsel/a_1.png"
     assert (images / "a.png").read_bytes() == b"AAA" and (images / "a_1.png").read_bytes() == b"CCC"
+
+
+# --- Kaydet hataları ve yapıştırılan kontrol karakterleri (#3) -----------------------------------------------
+def _capture_warnings(monkeypatch) -> list:
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda _parent, title, text, *a, **k: shown.append(
+        (title, text))))
+    return shown
+
+
+def test_save_while_file_is_open_in_excel_keeps_dialog_and_edits(qtbot, tmp_path, monkeypatch):
+    """e2e#6/q#2: Windows'ta xlsx Excel'de açıkken wb.save PermissionError fırlatıyor, yakalanmadığı için uygulama
+    (süren kayıtla) düşüyor ve editördeki her düzenleme kayboluyordu. Artık Türkçe mesaj, pencere açık kalır;
+    Excel kapatılınca yeniden Kaydet düzenlemeleri yazar."""
+    import openpyxl
+    shown = _capture_warnings(monkeypatch)
+    real_save = openpyxl.Workbook.save
+
+    def locked(self, filename):
+        raise PermissionError(13, "Permission denied", str(filename))
+    monkeypatch.setattr(openpyxl.Workbook, "save", locked)
+    d, path = _dialog(qtbot, tmp_path)
+    saved = []
+    d.saved.connect(saved.append)
+    d.soru_edit.setPlainText("Excel açıkken düzenlendi?")
+    d.save_button.click()
+    assert shown and shown[0][0] == "Kaydedilemedi" and "Excel" in shown[0][1]
+    assert d.isVisible() and d.result() != d.DialogCode.Accepted and saved == []
+    assert d.soru_edit.toPlainText() == "Excel açıkken düzenlendi?" and d.questions[0].soru == "Excel açıkken düzenlendi?"
+    assert not path.exists()
+
+    monkeypatch.setattr(openpyxl.Workbook, "save", real_save)         # Excel kapatıldı
+    d.save_button.click()
+    assert load_questions(path)[0].soru == "Excel açıkken düzenlendi?"
+    assert saved and d.result() == d.DialogCode.Accepted
+
+
+def test_save_other_os_error_shows_reason_and_keeps_dialog(qtbot, tmp_path, monkeypatch):
+    import errno
+    import openpyxl
+    shown = _capture_warnings(monkeypatch)
+
+    def full(self, filename):
+        raise OSError(errno.ENOSPC, "No space left on device")
+    monkeypatch.setattr(openpyxl.Workbook, "save", full)
+    d, _ = _dialog(qtbot, tmp_path)
+    d.save_button.click()
+    assert shown and shown[0][0] == "Kaydedilemedi" and "diskte yer kalmadı" in shown[0][1]
+    assert d.isVisible() and d.result() != d.DialogCode.Accepted
+
+
+def test_pasted_control_characters_are_cleaned_and_save_succeeds(qtbot, tmp_path):
+    """q#2: PDF/Word'den kopyalanan metindeki kontrol karakterleri (\\x03, \\x0b …) alanlarda kalıyor, openpyxl
+    IllegalCharacterError fırlatıyor ve uygulama düşüyordu. Kontrol karakterleri atılır; Word/PowerPoint'in satır
+    sonu olarak kullandığı dikey sekme satır sonu olur; sekme ve satır sonu korunur."""
+    from PyQt6.QtWidgets import QApplication
+    d, path = _dialog(qtbot, tmp_path)
+    clip = QApplication.clipboard()
+    clip.setText("PDF'den kopya\x03 metin\x0bikinci satır\tsekme")
+    d.soru_edit.clear(); d.soru_edit.paste()
+    assert "\x03" in d.soru_edit.toPlainText()                 # yapıştırma karakteri alanda bırakıyor
+    clip.setText("ipucu\x02 bir\x1f")
+    d.hint_edits[0].clear(); d.hint_edits[0].paste()
+    d.konu_edit.setText("Kon\x00u")
+    d.save_button.click()
+    q = load_questions(path)[0]
+    assert q.soru == "PDF'den kopya metin\nikinci satır\tsekme"
+    assert q.hints[0] == "ipucu bir" and q.konu == "Konu"
+
+
+def test_image_copy_error_shows_message_and_keeps_previous_image(qtbot, tmp_path, monkeypatch):
+    """Görsel sorular_gorsel'e kopyalanamazsa (izin, dolu disk) yuva patlamaz; mesaj gösterilir, eski görsel kalır."""
+    import shutil
+    png = tmp_path / "resim.png"
+    img = QImage(10, 10, QImage.Format.Format_RGB32); img.fill(Qt.GlobalColor.red); img.save(str(png))
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(png), "")))
+
+    def denied(*_a, **_k):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(shutil, "copyfile", denied)
+    shown = _capture_warnings(monkeypatch)
+    d, _ = _dialog(qtbot, tmp_path)
+    before = d.image_edit.text()
+    d.choose_image_button.click()
+    assert shown and shown[0][0] == "Görsel eklenemedi" and "erişim izni yok" in shown[0][1]
+    assert d.image_edit.text() == before and d.isVisible()

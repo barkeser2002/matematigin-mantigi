@@ -229,6 +229,69 @@ def test_keyboard_interrupt_is_not_reported_as_error(installed, capsys):
     assert not log.path.exists() and notes == []
 
 
+def test_hook_lets_go_of_the_failed_paint_frame(qtbot, installed):
+    """B-7: PyQt6 kurulu kancayı PyErr_Print() üzerinden çağırır; o da kancadan önce sys.last_exc/last_type/
+    last_value/last_traceback'i bu istisnaya ayarlar. Kanca bunları bırakmazsa paintEvent'in çerçevesi ve içindeki
+    etkin QPainter bir sonraki istisnaya dek yaşıyor, her çizimde 'QBackingStore::endPaint() called with active
+    painter' basılıyordu. Gerçek bir paintEvent istisnası: kancadan sonra çerçevedeki nesne de serbest kalmalı."""
+    import gc
+    import weakref
+    from PyQt6.QtGui import QPainter
+    from PyQt6.QtWidgets import QWidget
+    log, _notes = installed
+    alive = []
+
+    class Marker:
+        pass
+
+    class Bomb(QWidget):
+        armed = True
+
+        def paintEvent(self, _e):
+            painter = QPainter(self)
+            marker = Marker()
+            alive.append(weakref.ref(marker))
+            if Bomb.armed:
+                Bomb.armed = False                         # geçici: yalnız bir kez patlar
+                raise RuntimeError("geçici çizim hatası")
+            painter.end()
+
+    w = Bomb()
+    qtbot.addWidget(w)
+    w.resize(60, 40)
+    w.show()
+    qtbot.waitUntil(lambda: "geçici çizim hatası" in (log.path.read_text(encoding="utf-8")
+                                                       if log.path.exists() else ""), timeout=3000)
+    gc.collect()
+    assert getattr(sys, "last_value", None) is None and getattr(sys, "last_traceback", None) is None
+    assert getattr(sys, "last_exc", None) is None
+    assert alive and alive[0]() is None                     # patlayan çerçevenin nesneleri (QPainter dahil) bırakıldı
+
+
+def test_hook_leaves_unrelated_last_exception_alone(installed):
+    """Kanca yalnız kendi istisnasının sys.last_* kaydını bırakır: doğrudan çağrıldığında (PyErr_Print'siz) başka bir
+    istisnanın hata ayıklama kaydına dokunmaz."""
+    try:
+        raise LookupError("önceki, ilgisiz hata")
+    except LookupError as e:
+        unrelated = e
+    prev = {n: getattr(sys, n, _ABSENT) for n in ("last_exc", "last_type", "last_value", "last_traceback")}
+    sys.last_value, sys.last_type, sys.last_traceback = unrelated, LookupError, unrelated.__traceback__
+    try:
+        sys.excepthook(*_exc_info())
+        assert sys.last_value is unrelated
+    finally:
+        for n, v in prev.items():
+            if v is _ABSENT:
+                if hasattr(sys, n):
+                    delattr(sys, n)
+            else:
+                setattr(sys, n, v)
+
+
+_ABSENT = object()
+
+
 def test_uninstall_restores_previous_hooks(tmp_path):
     prev = (sys.excepthook, threading.excepthook)
     log = crash_log.install(tmp_path / "hatalar.log")

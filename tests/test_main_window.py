@@ -29,7 +29,25 @@ def close_question_never_blocks(monkeypatch):
         return 0
     monkeypatch.setattr(QMessageBox, "exec", exec_)
     yield
+    _let_background_saves_finish()
     assert not unexpected, "kayıt açık kalmış pencere kapatıldı (kapanış sorusu yanıtlanmadı)"
+
+
+def _let_background_saves_finish(timeout_ms: int = 30000) -> None:
+    """Başarısız bir test kaydı arka planda kaydedilirken bırakırsa pytest-qt pencereyi close() (yok sayılır) ve
+    deleteLater eder; sonraki testin olay döngüsünde çalışan _StopWorker'lı pencere silinir, Qt süreci düşürür
+    ('QThread: Destroyed while thread is still running', Fatal Python error: Aborted) ve paketin geri kalanı hiç
+    koşmaz (macOS CI). Teardown'da işçi sınırlı beklenir, sonucu bu testin içinde işlenir."""
+    from PyQt6.QtWidgets import QApplication
+    from matematigin_mantigi.ui.main_window import _StopWorker
+    waited = False
+    for w in QApplication.topLevelWidgets():
+        for worker in w.findChildren(_StopWorker):
+            if worker.isRunning():
+                worker.wait(timeout_ms)
+                waited = True
+    if waited:
+        QApplication.processEvents()                                    # kuyruktaki sonuç (_on_record_stopped)
 
 
 def test_window_shell(window):
@@ -1159,12 +1177,13 @@ STOP_AND_QUIT, KEEP_RECORDING = "Durdur ve çık", "Kayda devam et"
 
 
 def _answer_close_question(monkeypatch, button: str) -> list:
-    """Kapanış sorusunu (QMessageBox.exec) `button` yazılı düğmeyle yanıtlar; sorulanları (başlık, metin) döndürür."""
+    """Kapanış sorusunu (QMessageBox.exec) `button` yazılı düğmeyle yanıtlar; sorulan metinleri döndürür. Başlık
+    bakılmaz: Qt macOS'ta QMessageBox başlığını yok sayar (setWindowTitle boş kalır), kullanıcı yalnız metni görür."""
     from PyQt6.QtWidgets import QMessageBox
     asked: list = []
 
     def exec_(box):
-        asked.append((box.windowTitle(), box.text()))
+        asked.append(box.text())
         next(b for b in box.buttons() if b.text() == button).click()
         return 0
     monkeypatch.setattr(QMessageBox, "exec", exec_)
@@ -1188,7 +1207,7 @@ def test_closing_while_recording_asks_and_keep_recording_cancels_the_close(windo
     shut, synced = _spy_shutdown(window, monkeypatch)
     window.toggle_recording(True)
     assert window.close() is False
-    assert asked == [("Kayıt sürüyor", "Kayıt sürüyor, durdurulup çıkılsın mı?")]
+    assert asked == ["Kayıt sürüyor, durdurulup çıkılsın mı?"]
     assert window.isVisible() and window.recorder.state is RecorderState.RECORDING and window.badge.active
     assert window.toolbar.record_button.isChecked() and shut == [] and synced == []
     window.toggle_recording(False)                                    # (teardown'da soru açılmasın)
@@ -1220,7 +1239,7 @@ def test_closing_while_recording_saves_in_background_then_the_window_closes_itse
     wait_until(lambda: rec.frames_written >= 10)
     try:
         assert window.close() is False                                # kapanma olayı yok sayıldı
-        assert len(asked) == 1 and asked[0][0] == "Kayıt sürüyor"
+        assert asked == ["Kayıt sürüyor, durdurulup çıkılsın mı?"]
         assert mux.entered.wait(20)                                   # kayıt arka planda birleştiriliyor
         assert window.isVisible() and rec.state is RecorderState.FINALIZING
         assert tb.alert_label.isVisible() and tb.alert_label.text() == CLOSING_ALERT

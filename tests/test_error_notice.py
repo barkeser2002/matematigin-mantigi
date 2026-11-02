@@ -49,7 +49,9 @@ def test_post_shows_a_single_non_modal_box_without_a_window_storm(qtbot):
     assert notice.box.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)    # kalemden odağı çalmaz
     notice.post("Düzen kaydedilemedi", "farklı hata", "k2")
     qtbot.waitUntil(lambda: notice.box.text() == "farklı hata", timeout=2000)
-    assert _visible_boxes() == [notice.box] and notice.box.windowTitle() == "Düzen kaydedilemedi"
+    assert _visible_boxes() == [notice.box]
+    if sys.platform != "darwin":                 # Qt macOS'ta QMessageBox başlığını yok sayar; metin kendi başına yeter
+        assert notice.box.windowTitle() == "Düzen kaydedilemedi"
     notice.box.button(QMessageBox.StandardButton.Ok).click()
     notice.post("Beklenmeyen hata", "aynı hata", "k1")
     qtbot.wait(50)

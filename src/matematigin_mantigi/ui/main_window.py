@@ -62,6 +62,8 @@ STOP_AND_QUIT, KEEP_RECORDING = "Durdur ve çık", "Kayda devam et"   # kayıt s
 # Kayıt pencerelerinin metni kendi başına anlaşılır olmalı: Qt macOS'ta QMessageBox başlığını göstermez.
 START_FAILED = "Kayıt başlamadı."
 RECORD_FAILED = "Kayıt düzgün tamamlanamadı."
+# Kapanış özetinin ayrıntı düğmesi: Qt'nin kendi etiketi çevirisiz İngilizce ('Show Details...').
+DETAILS_SHOW, DETAILS_HIDE = "Ayrıntılar", "Ayrıntıları gizle"
 
 
 def _sound_text(audio_err: str) -> str:
@@ -74,6 +76,24 @@ def _record_error_text(err: str, audio_err: str | None) -> str:
     if audio_err and audio_err not in err:
         text += f"\n\n{_sound_text(audio_err)}"
     return text
+
+
+def _turkish_details_button(box: QMessageBox) -> None:
+    """setDetailedText'in eklediği düğmeye Türkçe etiket. Qt etiketi her tıklamada kendisi değiştirir; bu bağlantı
+    Qt'ninkinden sonra kurulduğu için ondan sonra çalışır. Genişlik Qt'nin İngilizce etiketlerinden hesaplanıyor: Türkçe
+    etiket kesilmesin."""
+    for button in box.buttons():
+        if box.buttonRole(button) != QMessageBox.ButtonRole.ActionRole:
+            continue
+        shown = [False]                         # ayrıntı başta kapalı
+
+        def relabel(_checked=False, button=button, shown=shown):
+            shown[0] = not shown[0]
+            button.setText(DETAILS_HIDE if shown[0] else DETAILS_SHOW)
+        button.setText(DETAILS_SHOW)
+        button.clicked.connect(relabel)
+        button.setMinimumWidth(max(button.sizeHint().width(),
+                                   button.fontMetrics().horizontalAdvance(DETAILS_HIDE) + 32))
 
 
 class MainWindow(QMainWindow):
@@ -437,7 +457,9 @@ class MainWindow(QMainWindow):
         ve görülmemiş bütün uyarılar (kayıt sırasında biriken, Tamam'a basılmamış); o an kayıt yok. Eskiden başarıda
         sonuç durum satırına yazılıp pencere hemen kapanıyor, uyarılar hiç görünmüyordu; hatada uyarı kutusu 'Kayıt
         hatası'nın çocuğu olup onunla siliniyor, gizlenen pencerenin altında yeniden açılıp Qt'nin otomatik çıkışını
-        iptal ediyordu (pencere kapanır, süreç çıkmazdı). Uyarılar kutudan alınır: pencere kapanırken açılmazlar."""
+        iptal ediyordu (pencere kapanır, süreç çıkmazdı). Uyarılar kutudan alınır: pencere kapanırken açılmazlar.
+        Uyarıların ayrıntısı kaydırılabilir ayrıntı bölümünde, ana metinde yalnız sayıları: hepsi ana metinde olunca
+        özet MacBook Air'de 1138 px boyla ekrandan taşıyor, Tamam ekranın dışında kalıyordu (U4)."""
         err, audio_err = self._record_problems(exc)
         parts: list[str] = []
         if err:
@@ -450,15 +472,18 @@ class MainWindow(QMainWindow):
                 parts.append(_sound_text(audio_err))
         notices = error_notice.take_all()
         if notices:
-            head = "Uyarı:" if len(notices) == 1 else f"{len(notices)} uyarı:"
-            parts.append(f"{head}\n\n{error_notice.summary_text(notices)}")
+            parts.append(f"{len(notices)} uyarı var: ayrıntısı aşağıda ('{DETAILS_SHOW}' düğmesi) ve hatalar.log'da.")
         if not parts:
             return
-        text = "\n\n".join(parts)
-        if err or audio_err or notices:
-            QMessageBox.warning(self, "Kayıt sonucu", text)
-        else:
-            QMessageBox.information(self, "Kayıt kaydedildi", text)
+        warn = bool(err or audio_err or notices)
+        box = QMessageBox(QMessageBox.Icon.Warning if warn else QMessageBox.Icon.Information,
+                          "Kayıt sonucu" if warn else "Kayıt kaydedildi", "\n\n".join(parts),
+                          QMessageBox.StandardButton.Ok, self)
+        if notices:
+            box.setDetailedText(error_notice.summary_text(notices))
+            _turkish_details_button(box)
+        box.exec()
+        box.deleteLater()
 
     def _report_record_result(self, path, exc: str | None) -> None:
         """Hata pencerede (o an kayıt yok), ses uyarısıyla birlikte. Başarı durum satırında; başarılı kaydın ses uyarısı

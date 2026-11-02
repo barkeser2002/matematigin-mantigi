@@ -13,15 +13,17 @@ def close_question_never_blocks(monkeypatch):
     exec() sonsuza dek bekler: hatalı kod (mutasyon, gerileme) kırmızı yerine DONAR. Soruyu kendisi yanıtlamayan
     testte soru açılırsa kayıt eşzamanlı durdurulur (arka plan kapanışının QThread'i pencereyle silinmesin), 'Durdur
     ve çık' seçilir ve test teardown'da hatayla biter. Soruyu bekleyen testler _answer_close_question ile bunun
-    üstüne yazar. Statik QMessageBox pencereleri (warning, information...) de aynı nedenle gerçek modal açmaz: test
-    kendisi yakalamıyorsa çağrı kaydedilir ve test teardown'da hatayla biter."""
+    üstüne yazar. Statik QMessageBox pencereleri (warning, information...) ve başka kutuların exec'i (kapanış özeti)
+    de aynı nedenle gerçek modal açmaz: test kendisi yakalamıyorsa çağrı kaydedilir ve test teardown'da hatayla
+    biter."""
     from PyQt6.QtWidgets import QMessageBox
     from matematigin_mantigi.ui.main_window import STOP_AND_QUIT
-    real_exec, unexpected, statics = QMessageBox.exec, [], []
+    unexpected, statics = [], []
 
     def exec_(box):
         if box.text() != "Kayıt sürüyor, durdurulup çıkılsın mı?":
-            return real_exec(box)
+            statics.append(("exec", box.windowTitle(), box.text()))
+            return QMessageBox.StandardButton.Ok
         unexpected.append(box.text())
         try:
             box.parent().recorder.stop()
@@ -1321,18 +1323,42 @@ def test_badge_stays_right_anchored_after_font_scale_change_with_real_content(wi
 STOP_AND_QUIT, KEEP_RECORDING = "Durdur ve çık", "Kayda devam et"
 
 
-def _answer_close_question(monkeypatch, button: str) -> list:
+def _answer_close_question(monkeypatch, button: str, on_other=None) -> list:
     """Kapanış sorusunu (QMessageBox.exec) `button` yazılı düğmeyle yanıtlar; sorulan metinleri döndürür. Başlık
-    bakılmaz: Qt macOS'ta QMessageBox başlığını yok sayar (setWindowTitle boş kalır), kullanıcı yalnız metni görür."""
+    bakılmaz: Qt macOS'ta QMessageBox başlığını yok sayar (setWindowTitle boş kalır), kullanıcı yalnız metni görür.
+    O düğmesi olmayan başka bir kutu (kapanış özeti) on_other(kutu) verilmişse ona gider ve Tamam'la kapanır;
+    verilmemişse test düşer (StopIteration)."""
     from PyQt6.QtWidgets import QMessageBox
     asked: list = []
 
     def exec_(box):
+        choice = [b for b in box.buttons() if b.text() == button]
+        if not choice and on_other is not None:
+            on_other(box)
+            return QMessageBox.StandardButton.Ok
         asked.append(box.text())
-        next(b for b in box.buttons() if b.text() == button).click()
+        next(iter(choice)).click()
         return 0
     monkeypatch.setattr(QMessageBox, "exec", exec_)
     return asked
+
+
+def _box_text(box) -> str:
+    """Kutunun kullanıcıya gösterdiği metin: ana metin ve (varsa) ayrıntı bölümü."""
+    return box.text() + (f"\n\n{box.detailedText()}" if box.detailedText() else "")
+
+
+def _answer_with_summary(monkeypatch, button: str | None = None) -> tuple[list, list]:
+    """Kapanış sorusu `button` (varsayılan 'Durdur ve çık') ile yanıtlanır; kapanış özeti (QMessageBox.exec) ve statik
+    pencereler (warning, information) gerçek modal açmadan (başlık, metin + ayrıntı) olarak toplanır.
+    (sorulanlar, gösterilenler) döner."""
+    shown: list = []
+    asked = _answer_close_question(monkeypatch, button or STOP_AND_QUIT,
+                                   on_other=lambda box: shown.append((box.windowTitle(), _box_text(box))))
+    from PyQt6.QtWidgets import QMessageBox
+    for name in ("warning", "information"):
+        monkeypatch.setattr(QMessageBox, name, staticmethod(lambda *a, **k: shown.append(a[1:3])))
+    return asked, shown
 
 
 def _spy_shutdown(window, monkeypatch) -> tuple[list, list]:
@@ -1390,18 +1416,15 @@ def test_closing_while_recording_saves_in_background_then_the_window_closes_itse
     gösterilir, sonra pencere kendisi kapanır; kamera ve ayarlar ancak o zaman kapanır. Eskiden kapanış GUI iş
     parçacığında senkron koşuyordu; sonra da sonuç durum satırına yazılıp pencereyle birlikte kayboluyordu."""
     import pytest
-    from PyQt6.QtWidgets import QMessageBox
     from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState, find_ffmpeg
     from matematigin_mantigi.ui.main_window import CLOSING_ALERT
     from tests.test_recorder import FakeAudioCapture, SlowMux, stepping_clock, synthetic_grabber, wait_until
     if find_ffmpeg() is None:
         pytest.skip("ffmpeg yok")
-    asked = _answer_close_question(monkeypatch, STOP_AND_QUIT)
-    shut, synced = _spy_shutdown(window, monkeypatch)
     shown = []                                                        # (metin, pencere açık mı, kamera kapandı mı)
-    for name in ("warning", "information"):
-        monkeypatch.setattr(QMessageBox, name, staticmethod(
-            lambda parent, title, text, *a, **k: shown.append((text, window.isVisible(), bool(shut)))))
+    asked = _answer_close_question(monkeypatch, STOP_AND_QUIT, on_other=lambda box: shown.append(
+        (_box_text(box), window.isVisible(), bool(shut))))
+    shut, synced = _spy_shutdown(window, monkeypatch)
     mux = SlowMux(monkeypatch)
     window.settings.audio_device = "Sahte Mikrofon"
     rec = window.recorder = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber,
@@ -1440,8 +1463,7 @@ def test_closing_while_saving_waits_without_asking_and_closes_when_saved(window,
     from tests.test_recorder import FakeAudioCapture, SlowMux, stepping_clock, synthetic_grabber, wait_until
     if find_ffmpeg() is None:
         pytest.skip("ffmpeg yok")
-    shown = _capture_modals(monkeypatch)
-    asked = _answer_close_question(monkeypatch, STOP_AND_QUIT)
+    asked, shown = _answer_with_summary(monkeypatch)
     shut, synced = _spy_shutdown(window, monkeypatch)
     mux = SlowMux(monkeypatch)
     window.settings.audio_device = "Sahte Mikrofon"
@@ -1494,7 +1516,6 @@ def test_window_closed_while_the_result_is_shown_does_not_close_a_second_time(wi
     kapanırsa (QApplication.quit, close()) kapanış bir kez olur: kamera kapatma ve ayar yazma bir kez koşar.
     (_on_record_stopped sonradan yine close() çağırır; Qt kabul edilen kapanışta platform penceresini yok ettiği
     için o çağrı olay göndermez. Bu kilit, kapanış akışı değişirse ikinci kapanışı yakalar.)"""
-    from PyQt6.QtWidgets import QMessageBox
     from matematigin_mantigi.core.recorder import NullRecorder
 
     class FailingBackgroundStop(NullRecorder):                        # kapanış _StopWorker'da, hatayla biter
@@ -1502,11 +1523,10 @@ def test_window_closed_while_the_result_is_shown_does_not_close_a_second_time(wi
         error = "ffmpeg hata kodu 1: disk dolu"
     shown = []
 
-    def warning(parent, title, text, *a, **k):
-        shown.append(text)
+    def summary(box):
+        shown.append(box.text())
         window.close()                                                # sonuç penceresi açıkken çıkış
-    monkeypatch.setattr(QMessageBox, "warning", staticmethod(warning))
-    _answer_close_question(monkeypatch, STOP_AND_QUIT)
+    _answer_close_question(monkeypatch, STOP_AND_QUIT, on_other=summary)
     shut, synced = _spy_shutdown(window, monkeypatch)
     window.recorder = FailingBackgroundStop()
     window.toggle_recording(True)
@@ -1557,8 +1577,7 @@ def test_stop_and_quit_shows_the_result_and_the_waiting_notices_in_one_window_th
             self.audio_error = "Mikrofon kayıt sırasında kesildi (yapay)"
             return Path("oturum") / "kayit_yapay.mp4"
     notice = _wired_notice(window, monkeypatch)
-    shown = _capture_modals(monkeypatch)
-    asked = _answer_close_question(monkeypatch, STOP_AND_QUIT)
+    asked, shown = _answer_with_summary(monkeypatch)
     window.recorder = BackgroundStop()
     window.toggle_recording(True)
     error_notice.post("Tahta görüntüsü kaydedilemedi", "S1 sorusunun tahta resmi kaydedilemedi: diskte yer kalmadı.",
@@ -1617,9 +1636,14 @@ class BrokenStop(NullRecorder):
         raise OSError(13, "Permission denied", "kayit.mp4")
 
 
-def answer(box):                                      # kapanış sorusu: "Durdur ve çık"
+def answer(box):                                      # kapanış sorusu: "Durdur ve çık"; kapanış özeti: Tamam
+    stop = [b for b in box.buttons() if b.text() == "Durdur ve çık"]
+    if not stop:
+        kind = "BILGI" if box.icon() == QMessageBox.Icon.Information else "UYARI"
+        out(kind, (box.text() + " " + box.detailedText()).strip().replace("\n", " "))
+        return QMessageBox.StandardButton.Ok
     out("SORU", box.text())
-    next(b for b in box.buttons() if b.text() == "Durdur ve çık").click()
+    stop[0].click()
     return 0
 
 

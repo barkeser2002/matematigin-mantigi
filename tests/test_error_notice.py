@@ -593,3 +593,52 @@ def test_app_puts_the_box_on_a_free_second_screen(tmp_path):
     after = res["sonra"]
     box, stage, second = QRect(*after["cerceve"]), QRect(*after["sahne"]), QRect(*after["ekranlar"][1])
     assert after["kutu"] == 1 and second.contains(box) and not box.intersects(stage), after
+
+
+_MBA13 = [dict(name="S1", x=0, y=0, width=1470, height=956, logicalDpi=72, logicalBaseDpi=72, dpr=2)]
+
+_MANY_NOTICES_WHILE_RECORDING = '''
+from PyQt6.QtCore import QRect
+from matematigin_mantigi.ui import error_notice
+
+TEXT = ("Bir hata oluştu ama uygulama çalışmaya devam ediyor.\\n\\nOSError: [Errno 28] No space left on device: "
+        "'/Users/ogretmen.adi/Documents/Matematiğin Mantığı/oturum/S01_03.png'\\n\\nAyrıntı: hatalar.log")
+
+
+def build(args, fam, settings=None):
+    win = make(args, fam)
+
+    def start():
+        win.toggle_recording(True)
+        for i in range(8):
+            error_notice.post(f"Beklenmeyen hata {i + 1}", TEXT, key=f"k{i}")
+        later(lambda: "8 uyarı" in win.toolbar.alert_label.text(), stop)
+
+    def stop():
+        win.toggle_recording(False)
+        later(lambda: bool(boxes()), lambda: QTimer.singleShot(3 * POLL_MS, measure))
+
+    def measure():
+        b = boxes()[0]
+        ok = b.button(QMessageBox.StandardButton.Ok)
+        screen = b.screen().availableGeometry()
+        res["kutu"], res["ekran"], res["metin"] = rect(b.frameGeometry()), rect(screen), b.text()
+        res["sigiyor"] = screen.contains(b.frameGeometry()) and screen.contains(
+            QRect(ok.mapToGlobal(QPoint(0, 0)), ok.size()))
+        done(win)
+
+    later(lambda: win.isFullScreen(), start)
+    return win
+
+run(build)
+'''
+
+
+def test_merged_box_after_recording_fits_on_a_small_laptop_screen(tmp_path):
+    """Kayıt sırasında biriken uyarılar kayıt bitince tek kutuda gösterilir; kutu kaydırılamaz, ancak en yeni
+    _MAX_ITEMS uyarıyı gösterdiği için ekrana sığar (U4/U8: bu sınır hiçbir testte ölçülmüyordu, sınırsız kutu
+    MacBook Air'de ekrandan taşar, Tamam ekranın dışında kalır). Gösterilmeyenler söylenir: hepsi hatalar.log'da."""
+    res = _run_app(tmp_path, _MANY_NOTICES_WHILE_RECORDING, _MBA13)
+    assert res["sigiyor"], (res["kutu"], res["ekran"])
+    assert "Önceki 4 uyarı burada gösterilmiyor; hepsi hatalar.log'da" in res["metin"], res["metin"]
+    assert "Beklenmeyen hata 8" in res["metin"], res["metin"]

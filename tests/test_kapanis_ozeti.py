@@ -12,15 +12,20 @@ CHILD = r'''
 import errno, json, os, sys, threading
 from pathlib import Path
 from PyQt6 import sip
-from PyQt6.QtCore import QSettings, QTimer
+from PyQt6.QtCore import QPoint, QRect, QSettings, QTimer
 from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox
 from matematigin_mantigi import app as app_mod
 from matematigin_mantigi.core.recorder import NullRecorder
 from matematigin_mantigi.core.settings import AppSettings
+from matematigin_mantigi.ui import error_notice
 from matematigin_mantigi.ui.error_notice import POLL_MS
 from matematigin_mantigi.ui.main_window import STOP_AND_QUIT
 
 MODE = sys.argv[1]
+LONG_NOTICE = ("Bir hata oluştu ama uygulama çalışmaya devam ediyor; süren bir kayıt varsa durdurulmadı.\n\nOSError: "
+               "[Errno 28] No space left on device: '/Users/ogretmen.adi/Documents/Matematiğin Mantığı/oturum/"
+               "20261102-213000/S01_03.png' (eşitleme klasörü dolu; iCloud Drive alanı yetersiz olabilir)\n\nAyrıntı: "
+               "/Users/ogretmen.adi/Documents/Matematiğin Mantığı/hatalar.log")
 # Süreç asılı kalırsa (pencere kapandı ama Qt'nin kuyruktaki çıkışı iptal edildi) kısmi çıktıyla kendini bitirir.
 watchdog = threading.Timer(30, lambda: (print("ZAMAN_ASIMI", flush=True), os._exit(3)))
 watchdog.daemon = True
@@ -51,22 +56,40 @@ def answer_modals():
     """Gerçek modal pencereleri yanıtlar: kapanış sorusunda 'Durdur ve çık', ötekilerde Tamam. Tamam birkaç yoklama
     aralığı sonra basılır: modal açıkken yoklama uyarı kutusunu açabilecekse açsın (eskiden kutu modalın çocuğu
     olup onunla siliniyordu). 'hata' senaryosunda özet açıkken yeni bir uyarı gelir (özetin çocuğu olarak görünür,
-    özetle silinir; kapanan pencerenin altında yeniden açılmamalı)."""
+    özetle silinir; kapanan pencerenin altında yeniden açılmamalı). Özetin metni ayrıntı bölümüyle birlikte basılır;
+    'agir' senaryosunda özetin ekrana sığıp sığmadığı ayrıntı kapalıyken ve açıkken ölçülür."""
     m = QApplication.activeModalWidget()
     if isinstance(m, QMessageBox) and m.isVisible() and sip.unwrapinstance(m) not in answered:
         answered.add(sip.unwrapinstance(m))
-        out("MODAL " + json.dumps(m.text()))
+        out("MODAL " + json.dumps(m.text() + ("\n" + m.detailedText() if m.detailedText() else "")))
         stop = [b for b in m.buttons() if b.text() == STOP_AND_QUIT]
         if stop:
             QTimer.singleShot(50, stop[0].click)
             return
         if MODE == "hata":
             QTimer.singleShot(0, late_boom)
-        ok = m.buttons()[0]
+        ok = m.button(QMessageBox.StandardButton.Ok)
 
         def click():
             out("MODAL_KAPANIRKEN_GORUNEN_KUTU", len(notice_boxes()))
             ok.click()
+
+        def fits():
+            screen = m.screen().availableGeometry()
+            return screen.contains(m.frameGeometry()) and screen.contains(
+                QRect(ok.mapToGlobal(QPoint(0, 0)), ok.size()))
+
+        def expanded():
+            out("OZET_SIGIYOR acik", fits(), m.frameGeometry().getRect())
+            click()
+        if MODE == "agir":
+            out("OZET_SIGIYOR kapali", fits(), m.frameGeometry().getRect())
+            details = [b for b in m.buttons() if m.buttonRole(b) == QMessageBox.ButtonRole.ActionRole]
+            out("AYRINTI_DUGMESI", json.dumps([b.text() for b in details]))
+            if details:
+                details[0].click()
+            QTimer.singleShot(3 * POLL_MS, expanded)
+            return
         QTimer.singleShot(3 * POLL_MS, click)
 
 
@@ -88,6 +111,11 @@ class Rec(NullRecorder):
         self.release.wait(20)
         if MODE == "hata":
             self.error = "yapay kapanış hatası, ham dosyalar silinmedi"
+        if MODE == "agir":                      # gerçekçi uzunlukta kayıt hatası: ffmpeg kuyruğu, iki ham dosya yolu
+            home = "/Users/ogretmen.adi/Documents/Matematiğin Mantığı/oturum/20261102-213000"
+            self.error = ("ffmpeg kayıt sırasında durdu (42:10. dakikada, çıkış kodu 1). Video o ana dek kaydedildi."
+                          f"\nDosyalar silinmedi:\n{home}/kayit.video.mp4 (video 42:09)\n{home}/kayit.wav (ses 42:11)"
+                          "\nffmpeg çıktısı: " + "[libx264 @ 0x7f8b1c00] frame I:12 Avg QP:20.31 size: 81234 " * 4)
         self.audio_error = "Mikrofon kayıt sırasında kesildi (yapay)"
         return Path("rec") / "kayit_yapay.mp4"
 
@@ -115,6 +143,11 @@ def build(args, fam, settings=None):
             stray.append(QLabel("başıboş pencere"))
             stray[0].show()
         win.toggle_recording(True)
+        if MODE == "agir":                      # kayıt sırasında 7 farklı, uzun ama gerçekçi uyarı
+            for i in range(7):
+                error_notice.post(f"Beklenmeyen hata {i + 1}", LONG_NOTICE, key=f"agir-{i}")
+            later(lambda: "7 uyarı" in win.toolbar.alert_label.text(), close)
+            return
         QTimer.singleShot(0, boom)
         QTimer.singleShot(0, snapshot_fails)
         later(lambda: "2 uyarı" in win.toolbar.alert_label.text(), close)
@@ -142,8 +175,12 @@ def _text(x) -> str:
     return x.decode("utf-8", "replace") if isinstance(x, bytes) else (x or "")
 
 
-def _run(tmp_path, mode: str):
-    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", XDG_CONFIG_HOME=str(tmp_path / "cfg"))
+def _run(tmp_path, mode: str, screens: list | None = None):
+    platform = "offscreen"
+    if screens is not None:                         # ekran düzeni (çalışma dizinine göreli yol)
+        (tmp_path / "ekranlar.json").write_text(json.dumps({"screens": screens}), encoding="utf-8")
+        platform = "offscreen:configfile=ekranlar.json"
+    env = dict(os.environ, QT_QPA_PLATFORM=platform, XDG_CONFIG_HOME=str(tmp_path / "cfg"))
     try:
         p = subprocess.run([sys.executable, "-c", CHILD, mode], cwd=tmp_path, env=env, capture_output=True,
                            text=True, timeout=90)
@@ -189,3 +226,28 @@ def test_closing_the_main_window_ends_the_process_even_if_another_window_is_left
     lines = _run(tmp_path, "yetim")
     modals = [json.loads(line[len("MODAL "):]) for line in lines if line.startswith("MODAL ")]
     assert len(modals) == 2 and "kayit_yapay.mp4" in modals[1], modals
+
+
+# MacBook Air 13" benzeri ekran (1470x956 nokta, Retina): kapanış özetinin sığması gereken en küçük hedef ekran.
+_MBA13 = [dict(name="S1", x=0, y=0, width=1470, height=956, logicalDpi=72, logicalBaseDpi=72, dpr=2)]
+
+
+def test_heavy_closing_summary_fits_on_a_small_laptop_screen(tmp_path):
+    """U4 (inceleme v30 agir): 'Durdur ve çık' özeti kayıt hatası (ffmpeg kuyruğu, iki ham dosya yolu), ses uyarısı ve
+    kayıt sırasında biriken 7 uzun uyarıyı tek metinde gösteriyordu: summary_text yalnız uyarı SAYISINI sınırlıyordu,
+    özet MacBook Air'de 1138 px boyla ekrandan taşıyor, Tamam düğmesi ekranın dışında kalıyordu. Uyarıların ayrıntısı
+    kaydırılabilir ayrıntı bölümünde (düğmesi Türkçe), ana metinde sonuç ve 'N uyarı'; özet ayrıntı kapalıyken de
+    açıkken de ekrana sığar, Tamam ekranda. Hiçbir uyarı kaybolmaz (ayrıntıda ve hatalar.log'da)."""
+    lines = _run(tmp_path, "agir", screens=_MBA13)
+    fits = {line.split()[1]: line.split()[2] for line in lines if line.startswith("OZET_SIGIYOR ")}
+    assert fits == {"kapali": "True", "acik": "True"}, lines
+    modals = [json.loads(line[len("MODAL "):]) for line in lines if line.startswith("MODAL ")]
+    summary = modals[1]
+    assert "ffmpeg kayıt sırasında durdu" in summary and "kayit.wav (ses 42:11)" in summary, summary
+    assert "Mikrofon kayıt sırasında kesildi (yapay)" in summary and "7 uyarı" in summary, summary
+    assert all(f"Beklenmeyen hata {i}" in summary or "gösterilmiyor; hepsi hatalar.log'da" in summary
+               for i in range(1, 8)), summary
+    labels = json.loads(next(line for line in lines if line.startswith("AYRINTI_DUGMESI "))[len("AYRINTI_DUGMESI "):])
+    assert labels and all("Details" not in label for label in labels), labels     # İngilizce değil
+    log = (tmp_path / "hatalar.log").read_text(encoding="utf-8")
+    assert all(f"Beklenmeyen hata {i}" in log for i in range(1, 8)), log

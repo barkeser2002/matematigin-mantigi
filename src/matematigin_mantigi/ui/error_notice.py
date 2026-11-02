@@ -43,6 +43,8 @@ _OS_REASONS = {
     errno.EROFS: "disk salt okunur",
     errno.ENOENT: "klasör ya da dosya bulunamadı",
     errno.ENOTDIR: "yolda klasör yerine bir dosya var",
+    # macOS: iCloud'un indiremediği (çevrimdışı) ya da eşitlemenin kilitlediği dosyayı okuma
+    errno.EDEADLK: "dosya şu an okunamıyor; bu bilgisayara inmemiş ya da eşitleme tarafından kilitli olabilir",
 }
 
 Items = dict[str, tuple[str, str]]          # anahtar -> (başlık, metin); sıra geliş sırası

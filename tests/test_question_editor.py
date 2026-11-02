@@ -683,6 +683,45 @@ def test_samples_fill_a_missing_or_empty_question_file(qtbot, tmp_path, monkeypa
     assert saved and [q.id for q in load_questions(path)] == ["S1", "S2", "S3"]
 
 
+@pytest.mark.parametrize("state", ["yok", "bos"])
+@pytest.mark.parametrize("why", ["inmemis", "kilitli", "yarim"])
+def test_backup_that_cannot_be_read_now_is_never_overwritten(qtbot, tmp_path, monkeypatch, state, why):
+    """U5: dosya yok ya da boş şablon, yedekte gerçek sorular var ama yedek ŞU AN okunamıyor (iCloud çevrimdışı inmemiş
+    dosya, eşitleme kilidi, yarım inmiş dosya). _offer_real_questions her hatayı 'yedek yok' sayıyordu: örnekler
+    yazılıyor, aynı Kaydet ya da bir sonraki yedeği de değiştirip gerçek soruları kaybettiriyordu (inceleme v27b).
+    Yalnız yedek hiç yoksa ya da boş şablonsa yazılır; okunamayan yedekte hiçbir şey yazılmaz, sebep söylenir."""
+    from matematigin_mantigi.core.question_loader import backup_path, write_template
+    path = tmp_path / "sorular_sablon.xlsx"
+    write_questions(path, REAL)
+    write_questions(path, REAL)                             # yedekte de gerçek sorular
+    path.unlink()
+    if state == "bos":
+        write_template(path, with_samples=False)
+    bak = backup_path(path)
+    if why == "yarim":
+        bak.write_bytes(bak.read_bytes()[:900])             # yarım inmiş yedek: okunamaz ama sorular onda olabilir
+    else:
+        err = (OSError(errno.EDEADLK, "Resource deadlock avoided") if why == "inmemis"
+               else PermissionError(errno.EACCES, "Permission denied", str(bak)))
+
+        def unreadable(_path):
+            raise err
+        monkeypatch.setattr(qe, "load_backup", unreadable)
+    before = (path.read_bytes() if path.exists() else None, bak.read_bytes())
+    shown = _capture_warnings(monkeypatch)
+    d = _samples_dialog(qtbot, path)
+    saved = []
+    d.saved.connect(saved.append)
+    d.save_button.click()
+    d.save_button.click()
+    assert saved == [] and d.isVisible()
+    assert (path.read_bytes() if path.exists() else None, bak.read_bytes()) == before
+    assert len(shown) == 2, shown
+    text = shown[0][1]
+    assert text.startswith("Kaydedilmedi: önceki sürümün yedeği sorular_sablon.xlsx.bak şu an okunamıyor"), text
+    assert "Düzenlemeleriniz bu pencerede duruyor" in text and "örnek sorular" in text, text
+
+
 def test_samples_are_not_saved_over_a_file_that_cannot_be_read(qtbot, tmp_path, monkeypatch):
     """Örnek sorular tutan editör dosyayı okuyamıyorsa (kilit, izin, inmemiş iCloud dosyası) içinde gerçek sorular olup
     olmadığını bilemez: yazmaz, sebebi söyler."""

@@ -446,8 +446,14 @@ class QuestionEditorDialog(QDialog):
         else:
             try:
                 found = load_backup(self.questions_path)
-            except Exception:  # noqa: BLE001 - yedek yok, boş ya da okunamıyor: korunacak soru yok
-                return False
+            except (FileNotFoundError, EmptyTemplateError):
+                return False                    # yedek yok ya da boş şablon: korunacak soru yok
+            except Exception as err:  # noqa: BLE001 - okunamayan yedekte gerçek sorular olabilir: hiçbir şey yazılmaz
+                # Eskiden her hata 'yedek yok' sayılıyordu: o an okunamayan (iCloud çevrimdışı, eşitleme kilidi, yarım
+                # inmiş) gerçek yedek örnek sorularla eziliyordu (U5).
+                crash_log.log_handled(err, "soru dosyasının yedeği")
+                QMessageBox.warning(self, "Kaydedilmedi", self._unreadable_backup_text(err))
+                return True
             accept, title = LOAD_BACKUP, "Soru dosyasının yedeği var"
             state = "boş" if self.questions_path.exists() else "klasörde yok"
             where = (f"{name} {state}, ama önceki sürümün yedeği {backup_path(self.questions_path).name} "
@@ -462,6 +468,16 @@ class QuestionEditorDialog(QDialog):
         if _ask(self, title, text, accept):
             self._use_questions(found)
         return True
+
+    def _unreadable_backup_text(self, err: Exception) -> str:
+        name, bak = self.questions_path.name, backup_path(self.questions_path).name
+        state = "boş" if self.questions_path.exists() else "klasörde yok"
+        return (f"Kaydedilmedi: önceki sürümün yedeği {bak} şu an okunamıyor ({describe_load_error(err)}).\n\n{name} "
+                f"{state}; uygulama açılışta soru dosyasını okuyamadığı için örnek sorularla açılmıştı. Yedekte gerçek "
+                "sorularınız olabilir: örnek sorular onların yerine geçmesin diye hiçbir şey yazılmadı. Yedek "
+                "eşitleniyorsa (iCloud, OneDrive) inmesini bekleyin, başka bir programda açıksa kapatın, sonra yeniden "
+                "Kaydet'e basın. Yedeğe ihtiyacınız yoksa onu klasörden kaldırın.\n\nDüzenlemeleriniz bu pencerede "
+                "duruyor.")
 
     def _use_questions(self, questions: list[Question]) -> None:
         """Pencereyi dosyadan/yedekten okunan sorularla yeniden doldurur; artık örnek sorular değil, Kaydet yazar."""

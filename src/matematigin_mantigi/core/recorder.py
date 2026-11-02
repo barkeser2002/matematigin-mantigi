@@ -613,6 +613,9 @@ class MssFfmpegRecorder:
         if hung:                                     # (yazıcının öldürmeden sonra yazdığı boru hatası sebep değil)
             s.error = self._hung_text(s, audio)
             return
+        if s.failed:                                 # ffmpeg kayıt sırasında durdu (kodlayıcı çöktü, bellek, disk)
+            self._report_death(s, proc, audio)
+            return
         if proc is not None and proc.returncode not in (0, None) and not s.error:
             s.error = f"ffmpeg hata kodu {proc.returncode}: {self._log_tail(s)}"
         if audio is not None:
@@ -709,6 +712,48 @@ class MssFfmpegRecorder:
         tail = self._log_tail(s, 300)
         return f"{text}\nffmpeg çıktısı: {tail}" if tail else text
 
+    def _report_death(self, s: _Session, proc: subprocess.Popen | None, audio: AudioResult | None) -> None:
+        """ffmpeg kayıt sırasında durdu (kodlayıcı çöktü, bellek ya da disk bitti): yazıcı kırık boruyu gördü (failed).
+        Hata kendi başına anlaşılır (arayüz yalnız onu gösterir): ne oldu, video ve ses ne durumda, dosyalar nerede.
+        Hiçbir dosya silinmez, açılmayan ara video son ada taşınmaz (O3: 48 B'lık bozuk video kayit_*.mp4 oluyor,
+        sağlam WAV'ın yeri söylenmiyordu). Video açılıyorsa (ffmpeg dosyayı bitirip çıktı) ses yine birleştirilir: o
+        ana dek kaydedilen tek dosyada; ham dosyalar yine kalır."""
+        exe = self._ffmpeg_exe or find_ffmpeg()
+        video = s.video_path
+        video_s = media_duration(exe, video) if exe and video.exists() else None
+        code = proc.returncode if proc is not None else None
+        text = (f"ffmpeg kayıt sırasında durdu ({clock_text(s.frames_written / s.fps)}. dakikada"
+                + (f", çıkış kodu {code}" if code is not None else "") + ").")
+        s.error = None                               # yazıcının 'boru kapandı' notu yerine bütün hikâye
+        if not video.exists():
+            text += " Video dosyası oluşmadı."
+        elif video_s is None:
+            text += " ffmpeg dosyayı bitiremediği için video büyük olasılıkla hiç açılmaz."
+        else:
+            text += f" Video o ana dek kaydedildi ({clock_text(video_s)})."
+            if audio is not None and video != s.final_path:
+                self._mux(s, audio)                  # failed: ham dosyalar silinmez; düşerse sebebi s.error'da
+                if s.error is None and s.final_path.exists():
+                    text += f" Ses birleştirildi: {s.final_path}"
+        if s.error:                                  # birleştirmenin sorunu
+            text += "\n" + s.error
+        lines = self._raw_lines(s, audio, video_s)
+        if lines:
+            text += "\nDosyalar silinmedi:\n" + "\n".join(lines)
+        tail = self._log_tail(s, 300)
+        s.error = f"{text}\nffmpeg çıktısı: {tail}" if tail else text
+
+    @staticmethod
+    def _raw_lines(s: _Session, audio: AudioResult | None, video_s: float | None) -> list[str]:
+        """Kalan ham dosyalar, durumlarıyla: '<yol> (video 42:10)', '<yol> (video okunamadı)', '<yol> (ses sağlam,
+        42:11)'. Öğretmen hangi dosyada ne olduğunu açmadan bilsin."""
+        lines = []
+        if s.video_path.exists():
+            lines.append(f"{s.video_path} (video {clock_text(video_s) if video_s is not None else 'okunamadı'})")
+        if audio is not None and audio.path.exists():
+            lines.append(f"{audio.path} ({sound_note(audio)})")
+        return lines
+
     def _report_lag(self, s: _Session) -> None:
         """Kodlayıcı gerçek zamana yetişemediyse (durdurmada yazılmayan borç; ancak STOP_DEBT_S'den büyük borçta ya da
         çok yavaş kodlayıcıda kalır) uyarı bunu söyler: kayıt sırasında görüntü takılmıştır (geride kalan yazıcı aynı
@@ -763,10 +808,11 @@ class MssFfmpegRecorder:
         return s.audio_result
 
     def _mux(self, s: _Session, audio: AudioResult) -> None:
-        """Video (kopya) + WAV -> son MP4. Birleştirme başarısızsa yalnız video dosyası sonuç olur; video hiç
-        oluşmadıysa (ffmpeg başta öldü) WAV durur ve hata yerini söyler. Birleştirme videoyu asla kısaltmaz (#1):
-        eksik ses sessizlikle dolar; ara dosyalar yalnız birleşik dosyanın videonun
-        tam uzunluğunda olduğu ölçülünce silinir. Mikrofon kesildiyse ya da WAV yazılamadıysa audio_error söyler."""
+        """Video (kopya) + WAV -> son MP4. Birleştirme düşerse ham video ve WAV yerinde kalır, hata ikisinin de yerini
+        söyler (_mux_failed); video hiç oluşmadıysa (ffmpeg başta öldü) WAV durur ve hata yerini söyler. Birleştirme
+        videoyu asla kısaltmaz (#1): eksik ses sessizlikle dolar; ara dosyalar yalnız birleşik dosyanın videonun tam
+        uzunluğunda olduğu ölçülünce ve kayıt hatasız bittiyse silinir. Mikrofon kesildiyse ya da WAV yazılamadıysa
+        audio_error söyler."""
         exe = self._ffmpeg_exe or find_ffmpeg()
         video, out = s.video_path, s.final_path
         if audio.error:                              # WAV yazıcısı öldü (disk dolu...): o ana dek yazılan ses kalır
@@ -778,7 +824,8 @@ class MssFfmpegRecorder:
             return
         if not exe or audio.samples <= 0 or not audio.path.exists():
             s.audio_error = s.audio_error or "Ses kaydedilemedi (örnek yok)"
-            video.replace(out)
+            if not s.failed:                         # ffmpeg kayıt sırasında durduysa ara video adıyla kalır
+                video.replace(out)
             return
         video_s = media_duration(exe, video)         # ara videonun gerçek süresi: dolgu ve doğrulama ölçüsü
         length = video_s if video_s is not None else s.duration     # ölçülemezse duvar süresi (video ondan uzun değil)
@@ -799,39 +846,59 @@ class MssFfmpegRecorder:
             tail = min(end, video_s + skipped, stop_s)   # sesin ucu, en çok durdurma anına dek
             end_s = tail if tail > video_s + TAIL_KEEP_S else None
         args = mux_args(exe, video, audio.path, out, offset, asetrate=rate, video_s=length, end_s=end_s)
+        timeout = _mux_timeout(s.duration)
         try:
-            res = subprocess.run(args, capture_output=True, timeout=_mux_timeout(s.duration), **no_window())
+            res = subprocess.run(args, capture_output=True, timeout=timeout, **no_window())
+        except subprocess.TimeoutExpired:
+            self._mux_failed(s, audio, video_s, f"{clock_text(timeout)} dakikada bitmedi, zaman aşımı")
+            return
         except (OSError, subprocess.SubprocessError) as err:
-            s.audio_error = _joined(f"Ses birleştirilemedi: {err}", s.audio_error)
-            video.replace(out)
+            self._mux_failed(s, audio, video_s, exception_text(err))
             return
         if res.returncode != 0 or not out.exists():
-            reason = res.stderr.decode("utf-8", "replace").strip()[-300:]
-            s.audio_error = _joined(f"Ses birleştirilemedi: {reason}", s.audio_error)
-            video.replace(out)
+            lines = [ln.strip() for ln in res.stderr.decode("utf-8", "replace").splitlines() if ln.strip()]
+            self._mux_failed(s, audio, video_s, " / ".join(lines[-3:])[-300:] or f"çıkış kodu {res.returncode}")
             return
         out_s = media_duration(exe, out)
         if video_s is None or out_s is None:         # doğrulanamayan dosya için tek tam kopyayı silme
-            self._keep_raw(s, audio, "Birleştirilen kaydın süresi ölçülemedi, tam olduğu doğrulanamadı")
+            self._keep_raw(s, audio, f"Birleştirilen kaydın süresi ölçülemedi, tam olduğu doğrulanamadı: {out}",
+                           video_s)
             return
         whole = end_s if end_s is not None else video_s     # birleşik dosyanın olması gereken süresi
         if out_s < whole - min(SHORT_MUX_S, whole / 4):
             self._keep_raw(s, audio, f"Birleştirilen kayıt videodan kısa çıktı ({clock_text(out_s)} / "
-                                     f"{clock_text(whole)})")
+                                     f"{clock_text(whole)}): {out}", video_s)
             return
         s.tail_kept = end_s is not None
+        if s.failed:                                 # kayıt hatayla bitti: ham dosyalar kalır (_report_death)
+            return
         for p in (video, audio.path):
             try:
                 p.unlink()
             except OSError:
                 pass
 
-    def _keep_raw(self, s: _Session, audio: AudioResult, why: str) -> None:
-        """Birleşik dosyaya güvenilemiyor: ham video ve WAV silinmez, hata (arayüzde 'Kayıt hatası') üç dosyanın da
-        yerini söyler. Birleşik dosya da kalır; öğretmen hangisini kullanacağını görür."""
-        text = (f"{why}: {s.final_path}\nHam video ve ses silinmedi; kaydın tamamı bu dosyalarda:\n"
-                f"{s.video_path}\n{audio.path}")
+    def _keep_raw(self, s: _Session, audio: AudioResult, why: str, video_s: float | None) -> None:
+        """Birleşik dosyaya güvenilemiyor ya da yok: ham video ve WAV silinmez, son ada taşınmaz; hata (arayüzde 'Kayıt
+        hatası') ne olduğunu, ham dosyaların yerini ve durumunu söyler. Birleşik dosya varsa o da kalır; öğretmen
+        hangisini kullanacağını görür. ffmpeg kayıt sırasında durduysa dosyaları _report_death listeler."""
+        if s.failed:
+            s.error = _with_paragraph(s.error, why)
+            return
+        text = f"{why}\nHam video ve ses silinmedi; kaydın tamamı bu dosyalarda:\n" + "\n".join(
+            self._raw_lines(s, audio, video_s))
         s.error = _with_paragraph(s.error, text)
+
+    def _mux_failed(self, s: _Session, audio: AudioResult, video_s: float | None, reason: str) -> None:
+        """Birleştirme düştü (hata kodu, zaman aşımı, ffmpeg açılamadı): ara video eskiden son ada taşınıyor (video
+        bozuksa 'kaydedildi' görünen açılmaz bir dosya), WAV'ın yeri söylenmiyordu (O3). Şimdi yarım kalan birleşik
+        dosya silinir (kaydın tamamı ham dosyalarda), ham dosyalar yerinde kalır, hata ikisini de söyler."""
+        if s.final_path != s.video_path:
+            try:
+                s.final_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        self._keep_raw(s, audio, f"Ses ile görüntü birleştirilemedi ({reason}).", video_s)
 
     def _grab_loop(self, s: _Session, rect: RecordRect, w: int, h: int, fps: int) -> None:
         """Yakalama iş parçacığı: en fazla fps hızında kare alır, en yenisini bırakır."""

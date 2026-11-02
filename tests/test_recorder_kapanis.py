@@ -309,3 +309,95 @@ def test_mux_with_the_audio_tail_keeps_video_and_audio_whole(tmp_path, offset, r
     assert abs(_stream_seconds(exe, out, "-an") - 3.0) < 0.06
     assert abs(_stream_seconds(exe, out, "-vn") - 4.5) < 0.06
     assert media_duration(exe, out) == pytest.approx(4.5, abs=0.06)
+
+
+# --- O3: kayıt ortasında ölen ffmpeg, düşen birleştirme -------------------------------------------------------
+
+@needs_ffmpeg
+def test_ffmpeg_that_dies_mid_lesson_keeps_the_raw_files_and_says_what_happened(tmp_path):
+    """O3 (son inceleme s4): kayıt ortasında ffmpeg ölünce (kodlayıcı çöktü, bellek bitti) birleştirme düşüyor, BOZUK
+    ara video son dosya adına taşınıyordu (48 B, 'moov atom not found'); hata yalnız 'ffmpeg borusu kapandı: ayrıntı
+    yok' diyordu, sağlam WAV'ın yeri hiçbir yerde yoktu (sebep durum satırına bile gitmeyen audio_error'daydı). Şimdi
+    ara video son ada taşınmaz, açılmayan videoyla birleştirme denenmez; hata kendi başına anlaşılır: ne oldu, video
+    ve ses ne durumda, dosyalar nerede."""
+    rec = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber, out_height=0,
+                            audio_device="Sahte Mikrofon", audio_factory=FakeAudioCapture, clock=stepping_clock())
+    rec.start(RecordRect(0, 0, 160, 120))
+    wait_until(lambda: rec.frames_written >= 40)                        # 2 sn video
+    rec._session.proc.kill()                                            # kodlayıcı çöktü (moov yazılmadı)
+    wait_until(lambda: rec.failed)                                      # yazıcı kırık boruyu gördü
+    path = rec.stop()
+    video, wav = _raw_files(path)
+    assert not path.exists()                                            # bozuk video son ada taşınmadı
+    assert video.exists() and wav.exists()
+    err = rec.error or ""
+    assert re.match(r"ffmpeg kayıt sırasında durdu \(0:0\d\. dakikada, çıkış kodu -?\d+\)\.", err), err
+    assert "ffmpeg dosyayı bitiremediği için video büyük olasılıkla hiç açılmaz" in err, err
+    assert f"{video} (video okunamadı)" in err, err
+    assert re.search(re.escape(f"{wav} (ses sağlam, ") + r"0:0\d\)", err), err
+    assert "ayrıntı yok" not in err and "birleştirilemedi" not in (rec.audio_error or ""), (err, rec.audio_error)
+    assert media_duration(find_ffmpeg(), wav) >= 2.0                    # ses sağlam
+
+
+def encoder_dies_after(seconds: float, fps: int = 20, w: int = 160, h: int = 120) -> str:
+    """python_ffmpeg gövdesi: seconds kadar kare okur, gerçek ffmpeg'le o uzunlukta açılan bir MP4 yazar (dosyayı
+    bitirmiş kodlayıcı), sonra hatayla çıkar: kayıt ortasında kodlayıcı hatasıyla duran ffmpeg."""
+    return (f"import subprocess\nfor _ in range({round(seconds * fps)}):\n    stdin.read({w * h * 4})\n"
+            f"subprocess.run([{find_ffmpeg()!r}, '-y', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', "
+            f"'testsrc=s={w}x{h}:r={fps}:d={seconds}', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', "
+            f"'yuv420p', out], check=True)\nsys.stderr.write('Error while encoding\\n')\nsys.exit(1)\n")
+
+
+@needs_ffmpeg
+def test_ffmpeg_that_stops_mid_lesson_but_finishes_the_file_still_gets_its_sound(tmp_path, monkeypatch):
+    """ffmpeg kayıt ortasında hatayla çıktı ama dosyayı bitirdi (kodlayıcı hatası; moov yazıldı): video o ana dek
+    açılır. Ses yine birleştirilir (o ana dek kaydedilen tek dosyada); kayıt hatayla bittiği için ham dosyalar
+    silinmez, hata ne olduğunu, birleşik dosyayı ve ham dosyaların yerini söyler."""
+    python_ffmpeg(monkeypatch, tmp_path, encoder_dies_after(2.0))
+    rec = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber, out_height=0,
+                            audio_device="Sahte Mikrofon", audio_factory=FakeAudioCapture, clock=stepping_clock())
+    rec.start(RecordRect(0, 0, 160, 120))
+    wait_until(lambda: rec.failed, timeout=30)
+    path = rec.stop()
+    video, wav = _raw_files(path)
+    exe = find_ffmpeg()
+    assert media_duration(exe, video) == pytest.approx(2.0, abs=0.1) and wav.exists()
+    err = rec.error or ""
+    assert re.match(r"ffmpeg kayıt sırasında durdu \(0:0\d\. dakikada, çıkış kodu 1\)\. Video o ana dek "
+                    r"kaydedildi \(0:02\)\. Ses birleştirildi: ", err), err
+    assert f"Ses birleştirildi: {path}\nDosyalar silinmedi:\n{video} (video 0:02)\n{wav} (ses sağlam, 0:0" in err, err
+    assert err.endswith("ffmpeg çıktısı: Error while encoding"), err
+    assert _stream_seconds(exe, path, "-an") == pytest.approx(2.0, abs=0.15)      # birleşik dosya videonun tamamı
+    assert _stream_seconds(exe, path, "-vn") == pytest.approx(2.0, abs=0.15)      # ... sesiyle
+
+
+MUX_FAILS = {    # birleştirme ffmpeg'i yerine: yarım çıktı yazıp düşer (hata kodu) ya da takılır (zaman aşımı)
+    "hata kodu": "sys.stderr.write('Conversion failed!\\n'); sys.exit(1)",
+    "zaman aşımı": "time.sleep(30)",
+}
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("fail", list(MUX_FAILS))
+def test_failed_mux_does_not_move_the_raw_video_and_names_both_files(tmp_path, monkeypatch, fail):
+    """O3: birleştirme düşerse (hata kodu, zaman aşımı) ara video son ada taşınıyor, WAV'ın yeri söylenmiyordu;
+    'Ses birleştirilemedi' yalnız durum satırındaydı, kayıt 'kaydedildi' görünüyordu. Şimdi ham video ve ses yerinde
+    kalır, yarım birleşik dosya silinir, hata ne olduğunu, iki dosyanın durumunu ve yerini söyler."""
+    import sys
+    from matematigin_mantigi.core import recorder as r
+    script = "import sys, time; open(sys.argv[-1], 'wb').write(b'yarim'); " + MUX_FAILS[fail]
+    monkeypatch.setattr(r, "mux_args", lambda exe, video, wav, out, *a, **k: [sys.executable, "-c", script, str(out)])
+    monkeypatch.setattr(r, "_mux_timeout", lambda duration: 1.0)
+    rec = MssFfmpegRecorder(lambda: tmp_path, fps=20, grabber=synthetic_grabber, out_height=0,
+                            audio_device="Sahte Mikrofon", audio_factory=FakeAudioCapture, clock=stepping_clock())
+    rec.start(RecordRect(0, 0, 160, 120))
+    wait_until(lambda: rec.frames_written >= 20)
+    path = rec.stop()
+    video, wav = _raw_files(path)
+    assert not path.exists() and video.exists() and wav.exists()       # yarım çıktı silindi, ham dosyalar yerinde
+    err = rec.error or ""
+    assert err.startswith("Ses ile görüntü birleştirilemedi"), err
+    assert ("Conversion failed!" in err) if fail == "hata kodu" else ("zaman aşımı" in err), err
+    assert re.search(re.escape(f"{video} (video ") + r"0:0\d\)", err), err
+    assert re.search(re.escape(f"{wav} (ses sağlam, ") + r"0:0\d\)", err), err
+    assert abs(_stream_seconds(find_ffmpeg(), video, "-an") - rec.frames_written / 20) < 0.15    # video tam

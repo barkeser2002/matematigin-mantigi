@@ -1032,7 +1032,8 @@ def test_recording_errors_reach_the_error_log_as_one_line(tmp_path, monkeypatch)
     results = [(str(exc), where) for exc, where in logged if where == "kayıt sonucu"]
     assert len(results) == 1 and "\n" not in results[0][0], logged
     line = results[0][0]
-    assert line.startswith(f"{path.name} · hata: ffmpeg borusu kapandı: Error while opening encoder"), line
+    assert line.startswith(f"{path.name} · hata: ffmpeg kayıt sırasında durdu (0:0"), line
+    assert "çıkış kodu 1)" in line and "ffmpeg çıktısı: Error while opening encoder" in line, line
     assert "ses: Mikrofon açılamadı: aygıt yok" in line, line
 
 

@@ -243,7 +243,8 @@ def test_save_while_file_is_open_in_excel_keeps_dialog_and_edits(qtbot, tmp_path
     d.save_button.click()
     assert shown and shown[0][0] == "Kaydedilemedi" and "Excel" in shown[0][1]
     assert d.isVisible() and d.result() != d.DialogCode.Accepted and saved == []
-    assert d.soru_edit.toPlainText() == "Excel açıkken düzenlendi?" and d.questions[0].soru == "Excel açıkken düzenlendi?"
+    edited = "Excel açıkken düzenlendi?"
+    assert d.soru_edit.toPlainText() == edited and d.questions[0].soru == edited
     assert not path.exists()
 
     monkeypatch.setattr(openpyxl.Workbook, "save", real_save)         # Excel kapatıldı

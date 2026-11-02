@@ -37,7 +37,8 @@ _E2E = textwrap.dedent('''
         return win
 
     app_mod.build_window = build
-    sys.exit(app_mod.main(["matematigin-mantigi", "--kamera-yok", "--sorular", "sorular.xlsx", "--duzen", "duzen.json"]))
+    ARGS = ["matematigin-mantigi", "--kamera-yok", "--sorular", "sorular.xlsx", "--duzen", "duzen.json"]
+    sys.exit(app_mod.main(ARGS))
 ''')
 
 # Aynı senaryo süren bir kayıtla: gerçek ffmpeg kaydedicisi (sentetik ekran karesiyle) istisnadan önce başlar,
@@ -74,7 +75,8 @@ _E2E_REC = textwrap.dedent('''
         return win
 
     app_mod.build_window = build
-    sys.exit(app_mod.main(["matematigin-mantigi", "--kamera-yok", "--sorular", "sorular.xlsx", "--duzen", "duzen.json"]))
+    ARGS = ["matematigin-mantigi", "--kamera-yok", "--sorular", "sorular.xlsx", "--duzen", "duzen.json"]
+    sys.exit(app_mod.main(ARGS))
 ''')
 
 

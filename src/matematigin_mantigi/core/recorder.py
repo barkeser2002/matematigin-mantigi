@@ -4,6 +4,9 @@ MssFfmpegRecorder: ekranın tahta bölgesini mss ile yakalar (yakalama iş parç
 parçacığı en yeni kareyi boru ile ffmpeg'e verir (yakalama yavaşsa kare çoğaltılır; süre duvar saatiyle aynı kalır).
 Ses ffmpeg'e DEĞİL, uygulama içinde PortAudio ile WAV'a alınır (core/audio_capture.py); durdurunca ffmpeg videoyu
 kopyalayıp sesi ölçülen zaman farkıyla hizalayarak tek MP4'e birleştirir.
+
+Durum: IDLE -> RECORDING -> FINALIZING -> IDLE. Kapanış (ffmpeg kapanışı + ses birleştirme) uzun derste onlarca
+saniye sürer; bu sürede yeni kayıt başlamaz. Her kaydın yolları ve sonuçları kendi _Session nesnesindedir.
 """
 from __future__ import annotations
 
@@ -12,10 +15,11 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import BinaryIO, Callable, Protocol
 
 import numpy as np
 
@@ -48,9 +52,23 @@ def record_rect_for(rect5: tuple[int, int, int, int, float]) -> RecordRect:
     return RecordRect(int(x), int(y), int(w), int(h), float(dpr))
 
 
+class RecorderState(Enum):
+    """Kaydedicinin durumu. FINALIZING: görüntü alımı durdu ama dosya henüz bitmedi (ffmpeg kapanışı, ses
+    birleştirme); bu sürede yeni kayıt başlamaz."""
+    IDLE = "idle"
+    RECORDING = "recording"
+    FINALIZING = "finalizing"
+
+
+class RecorderError(RuntimeError):
+    pass
+
+
 class Recorder(Protocol):
     def start(self, rect: RecordRect, fps: int = 60) -> None: ...
     def stop(self) -> Path | None: ...
+    @property
+    def state(self) -> RecorderState: ...
     @property
     def is_recording(self) -> bool: ...
     @property
@@ -66,11 +84,18 @@ class NullRecorder:
         self.started_at: float | None = None
 
     def start(self, rect: RecordRect, fps: int = 60) -> None:
+        if self.started_at is not None:
+            raise RecorderError("Kayıt zaten sürüyor")
         self.last_rect, self.fps, self.started_at = rect, fps, time.monotonic()
 
     def stop(self) -> Path | None:
         self.started_at = None
         return None
+
+    @property
+    def state(self) -> RecorderState:
+        """Durdurma anında biter: FINALIZING'e hiç girmez."""
+        return RecorderState.IDLE if self.started_at is None else RecorderState.RECORDING
 
     @property
     def is_recording(self) -> bool:
@@ -83,8 +108,7 @@ class NullRecorder:
 
 # --- gerçek kayıt ------------------------------------------------------------------
 
-class RecorderError(RuntimeError):
-    pass
+DISK_HINT = "Diskte boş yer ve kayıt klasörüne yazma izni olduğunu kontrol edin."
 
 
 def find_ffmpeg() -> str | None:
@@ -199,9 +223,59 @@ def audio_rate_correction(result: AudioResult, min_duration: float = 600.0, min_
     return int(round(actual))
 
 
+@dataclass(eq=False)
+class _Session:
+    """Tek bir kaydın her şeyi: yollar, ffmpeg süreci, mikrofon, iş parçacıkları, sonuç ve hata alanları.
+    stop() yalnız kendi oturumuyla çalışır; start() yeni oturum kurar, kapanmakta olan eskisine dokunamaz. Böylece
+    kapanan kaydın birleştirmesi yeni kaydın dosyalarını kullanamaz, hatası yeni kayda yazılmaz (#2)."""
+    rect: RecordRect
+    encoder: str
+    final_path: Path                  # kayit_<saat>.mp4: kullanıcıya kalan dosya
+    video_path: Path                  # mikrofon varsa ara kayit_<saat>.video.mp4, yoksa final_path
+    log_path: Path                    # ffmpeg'in stderr'i
+    wav_path: Path | None = None      # mikrofon varsa ara kayit_<saat>.wav
+    proc: subprocess.Popen | None = None
+    log_file: BinaryIO | None = None
+    audio: AudioCapture | None = None
+    thread: threading.Thread | None = None
+    stop_event: threading.Event = field(default_factory=threading.Event)
+    finished: threading.Event = field(default_factory=threading.Event)    # kapanış bitti (bekleyen stop() için)
+    latest: bytes = b""
+    latest_lock: threading.Lock = field(default_factory=threading.Lock)
+    started_at: float = 0.0
+    video_t0: float | None = None
+    duration: float = 0.0
+    frames_written: int = 0
+    frames_grabbed: int = 0
+    audio_result: AudioResult | None = None
+    audio_error: str | None = None
+    error: str | None = None
+    failed: bool = False
+
+
+def _session_field(name: str, default=None) -> property:
+    """Son kaydın (süren ya da biten) oturum alanını salt okunur açar; hiç kayıt yoksa default."""
+    return property(lambda self: default if self._session is None else getattr(self._session, name))
+
+
 class MssFfmpegRecorder:
     """Gerçek kaydedici. grabber(rect) -> BGRA kare; varsayılan ekran yakalama (mss).
-    audio_device verilirse ses PortAudio ile alınır (audio_factory testte sahte yakalayıcı verir)."""
+    audio_device verilirse ses PortAudio ile alınır (audio_factory testte sahte yakalayıcı verir).
+    Durum (IDLE -> RECORDING -> FINALIZING -> IDLE) ve geçerli oturum self._lock altında değişir. Kilit yalnız durum
+    geçişlerinde ve start()'ın kısa açılış adımlarında tutulur; uzun kapanış (ffmpeg + birleştirme) kilitsiz koşar."""
+
+    # Son kaydın sonuçları (arayüz ve testler okur); değerler o kaydın kendi _Session'ında durur.
+    last_path = _session_field("final_path")
+    last_rect = _session_field("rect")
+    encoder = _session_field("encoder", "libx264")
+    video_t0 = _session_field("video_t0")
+    last_duration = _session_field("duration", 0.0)
+    frames_written = _session_field("frames_written", 0)
+    frames_grabbed = _session_field("frames_grabbed", 0)
+    audio_result = _session_field("audio_result")
+    audio_error = _session_field("audio_error")
+    error = _session_field("error")
+    failed = _session_field("failed", False)
 
     def __init__(self, output_dir: Callable[[], Path], fps: int = 60, audio_device: str | None = None,
                  ffmpeg_exe: str | None = None, grabber: Callable[[RecordRect], np.ndarray] | None = None,
@@ -215,33 +289,15 @@ class MssFfmpegRecorder:
         self._ffmpeg_exe = ffmpeg_exe
         self._grabber = grabber
         self._clock = clock
-        self._proc: subprocess.Popen | None = None
-        self._log_file = None
-        self._log_path: Path | None = None
-        self._thread: threading.Thread | None = None
-        self._stop = threading.Event()
-        self._stop_lock = threading.Lock()          # stop() iki yerden (kapatma + işçi) aynı anda çağrılmasın
-        self._latest: bytes = b""
-        self._latest_lock = threading.Lock()
-        self._audio: AudioCapture | None = None
-        self._video_path: Path | None = None
-        self.audio_result: AudioResult | None = None
-        self.audio_error: str | None = None
-        self.video_t0: float | None = None
-        self.last_duration = 0.0
-        self.started_at: float | None = None
-        self.last_path: Path | None = None
-        self.frames_written = 0
-        self.frames_grabbed = 0
-        self.error: str | None = None
-        self.failed = False
-        self.encoder = "libx264"
-        self.last_rect: RecordRect | None = None
+        self._lock = threading.Lock()                # durum ve geçerli oturum yalnız bu kilitle değişir
+        self._state = RecorderState.IDLE
+        self._session: _Session | None = None        # süren ya da son biten kayıt
 
     # --- Recorder ---------------------------------------------------------------
     def start(self, rect: RecordRect, fps: int | None = None) -> None:
-        if self.is_recording:
-            return
+        """Yeni kayıt başlatır; yalnız IDLE'da. Önceki kayıt hâlâ kaydediliyorsa (FINALIZING) RecorderError: yeni
+        kayıt eskisinin kapanışına karışmasın (#2). Hata olursa durum IDLE kalır, açılan dosya/mikrofon kapanır."""
+        self._ensure_idle()                          # hızlı ret: ekranı yakalayıp kodlayıcı denemeden
         fps = fps or self.fps
         exe = self._ffmpeg_exe or find_ffmpeg()
         if not exe:
@@ -251,84 +307,47 @@ class MssFfmpegRecorder:
             first = self._grab(grab_rect)
         except Exception as err:  # noqa: BLE001
             raise RecorderError(f"Ekran yakalanamadı: {err}") from err
-        h, w = _even(first.shape[0]), _even(first.shape[1])
-        out_dir = Path(self._output_dir())
-        out_dir.mkdir(parents=True, exist_ok=True)
-        stamp = self._clock().strftime("%Y%m%d-%H%M%S")
-        out = out_dir / f"kayit_{stamp}.mp4"
-        self._video_path = out_dir / f"kayit_{stamp}.video.mp4" if self.audio_device else out
-        self._log_path = out_dir / f"kayit_{stamp}.log"
-        self.encoder = detect_encoder(exe) if self._grabber is None else "libx264"   # testte hızlı yol
-        self.audio_result, self.audio_error, self._audio = None, None, None
-        if self.audio_device:
-            # Ses önce başlar: ilk örneğin zamanı ölçülür, video t0 ile fark durdurunca telafi edilir.
-            try:
-                self._audio = self._audio_factory(self.audio_device)
-                self._audio.start(out_dir / f"kayit_{stamp}.wav")
-            except Exception as err:  # noqa: BLE001 - mikrofon açılmazsa kayıt sessiz devam eder
-                self._audio, self.audio_error = None, f"Mikrofon açılamadı: {err}"
-        args = ffmpeg_args(exe, w, h, fps, self._video_path, out_height=self.out_height, encoder=self.encoder)
-        try:
-            self._log_file = open(self._log_path, "wb")     # stderr borusu dolarsa ffmpeg donar; dosyaya yaz
-            self._proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                                          stderr=self._log_file)
-        except OSError as err:
-            self._close_log()
-            self._abort_audio()
-            raise RecorderError(f"ffmpeg başlatılamadı: {err}") from err
-        self.last_rect, self.last_path, self.fps = rect, out, fps
-        self.frames_written, self.frames_grabbed, self.error, self.failed = 0, 0, None, False
-        self.video_t0 = None
-        self._stop.clear()
-        self.started_at = time.monotonic()
-        self._thread = threading.Thread(target=self._loop, args=(grab_rect, first, w, h, fps), daemon=True)
-        self._thread.start()
+        # Kodlayıcı denemesi ilk çağrıda saniyeler sürebilir: kilit dışında. Testte (grabber verilince) hızlı yol.
+        encoder = detect_encoder(exe) if self._grabber is None else "libx264"
+        with self._lock:
+            self._ensure_idle()                      # asıl kontrol: açılış ile durum değişimi bölünmez
+            self._session = self._open_session(exe, rect, grab_rect, first, fps, encoder)
+            self._state, self.fps = RecorderState.RECORDING, fps
 
     def stop(self) -> Path | None:
-        """Kaydı kapatır ve sesi videoyla birleştirir. Uzun sürebilir (birkaç sn); arayüz bunu ayrı iş
-        parçacığında çağırmalı."""
-        with self._stop_lock:
-            if not self.is_recording:
-                return self.last_path
-            return self._stop_locked()
-
-    def _stop_locked(self) -> Path | None:
-        self._stop.set()
-        self.last_duration = time.monotonic() - (self.started_at or time.monotonic())
-        if self._thread is not None:
-            self._thread.join(timeout=10)
-        audio = self._stop_audio()
-        proc = self._proc
-        self._proc, self._thread, self.started_at = None, None, None
-        if proc is not None:
+        """Kaydı kapatır ve sesi videoyla birleştirir; son dosyanın yolunu döndürür. Uzun sürebilir (birkaç sn,
+        uzun derste onlarca sn); arayüz bunu ayrı iş parçacığında çağırmalı. Kapanış kilitsiz koşar ve yalnız bu
+        kaydın oturumuyla çalışır. Başka bir stop() zaten kapatıyorsa (pencere kapatma + işçi) onun bitmesini bekler."""
+        with self._lock:
+            s, state = self._session, self._state
+            if state is RecorderState.RECORDING:
+                self._state = RecorderState.FINALIZING
+        if s is None:                                # hiç kayıt yapılmadı
+            return None
+        if state is RecorderState.RECORDING:
             try:
-                if proc.stdin:
-                    try:
-                        proc.stdin.close()
-                    except (OSError, ValueError):
-                        pass
-                    proc.stdin = None        # communicate() kapalı boruyu flush etmesin (Py3.12/macOS ValueError)
-                proc.communicate(timeout=60)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                self.error = "ffmpeg zamanında kapanmadı"
-        self._close_log()
-        if proc is not None and proc.returncode not in (0, None) and not self.error:
-            self.error = f"ffmpeg hata kodu {proc.returncode}: {self._log_tail()}"
-        if audio is not None and self.last_path is not None and self._video_path is not None:
-            self._mux(audio)
-        elif self._video_path is not None and self.last_path is not None and self._video_path != self.last_path:
-            if self._video_path.exists():
-                self._video_path.replace(self.last_path)      # mikrofon açılamadı: yalnız video
-        return self.last_path
+                self._finalize(s)
+            finally:                                 # kapanış patlasa da FINALIZING'de takılı kalınmasın
+                with self._lock:
+                    self._state = RecorderState.IDLE
+                s.finished.set()
+        elif state is RecorderState.FINALIZING:
+            s.finished.wait()
+        return s.final_path
+
+    @property
+    def state(self) -> RecorderState:
+        return self._state
 
     @property
     def is_recording(self) -> bool:
-        return self.started_at is not None
+        """Geriye uyum: yalnız RECORDING'de True, kapanış sürerken False. Arayüz state'e bakar."""
+        return self._state is RecorderState.RECORDING
 
     @property
     def elapsed_seconds(self) -> int:
-        return 0 if self.started_at is None else int(time.monotonic() - self.started_at)
+        s = self._session
+        return int(time.monotonic() - s.started_at) if s is not None and self.is_recording else 0
 
     @property
     def capture_fps(self) -> float:
@@ -344,62 +363,135 @@ class MssFfmpegRecorder:
         return (self.video_t0 - r.first_sample_monotonic) * 1000.0
 
     # --- iç ----------------------------------------------------------------------
+    def _ensure_idle(self) -> None:
+        if self._state is RecorderState.FINALIZING:
+            raise RecorderError("Önceki kayıt hâlâ kaydediliyor")
+        if self._state is RecorderState.RECORDING:
+            raise RecorderError("Kayıt zaten sürüyor")
+
+    def _open_session(self, exe: str, rect: RecordRect, grab_rect: RecordRect, first: np.ndarray, fps: int,
+                      encoder: str) -> _Session:
+        """Yeni kaydın klasörünü, dosyalarını, mikrofonunu ve ffmpeg'ini açıp yazıcıyı başlatır. Bir adım düşerse o
+        ana dek açılanlar kapatılır ve anlamlı bir RecorderError fırlar; kaydedicinin durumuna dokunmaz."""
+        h, w = _even(first.shape[0]), _even(first.shape[1])
+        try:
+            out_dir = Path(self._output_dir())
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as err:                       # disk dolu, izin yok (macOS'ta Belgeler izni reddedildi)...
+            raise RecorderError(f"Kayıt klasörü oluşturulamadı: {err}\n{DISK_HINT}") from err
+        stamp = self._clock().strftime("%Y%m%d-%H%M%S")
+        out = out_dir / f"kayit_{stamp}.mp4"
+        s = _Session(rect=rect, encoder=encoder, final_path=out, log_path=out_dir / f"kayit_{stamp}.log",
+                     video_path=out_dir / f"kayit_{stamp}.video.mp4" if self.audio_device else out,
+                     wav_path=out_dir / f"kayit_{stamp}.wav" if self.audio_device else None)
+        if s.wav_path is not None:
+            # Ses önce başlar: ilk örneğin zamanı ölçülür, video t0 ile fark durdurunca telafi edilir.
+            try:
+                s.audio = self._audio_factory(self.audio_device)
+                s.audio.start(s.wav_path)
+            except Exception as err:  # noqa: BLE001 - mikrofon açılmazsa kayıt sessiz devam eder
+                s.audio, s.audio_error = None, f"Mikrofon açılamadı: {err}"
+        args = ffmpeg_args(exe, w, h, fps, s.video_path, out_height=self.out_height, encoder=encoder)
+        try:
+            s.log_file = open(s.log_path, "wb")     # stderr borusu dolarsa ffmpeg donar; dosyaya yaz
+        except OSError as err:
+            self._abort_audio(s)
+            raise RecorderError(f"Kayıt dosyası açılamadı: {err}\n{DISK_HINT}") from err
+        try:
+            s.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=s.log_file)
+        except OSError as err:
+            self._close_log(s)
+            self._abort_audio(s)
+            raise RecorderError(f"ffmpeg başlatılamadı: {err}") from err
+        s.started_at = time.monotonic()
+        s.thread = threading.Thread(target=self._loop, args=(s, grab_rect, first, w, h, fps), daemon=True)
+        s.thread.start()
+        return s
+
+    def _finalize(self, s: _Session) -> None:
+        """Kapanış: yazıcıyı durdurur, mikrofonu kapatır, ffmpeg'in dosyayı bitirmesini bekler, sesi birleştirir.
+        Yalnız bu kaydın oturumuyla çalışır; kilit tutulmaz (start() bu sürede FINALIZING görüp reddeder)."""
+        s.stop_event.set()
+        s.duration = time.monotonic() - s.started_at
+        if s.thread is not None:
+            s.thread.join(timeout=10)
+        audio = self._stop_audio(s)
+        proc = s.proc
+        if proc is not None:
+            try:
+                if proc.stdin:
+                    try:
+                        proc.stdin.close()
+                    except (OSError, ValueError):
+                        pass
+                    proc.stdin = None        # communicate() kapalı boruyu flush etmesin (Py3.12/macOS ValueError)
+                proc.communicate(timeout=60)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                s.error = "ffmpeg zamanında kapanmadı"
+        self._close_log(s)
+        if proc is not None and proc.returncode not in (0, None) and not s.error:
+            s.error = f"ffmpeg hata kodu {proc.returncode}: {self._log_tail(s)}"
+        if audio is not None:
+            self._mux(s, audio)
+        elif s.video_path != s.final_path and s.video_path.exists():
+            s.video_path.replace(s.final_path)      # mikrofon açılamadı: yalnız video
+
     def _grab(self, rect: RecordRect, sct=None) -> np.ndarray:
         return self._grabber(rect) if self._grabber else grab_screen(rect, sct)
 
-    def _close_log(self) -> None:
-        if self._log_file is not None:
+    def _close_log(self, s: _Session) -> None:
+        if s.log_file is not None:
             try:
-                self._log_file.close()
+                s.log_file.close()
             except OSError:
                 pass
-            self._log_file = None
+            s.log_file = None
 
-    def _log_tail(self, n: int = 400) -> str:
+    def _log_tail(self, s: _Session, n: int = 400) -> str:
         try:
-            return self._log_path.read_text(encoding="utf-8", errors="replace").strip()[-n:] if self._log_path else ""
+            return s.log_path.read_text(encoding="utf-8", errors="replace").strip()[-n:]
         except OSError:
             return ""
 
-    def _abort_audio(self) -> None:
-        if self._audio is not None:
+    def _abort_audio(self, s: _Session) -> None:
+        if s.audio is not None:
             try:
-                self._audio.stop()
+                s.audio.stop()
             except Exception:  # noqa: BLE001
                 pass
-            self._audio = None
+            s.audio = None
 
-    def _stop_audio(self) -> AudioResult | None:
-        if self._audio is None:
+    def _stop_audio(self, s: _Session) -> AudioResult | None:
+        if s.audio is None:
             return None
         try:
-            self.audio_result = self._audio.stop()
+            s.audio_result = s.audio.stop()
         except Exception as err:  # noqa: BLE001
-            self.audio_error = f"Mikrofon kapatılamadı: {err}"
-            self.audio_result = None
-        self._audio = None
-        return self.audio_result
+            s.audio_error = f"Mikrofon kapatılamadı: {err}"
+            s.audio_result = None
+        s.audio = None
+        return s.audio_result
 
-    def _mux(self, audio: AudioResult) -> None:
+    def _mux(self, s: _Session, audio: AudioResult) -> None:
         """Video (kopya) + WAV -> son MP4. Başarısızsa yalnız video dosyası sonuç olur."""
         exe = self._ffmpeg_exe or find_ffmpeg()
-        video, out = self._video_path, self.last_path
-        assert video is not None and out is not None
+        video, out = s.video_path, s.final_path
         if not exe or audio.samples <= 0 or not audio.path.exists():
-            self.audio_error = self.audio_error or "Ses kaydedilemedi (örnek yok)"
+            s.audio_error = s.audio_error or "Ses kaydedilemedi (örnek yok)"
             video.replace(out)
             return
-        t0 = self.video_t0 if self.video_t0 is not None else (audio.first_sample_monotonic or 0.0)
+        t0 = s.video_t0 if s.video_t0 is not None else (audio.first_sample_monotonic or 0.0)
         offset = t0 - (audio.first_sample_monotonic if audio.first_sample_monotonic is not None else t0)
         args = mux_args(exe, video, audio.path, out, offset, asetrate=audio_rate_correction(audio))
         try:
-            res = subprocess.run(args, capture_output=True, timeout=max(120, int(self.last_duration * 2)))
+            res = subprocess.run(args, capture_output=True, timeout=max(120, int(s.duration * 2)))
         except (OSError, subprocess.SubprocessError) as err:
-            self.audio_error = f"Ses birleştirilemedi: {err}"
+            s.audio_error = f"Ses birleştirilemedi: {err}"
             video.replace(out)
             return
         if res.returncode != 0 or not out.exists():
-            self.audio_error = "Ses birleştirilemedi: " + res.stderr.decode("utf-8", "replace").strip()[-300:]
+            s.audio_error = "Ses birleştirilemedi: " + res.stderr.decode("utf-8", "replace").strip()[-300:]
             video.replace(out)
             return
         for p in (video, audio.path):
@@ -408,14 +500,14 @@ class MssFfmpegRecorder:
             except OSError:
                 pass
 
-    def _grab_loop(self, rect: RecordRect, w: int, h: int, fps: int) -> None:
+    def _grab_loop(self, s: _Session, rect: RecordRect, w: int, h: int, fps: int) -> None:
         """Yakalama iş parçacığı: en fazla fps hızında kare alır, en yenisini bırakır."""
         sct = None
         if self._grabber is None:
             sct = _new_mss()                     # mss nesnesi kendi iş parçacığında oluşturulmalı
         period = 1.0 / fps
         try:
-            while not self._stop.is_set():
+            while not s.stop_event.is_set():
                 t = time.monotonic()
                 try:
                     frame = self._grab(rect, sct)
@@ -423,9 +515,9 @@ class MssFfmpegRecorder:
                     time.sleep(0.005)
                     continue
                 data = np.ascontiguousarray(frame[:h, :w]).tobytes()
-                with self._latest_lock:
-                    self._latest = data
-                self.frames_grabbed += 1
+                with s.latest_lock:
+                    s.latest = data
+                s.frames_grabbed += 1
                 rest = period - (time.monotonic() - t)      # fps'ten hızlı yakalamak boşa CPU
                 if rest > 0:
                     time.sleep(rest)
@@ -433,31 +525,31 @@ class MssFfmpegRecorder:
             if sct is not None:
                 sct.close()
 
-    def _loop(self, rect: RecordRect, first: np.ndarray, w: int, h: int, fps: int) -> None:
-        """Yazıcı iş parçacığı: sabit tempoda (fps) en yeni kareyi ffmpeg'e yazar.
+    def _loop(self, s: _Session, rect: RecordRect, first: np.ndarray, w: int, h: int, fps: int) -> None:
+        """Yazıcı iş parçacığı: sabit tempoda (fps) en yeni kareyi bu kaydın ffmpeg'ine yazar.
         Yakalama yavaşsa aynı kare tekrar yazılır; süre duvar saatiyle aynı kalır."""
         period = 1.0 / fps
-        self._latest = np.ascontiguousarray(first[:h, :w]).tobytes()
-        grabber = threading.Thread(target=self._grab_loop, args=(rect, w, h, fps), daemon=True)
+        s.latest = np.ascontiguousarray(first[:h, :w]).tobytes()
+        grabber = threading.Thread(target=self._grab_loop, args=(s, rect, w, h, fps), daemon=True)
         grabber.start()
         t0 = time.monotonic()
-        self.video_t0 = t0
+        s.video_t0 = t0
         try:
-            while not self._stop.is_set():
-                with self._latest_lock:
-                    data = self._latest
-                due = int((time.monotonic() - t0) * fps) - self.frames_written
+            while not s.stop_event.is_set():
+                with s.latest_lock:
+                    data = s.latest
+                due = int((time.monotonic() - t0) * fps) - s.frames_written
                 for _ in range(max(1, due)):
                     try:
-                        self._proc.stdin.write(data)      # type: ignore[union-attr]
+                        s.proc.stdin.write(data)      # type: ignore[union-attr]
                     except (BrokenPipeError, OSError, ValueError, AttributeError):
-                        self.error = "ffmpeg borusu kapandı: " + (self._log_tail(200) or "ayrıntı yok")
-                        self.failed = True
+                        s.error = "ffmpeg borusu kapandı: " + (self._log_tail(s, 200) or "ayrıntı yok")
+                        s.failed = True
                         return
-                    self.frames_written += 1
-                delay = (t0 + self.frames_written * period) - time.monotonic()
+                    s.frames_written += 1
+                delay = (t0 + s.frames_written * period) - time.monotonic()
                 if delay > 0:
                     time.sleep(delay)
         finally:
-            self._stop.set()
+            s.stop_event.set()
             grabber.join(timeout=5)

@@ -1,5 +1,8 @@
+import itertools
 import subprocess
+import threading
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -21,11 +24,16 @@ def test_record_rect_physical_is_even_and_scaled():
 
 
 def test_null_recorder_lifecycle():
+    from matematigin_mantigi.core.recorder import RecorderState
     rec = NullRecorder()
-    assert not rec.is_recording and rec.elapsed_seconds == 0
+    assert not rec.is_recording and rec.elapsed_seconds == 0 and rec.state is RecorderState.IDLE
     rec.start(RecordRect(0, 0, 100, 100), fps=60)
     assert rec.is_recording and rec.last_rect == RecordRect(0, 0, 100, 100) and rec.fps == 60
-    assert rec.stop() is None and not rec.is_recording
+    assert rec.state is RecorderState.RECORDING                  # arayüz is_recording'e değil state'e bakar
+    with pytest.raises(RecorderError, match="Kayıt zaten sürüyor"):
+        rec.start(RecordRect(0, 0, 50, 50))                      # gerçek kaydediciyle aynı: yalnız IDLE'da başlar
+    assert rec.last_rect == RecordRect(0, 0, 100, 100)
+    assert rec.stop() is None and not rec.is_recording and rec.state is RecorderState.IDLE
 
 
 def test_badge_text_and_ticks(qtbot):
@@ -231,3 +239,177 @@ def test_recorder_keeps_video_when_microphone_fails(tmp_path):
                             audio_device="Yok", audio_factory=Broken)
     rec.start(RecordRect(0, 0, 160, 120)); time.sleep(0.5); path = rec.stop()
     assert path.exists() and rec.error is None and "Mikrofon açılamadı" in rec.audio_error
+
+
+# --- #2: kayıt kapanırken yeni kayıt (denetim rec#2, app#1, e2e#2) -----------------------------------------
+
+def stepping_clock(start: datetime = datetime(2026, 9, 23, 10, 0, 0)):
+    """Her çağrı bir saniye ileri: aynı saniyede başlayan iki kaydın adı da ayrı olsun (ad çakışması ayrı madde)."""
+    seconds = itertools.count()
+    return lambda: start + timedelta(seconds=next(seconds))
+
+
+def wait_until(cond, timeout: float = 15.0) -> None:
+    """Koşul sağlanana dek bekler (süreye değil olaya bağlı; zaman aşımı yalnız asılı kalmaya karşı)."""
+    deadline = time.monotonic() + timeout
+    while not cond():
+        assert time.monotonic() < deadline, "koşul zamanında sağlanmadı"
+        time.sleep(0.01)
+
+
+class SlowMux:
+    """Uzun dersin ses birleştirmesini taklit eder: kaydedicinin subprocess.run çağrısı (ffmpeg mux) test
+    release() diyene dek bekler. entered: kapanış birleştirmeye vardı. Duvar saatine değil olaya bağlı."""
+
+    def __init__(self, monkeypatch):
+        self.entered, self._go = threading.Event(), threading.Event()
+        self.calls = 0
+        real_run = subprocess.run
+
+        def run(args, *a, **k):
+            self.calls += 1
+            self.entered.set()
+            assert self._go.wait(30), "test birleştirmeyi bırakmadı"
+            return real_run(args, *a, **k)
+        monkeypatch.setattr(subprocess, "run", run)
+
+    def release(self) -> None:
+        self._go.set()
+
+
+@pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
+def test_second_start_is_refused_while_first_recording_is_still_finalizing(tmp_path, monkeypatch):
+    """Durdurma (ffmpeg kapanışı + ses birleştirme) uzun derste onlarca saniye sürer. Eskiden kaydedici bu sürede
+    'kayıt yok' diyordu: ikinci start() kabul ediliyor, kapanmakta olan ilk kayıt yeni kaydın yollarını ve hata
+    alanlarını devralıyordu (ilk ders hiç birleşmiyordu). Şimdi start() reddeder; ilk kayıt kendi dosyalarıyla
+    biter, sonraki kayıt temiz bir oturumla başlar."""
+    mux = SlowMux(monkeypatch)
+    rec = MssFfmpegRecorder(lambda: tmp_path, fps=20, grabber=synthetic_grabber, out_height=0,
+                            audio_device="Sahte Mikrofon", audio_factory=FakeAudioCapture, clock=stepping_clock())
+    rect = RecordRect(0, 0, 160, 120)
+    rec.start(rect)
+    first = rec.last_path
+    wait_until(lambda: rec.frames_written >= 10)
+    stopped: list = []
+    stopper = threading.Thread(target=lambda: stopped.append(rec.stop()), daemon=True)
+    stopper.start()
+    try:
+        assert mux.entered.wait(20)                           # ilk kayıt birleştiriliyor: kapanış sürüyor
+        assert not rec.is_recording
+        with pytest.raises(RecorderError, match="Önceki kayıt hâlâ kaydediliyor"):
+            rec.start(rect)
+        assert rec.last_path == first                         # reddedilen start() hiçbir alana dokunmadı
+    finally:
+        mux.release()
+        stopper.join(30)
+        if rec.is_recording:                                  # (düzeltmesiz kodda ikinci kayıt açık kalmasın)
+            rec.stop()
+    assert stopped == [first]                                 # kapanış kendi kaydının yolunu döndürür
+    assert first.exists() and rec.error is None and rec.audio_error is None, (rec.error, rec.audio_error)
+    assert _stream_seconds(find_ffmpeg(), first, "-vn") > 0.3  # kendi WAV'ıyla birleşti: dosyada ses var
+    assert not list(tmp_path.glob("*.video.mp4")) and not list(tmp_path.glob("*.wav"))   # ara dosyalar silindi
+    rec.start(rect)                                           # kapanış bitti: yeni kayıt temiz oturumla
+    second = rec.last_path
+    assert second != first and rec.audio_result is None and rec.error is None and rec.audio_error is None
+    wait_until(lambda: rec.frames_written >= 5)
+    assert rec.stop() == second and second.exists() and first.exists()
+
+
+@pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
+def test_recorder_state_goes_idle_recording_finalizing_idle(tmp_path, monkeypatch):
+    """Kapanış (FINALIZING) ayrı bir durumdur; arayüz is_recording'e değil state'e bakar. Kayıt sürerken ikinci
+    start() de reddedilir. Kapanış sürerken gelen ikinci stop() (pencere kapatma + arka plan işçisi) kapanışı bir
+    daha yapmaz, onun bitmesini bekleyip aynı dosyayı döndürür."""
+    from matematigin_mantigi.core.recorder import RecorderState
+    mux = SlowMux(monkeypatch)
+    rec = MssFfmpegRecorder(lambda: tmp_path, fps=20, grabber=synthetic_grabber, out_height=0,
+                            audio_device="Sahte Mikrofon", audio_factory=FakeAudioCapture, clock=stepping_clock())
+    rect = RecordRect(0, 0, 160, 120)
+    assert rec.state is RecorderState.IDLE and rec.last_path is None and rec.stop() is None
+    rec.start(rect)
+    first = rec.last_path
+    assert rec.state is RecorderState.RECORDING and rec.is_recording
+    with pytest.raises(RecorderError, match="Kayıt zaten sürüyor"):
+        rec.start(rect)
+    assert rec.state is RecorderState.RECORDING and rec.last_path == first
+    wait_until(lambda: rec.frames_written >= 5)
+    results: list = []
+    stoppers = [threading.Thread(target=lambda: results.append(rec.stop()), daemon=True) for _ in range(2)]
+    stoppers[0].start()
+    try:
+        assert mux.entered.wait(20)
+        assert rec.state is RecorderState.FINALIZING and not rec.is_recording and rec.elapsed_seconds == 0
+        stoppers[1].start()
+        stoppers[1].join(0.3)
+        assert stoppers[1].is_alive()                         # ikinci stop() kapanışın bitmesini bekliyor
+    finally:
+        mux.release()
+        for t in stoppers:
+            t.join(30)
+    assert results == [first, first] and mux.calls == 1       # birleştirme bir kez koştu
+    assert rec.state is RecorderState.IDLE and first.exists()
+
+
+def test_start_failure_leaves_recorder_idle_with_a_clear_error(tmp_path):
+    """Kayıt klasörü açılamazsa (disk dolu, izin yok, macOS'ta Belgeler izni) ham OSError arayüze kaçıp uygulamayı
+    düşürmesin: anlamlı RecorderError, kaydedici IDLE kalır, mikrofon hiç açılmaz. ffmpeg açılamazsa açılmış
+    mikrofon kapatılır. İkisinde de kaydedici takılı kalmaz: sonraki deneme aynı gerçek hatayı verir."""
+    from matematigin_mantigi.core.recorder import RecorderState
+    mics: list = []
+
+    class SpyMic(FakeAudioCapture):
+        def __init__(self, device):
+            super().__init__(device)
+            self.stopped = False
+            mics.append(self)
+
+        def stop(self):
+            self.stopped = True
+            return super().stop()
+    blocker = tmp_path / "dosya"
+    blocker.write_text("klasör değil")
+    rect = RecordRect(0, 0, 64, 48)
+    rec = MssFfmpegRecorder(lambda: blocker / "oturum", grabber=synthetic_grabber, ffmpeg_exe="ffmpeg",
+                            audio_device="Sahte Mikrofon", audio_factory=SpyMic)
+    for _ in range(2):
+        with pytest.raises(RecorderError, match="Kayıt klasörü oluşturulamadı"):
+            rec.start(rect)
+        assert rec.state is RecorderState.IDLE and not rec.is_recording and rec.last_path is None
+    assert mics == []
+    rec = MssFfmpegRecorder(lambda: tmp_path / "oturum", grabber=synthetic_grabber, ffmpeg_exe=str(tmp_path / "yok"),
+                            audio_device="Sahte Mikrofon", audio_factory=SpyMic)
+    with pytest.raises(RecorderError, match="ffmpeg başlatılamadı"):
+        rec.start(rect)
+    assert rec.state is RecorderState.IDLE and not rec.is_recording
+    assert len(mics) == 1 and mics[0].stopped                 # açılan mikrofon kapatıldı
+
+
+@pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
+def test_exception_while_finalizing_still_returns_recorder_to_idle(tmp_path, monkeypatch):
+    """Kapanışın bir adımı patlarsa (ör. Windows'ta kullanımdaki dosyanın yeniden adlandırılması) durum FINALIZING'de
+    takılı kalmamalı: yoksa uygulama yeniden açılana dek hiç kayıt başlatılamaz ('Önceki kayıt hâlâ kaydediliyor')."""
+    from matematigin_mantigi.core.recorder import RecorderState
+
+    class Broken:
+        def __init__(self, device): pass
+        def start(self, path): raise RuntimeError("aygıt yok")
+    real_replace = Path.replace
+
+    def busy(self, target):
+        if self.name.endswith(".video.mp4"):
+            raise PermissionError(13, "dosya kullanımda", str(self))
+        return real_replace(self, target)
+    rec = MssFfmpegRecorder(lambda: tmp_path, fps=20, grabber=synthetic_grabber, out_height=0,
+                            audio_device="Yok", audio_factory=Broken, clock=stepping_clock())
+    rect = RecordRect(0, 0, 160, 120)
+    rec.start(rect)
+    wait_until(lambda: rec.frames_written >= 3)
+    monkeypatch.setattr(Path, "replace", busy)
+    with pytest.raises(PermissionError):
+        rec.stop()                                            # mikrofonsuz kayıt: .video.mp4 -> .mp4 adlandırması
+    assert rec.state is RecorderState.IDLE and not rec.is_recording
+    monkeypatch.undo()
+    rec.start(rect)                                           # takılı kalmadı: yeni kayıt başlar
+    assert rec.state is RecorderState.RECORDING
+    wait_until(lambda: rec.frames_written >= 3)
+    assert rec.stop().exists() and rec.state is RecorderState.IDLE

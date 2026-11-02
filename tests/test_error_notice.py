@@ -289,6 +289,57 @@ def test_no_box_opens_under_a_hidden_main_window_and_the_box_closes_with_it(qtbo
     assert "kapanıştan önce görünen" in text and "pencere kapalıyken gelen" in text, text
 
 
+def test_notice_follows_the_main_window_without_a_python_event_filter(qtbot, monkeypatch):
+    """U1: kutu ana pencereye Python'da yazılmış bir olay süzgeci kuruyordu. Uzun ömürlü pencerede kalan süzgeç
+    yorumlayıcı sonlanırken çağrılınca süreç ara sıra SIGSEGV (-11) ile ölüyordu (paketli Mac'te 'beklenmedik şekilde
+    kapandı' raporu; 188 koşuda 14). Pencerenin görünürlüğü Qt'nin kendi sinyaliyle izlenir: pencerenin olayları
+    hiçbir yolda kutunun Python koduna uğramaz. Kutu yine pencereyle kapanır, pencere yeniden gösterilince gelir."""
+    filtered = []
+    monkeypatch.setattr(ErrorNotice, "eventFilter", lambda self, obj, ev: filtered.append(ev.type()) or False,
+                        raising=False)
+    notice, anchor = _notice(qtbot)
+    _route(notice)
+    notice.post("Beklenmeyen hata", "pencere kapanmadan önce", "k1")
+    qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)
+    qtbot.addWidget(notice.box)
+    anchor.close()
+    assert filtered == [] and _visible_boxes() == []
+    anchor.show()
+    qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)
+    assert filtered == [] and notice.box.text() == "pencere kapanmadan önce"
+
+
+def test_quitting_lets_the_notice_go_of_the_main_window(window, qtbot, monkeypatch):
+    """U1: çıkışta (aboutToQuit, app._wire_notice bağlar) kutu ana pencereyle bağını keser: pencereye kanca (süzgeç ya
+    da görünürlük bağlantısı) kalmaz, pencereyi tutan başvurular ve kutu bırakılır. Yorumlayıcı sonlanırken pencere
+    silinirken kutunun Python kodu çağrılmaz (eskiden süzgeç çağrılıyor, süreç ara sıra -11 ile ölüyordu)."""
+    from matematigin_mantigi import app as app_mod
+    calls = []
+    monkeypatch.setattr(ErrorNotice, "eventFilter", lambda self, obj, ev: calls.append("süzgeç") or False,
+                        raising=False)
+    monkeypatch.setattr(ErrorNotice, "_on_anchor_visibility", lambda self, visible: calls.append(visible),
+                        raising=False)
+    notice = ErrorNotice()
+    monkeypatch.setattr(error_notice, "_instance", notice)
+    app_mod._wire_notice(notice, window)
+    window.hide()
+    window.show()
+    assert calls == [False, True], calls                     # pencere izleniyor (süzgeçsiz)
+    notice.post("Düzen kaydedilemedi", "çıkıştan önce gelen", "k1")
+    qtbot.waitUntil(lambda: _box_shown(notice), timeout=2000)
+    box = notice.box
+    QApplication.instance().aboutToQuit.emit()
+    assert sip.isdeleted(box) or not box.isVisible()
+    calls.clear()
+    window.hide()
+    window.show()
+    for _ in range(3):
+        QApplication.processEvents()
+    assert calls == [] and _visible_boxes() == [], calls
+    held = (notice._anchor, notice._avoid, notice._keep_clear, notice._is_recording, notice._show_alert)
+    assert held == (None,) * 5, held                         # pencereyi (lambdalarla) tutan başvuru kalmadı
+
+
 def test_box_lost_with_a_modal_is_not_shown_again_under_a_closed_main_window(qtbot):
     """'Kayıt hatası' modalının çocuğu olan kutu modalla silinir; ardından pencere kapanırsa kutu gizli pencerenin
     altında yeniden açılmaz (açılıyordu: Qt'nin kuyruktaki çıkışı silinip süreç görünmez kalıyordu, v04)."""

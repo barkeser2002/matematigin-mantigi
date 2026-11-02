@@ -95,7 +95,8 @@ def _toolbar_bottom(win: MainWindow) -> QRect:
 def _wire_notice(notice: error_notice.ErrorNotice, win: MainWindow) -> None:
     """Uyarı kutusunu pencereye bağlar: kayıt dışında sahneye ve araç çubuğunun altına değmeyen yere konur; kayıt
     sürerken (kaydedilirken de) hiç açılmaz, araç çubuğunun şeridine yazar, kayıt bitince açılır. Kaydedici
-    testlerde/ayarlarda değişebildiği için durum her seferinde pencereden okunur."""
+    testlerde/ayarlarda değişebildiği için durum her seferinde pencereden okunur. Uygulama kapanırken (aboutToQuit)
+    kutu pencereyle bütün bağı keser: yorumlayıcı sonlanırken silinen pencere kutunun Python koduna uğramaz (U1)."""
     notice.set_anchor(win, avoid=lambda: _recorded_rect(win), keep_clear=lambda: _toolbar_bottom(win))
     notice.set_recording_route(is_recording=lambda: win.recorder.state is not RecorderState.IDLE,
                                show_alert=lambda text: win.toolbar.set_alert(error_notice.ALERT_KEY, text))
@@ -104,6 +105,7 @@ def _wire_notice(notice: error_notice.ErrorNotice, win: MainWindow) -> None:
     # Kayıt rozeti kayıt başlar başlamaz (sonra saniyede bir) tik atar: kayıt başlangıcı ve bitişi yoklamayı
     # beklemeden de görülür.
     win.badge.ticked.connect(lambda _seconds: notice.recording_changed())
+    QApplication.instance().aboutToQuit.connect(notice.release)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -123,11 +125,11 @@ def main(argv: list[str] | None = None) -> int:
     app.setFont(theme.font(fam, 13))            # varsayılan aile; stil sayfası font-family kullanmaz
     app.setStyleSheet(theme.build_stylesheet(fam))
     win = build_window(parse_args(argv), fam)
-    _wire_notice(notice, win)
     # Ana pencere kapanınca süreç biter. Qt'nin kendi çıkışı (son pencere kapandı) kuyruğa konan bir olaydır; o
     # işlenmeden gösterilen herhangi bir pencere onu kuyruktan siler: 'Durdur ve çık'tan sonra gizli ana pencerenin
     # çocuğu olarak yeniden açılan uyarı kutusu pencereyi kapatıp süreci görünmez bırakıyordu (Windows'ta arka plan
     # süreci). exit() pencere sormaz; kamera ve ayarlar closeEvent'te kapandı.
     win.closed.connect(lambda: QTimer.singleShot(0, lambda: app.exit(0)))
     win.show()
+    _wire_notice(notice, win)          # gösterildikten sonra: kutu pencerenin (artık kurulu) görünürlüğünü izler
     return app.exec()

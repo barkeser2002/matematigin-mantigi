@@ -100,7 +100,7 @@ def late_boom():
 class Rec(NullRecorder):
     """Kapanışı _StopWorker'da koşan sahte kaydedici; sonuç alanları (kendi metinleri) senaryodan."""
     stop_is_quick = False
-    error = audio_error = None
+    error = audio_error = video_warning = None
 
     def __init__(self):
         super().__init__()
@@ -117,6 +117,7 @@ class Rec(NullRecorder):
                           f"\nDosyalar silinmedi:\n{home}/kayit.video.mp4 (video 42:09)\n{home}/kayit.wav (ses 42:11)"
                           "\nffmpeg çıktısı: " + "[libx264 @ 0x7f8b1c00] frame I:12 Avg QP:20.31 size: 81234 " * 4)
         self.audio_error = "Mikrofon kayıt sırasında kesildi (yapay)"
+        self.video_warning = "Görüntü kodlayıcısı kayda yetişemedi: video 4 sn erken bitiyor (yapay)"
         return Path("rec") / "kayit_yapay.mp4"
 
 
@@ -175,6 +176,11 @@ def _text(x) -> str:
     return x.decode("utf-8", "replace") if isinstance(x, bytes) else (x or "")
 
 
+# Sahte kaydedicinin görüntü uyarısı (CHILD'daki Rec ile aynı metin).
+VIDEO_LAG = "Görüntü kodlayıcısı kayda yetişemedi: video 4 sn erken bitiyor (yapay)"
+assert VIDEO_LAG in CHILD
+
+
 def _run(tmp_path, mode: str, screens: list | None = None):
     platform = "offscreen"
     if screens is not None:                         # ekran düzeni (çalışma dizinine göreli yol)
@@ -200,16 +206,17 @@ def test_stop_and_quit_shows_one_summary_and_the_process_exits(tmp_path, mode):
     uyarılar ve mikrofon uyarısı hiç görünmüyordu (kutu da gizli pencerenin çocuğu olarak ekranda kalıyordu); hatayla
     bittiyse 'Kayıt hatası'nın çocuğu olarak silinen kutu gizli ana pencerenin altında yeniden açılıyor, Qt'nin
     kuyruktaki çıkışını siliyordu: pencere kapanıyor, SÜREÇ ÇIKMIYORDU (Windows'ta görünmez arka plan süreci). Şimdi
-    kapanış sorusundan sonra TEK pencere: sonuç, ses uyarısı ve iki uyarı; sonra süreç 0 ile çıkar, arkada kutu kalmaz.
-    Özet açıkken gelen uyarı ('hata') özetin üstünde görünür, kapanan pencerenin altında yeniden açılmaz. Uyarılar
-    hatalar.log'da da durur."""
+    kapanış sorusundan sonra TEK pencere: sonuç, ses uyarısı, görüntü uyarısı (U7, kendi önekiyle) ve iki uyarı; sonra
+    süreç 0 ile çıkar, arkada kutu kalmaz. Özet açıkken gelen uyarı ('hata') özetin üstünde görünür, kapanan pencerenin
+    altında yeniden açılmaz. Uyarılar hatalar.log'da da durur."""
     lines = _run(tmp_path, mode)
     modals = [json.loads(line[len("MODAL "):]) for line in lines if line.startswith("MODAL ")]
     assert len(modals) == 2 and modals[0] == "Kayıt sürüyor, durdurulup çıkılsın mı?", modals
     summary = modals[1]
     for part in ("kayıt sırasında yapay yuva hatası", "Tahta görüntüsü kaydedilemedi",
-                 "Mikrofon kayıt sırasında kesildi (yapay)"):
+                 "Mikrofon kayıt sırasında kesildi (yapay)", f"Kaydın görüntüsünde sorun var: {VIDEO_LAG}"):
         assert part in summary, summary
+    assert f"Kaydın sesinde sorun var: {VIDEO_LAG}" not in summary, summary
     assert ("yapay kapanış hatası, ham dosyalar silinmedi" if mode == "hata" else "kayit_yapay.mp4") in summary, summary
     late = 1 if mode == "hata" else 0             # özet açıkken gelen uyarı özetin üstünde görüldü
     assert f"MODAL_KAPANIRKEN_GORUNEN_KUTU {late}" in lines, lines
@@ -245,6 +252,7 @@ def test_heavy_closing_summary_fits_on_a_small_laptop_screen(tmp_path):
     summary = modals[1]
     assert "ffmpeg kayıt sırasında durdu" in summary and "kayit.wav (ses 42:11)" in summary, summary
     assert "Mikrofon kayıt sırasında kesildi (yapay)" in summary and "7 uyarı" in summary, summary
+    assert f"Kaydın görüntüsünde sorun var: {VIDEO_LAG}" in summary, summary
     assert all(f"Beklenmeyen hata {i}" in summary or "gösterilmiyor; hepsi hatalar.log'da" in summary
                for i in range(1, 8)), summary
     labels = json.loads(next(line for line in lines if line.startswith("AYRINTI_DUGMESI "))[len("AYRINTI_DUGMESI "):])

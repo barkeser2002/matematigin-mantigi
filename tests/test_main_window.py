@@ -472,6 +472,98 @@ def test_record_error_window_also_tells_what_happened_to_the_sound(window, qtbot
     assert "Ses birleştirilemedi: yapay sebep; ses ayrı dosyada duruyor" in text, text
 
 
+VIDEO_LAG = "Görüntü kodlayıcısı kayda yetişemedi: video 4 sn erken bitiyor (yapay)"
+
+
+def test_video_warning_of_a_saved_recording_has_its_own_notice(window, monkeypatch):
+    """U7: kaydedicinin görüntü uyarısı (video_warning: kodlayıcı kayda yetişemedi) eskiden audio_error'daydı ve
+    'Kaydın sesinde sorun var' önekiyle gösteriliyordu. Başarılı kayıtta kendi uyarısı: 'Kayıtta görüntü sorunu', ses
+    uyarısından ayrı anahtar ve önekle; ses uyarısı da ayrıca gelir. Durum satırında (sahnede, sonraki kayda girer)
+    ikisi de yok."""
+    from pathlib import Path
+    from matematigin_mantigi.core.recorder import NullRecorder
+
+    class Lagging(NullRecorder):                      # anında durur; sonuç alanları bu testin kendi metni
+        audio_error = video_warning = None
+
+        def stop(self):
+            super().stop()
+            self.audio_error = "Mikrofon kayıt sırasında kesildi (yapay)"
+            self.video_warning = VIDEO_LAG
+            return Path("oturum") / "kayit_goruntu.mp4"
+    shown = _capture_modals(monkeypatch)
+    posted = _capture_notices(monkeypatch)
+    window.recorder = Lagging()
+    window.toggle_recording(True)
+    window.toggle_recording(False)
+    status = window.work_area.status_label.text()
+    assert "kayit_goruntu.mp4" in status and "kodlayıcı" not in status and "Mikrofon" not in status, status
+    assert shown == [] and len(posted) == 2, posted
+    by_title = {title: (text, key) for title, text, key in posted}
+    assert set(by_title) == {"Kayıtta ses sorunu", "Kayıtta görüntü sorunu"}, posted
+    video_text, video_key = by_title["Kayıtta görüntü sorunu"]
+    assert video_text.startswith(f"Kayıt kaydedildi: {Path('oturum') / 'kayit_goruntu.mp4'}"), video_text
+    assert f"Kaydın görüntüsünde sorun var: {VIDEO_LAG}" in video_text and "sesinde" not in video_text, video_text
+    sound_text, sound_key = by_title["Kayıtta ses sorunu"]
+    assert "kodlayıcı" not in sound_text and video_key != sound_key, posted
+
+
+def test_video_warning_alone_is_not_shown_as_a_sound_problem(window, monkeypatch):
+    """U7: yalnız görüntü uyarısı varsa (ses sağlam) tek uyarı gelir, metninde ses sözü geçmez. Her kaydın görüntü
+    uyarısı kendi anahtarıyla: oturumun ikinci kaydının uyarısı da gösterilir."""
+    from pathlib import Path
+    from matematigin_mantigi.core.recorder import NullRecorder
+
+    class Lagging(NullRecorder):
+        audio_error = video_warning = None
+        count = 0
+
+        def stop(self):
+            super().stop()
+            Lagging.count += 1
+            self.video_warning = f"{VIDEO_LAG} {Lagging.count}"
+            return Path("oturum") / f"kayit_{Lagging.count}.mp4"
+    shown = _capture_modals(monkeypatch)
+    posted = _capture_notices(monkeypatch)
+    window.recorder = Lagging()
+    for _ in range(2):
+        window.toggle_recording(True)
+        window.toggle_recording(False)
+    assert shown == [] and [p[0] for p in posted] == ["Kayıtta görüntü sorunu"] * 2, posted
+    assert posted[0][2] != posted[1][2], posted
+    for i, (_title, text, _key) in enumerate(posted, start=1):
+        assert f"{VIDEO_LAG} {i}" in text and f"kayit_{i}.mp4" in text and "sesinde" not in text, text
+
+
+def test_record_error_window_also_tells_the_video_warning(window, qtbot, monkeypatch):
+    """U7: kayıt hatayla bittiyse görüntü uyarısı da 'Kayıt hatası' penceresinde, kendi önekiyle (ses uyarısının
+    önekiyle değil); ses uyarısı da yerinde."""
+    from matematigin_mantigi.core.recorder import NullRecorder
+
+    class PipeDied(NullRecorder):                     # kapanış _StopWorker'da; kendi metinleri (kaydedicininki değil)
+        stop_is_quick = False
+        error = audio_error = video_warning = None
+
+        def stop(self):
+            super().stop()
+            self.error = "yapay boru hatası: ayrıntı yok"
+            self.audio_error = "Ses birleştirilemedi: yapay sebep; ses ayrı dosyada duruyor"
+            self.video_warning = VIDEO_LAG
+            return None
+    shown = _capture_modals(monkeypatch)
+    window.recorder = PipeDied()
+    tb = window.toolbar
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=10000)
+    assert len(shown) == 1, shown
+    text = shown[0][1]
+    assert text.startswith(RECORD_FAILED) and "yapay boru hatası: ayrıntı yok" in text, text
+    assert f"Kaydın görüntüsünde sorun var: {VIDEO_LAG}" in text, text
+    assert f"Kaydın sesinde sorun var: {VIDEO_LAG}" not in text, text
+    assert "Kaydın sesinde sorun var: Ses birleştirilemedi: yapay sebep" in text, text
+
+
 def _screen_pixels(widget, width: int):
     """Ekranda (offscreen: pencerelerin son çizilmiş hâli) widget'ın sol üstünden başlayan `width` genişliğindeki
     bant: kaydedicinin ilk karesinde ne göründüğü. Bant sabit genişlikte: yazı uzayıp kısalsa da aynı yer ölçülür."""
@@ -1640,21 +1732,22 @@ def test_stop_and_quit_shows_the_result_and_the_waiting_notices_in_one_window_th
     """P1: 'Durdur ve çık'tan sonra kayıt başarıyla biterse pencere kapanıyor, mikrofon uyarısı ve kayıt sırasında
     biriken uyarılar ('Tahta görüntüsü kaydedilemedi') hiç görünmüyordu; hatayla biterse uyarı kutusu 'Kayıt hatası'
     penceresinin çocuğu olup onunla siliniyor, gizlenen ana pencerenin altında yeniden açılıyordu. Şimdi pencere
-    kapanmadan önce TEK pencerede: kaydın sonucu (dosya ya da hata), ses uyarısı ve bütün bekleyen uyarılar. Sonra
-    pencere kapanır; arkada kutu, şerit, yoklama kalmaz."""
+    kapanmadan önce TEK pencerede: kaydın sonucu (dosya ya da hata), ses uyarısı, görüntü uyarısı (U7, kendi önekiyle)
+    ve bütün bekleyen uyarılar. Sonra pencere kapanır; arkada kutu, şerit, yoklama kalmaz."""
     from pathlib import Path
     from matematigin_mantigi.core.recorder import NullRecorder
     from matematigin_mantigi.ui import error_notice
 
     class BackgroundStop(NullRecorder):               # kapanış _StopWorker'da; sonuç alanları bu testin kendi metni
         stop_is_quick = False
-        error = audio_error = None
+        error = audio_error = video_warning = None
 
         def stop(self):
             super().stop()
             if outcome == "hata":
                 self.error = "yapay kapanış hatası, ham dosyalar silinmedi"
             self.audio_error = "Mikrofon kayıt sırasında kesildi (yapay)"
+            self.video_warning = VIDEO_LAG
             return Path("oturum") / "kayit_yapay.mp4"
     notice = _wired_notice(window, monkeypatch)
     asked, shown = _answer_with_summary(monkeypatch)
@@ -1668,6 +1761,8 @@ def test_stop_and_quit_shows_the_result_and_the_waiting_notices_in_one_window_th
     assert len(shown) == 1, shown                                     # tek özet penceresi
     text = shown[0][1]
     assert "S1 sorusunun tahta resmi kaydedilemedi" in text and "Mikrofon kayıt sırasında kesildi (yapay)" in text, text
+    assert f"Kaydın görüntüsünde sorun var: {VIDEO_LAG}" in text, text
+    assert f"Kaydın sesinde sorun var: {VIDEO_LAG}" not in text, text
     if outcome == "hata":
         assert "yapay kapanış hatası, ham dosyalar silinmedi" in text, text
     else:

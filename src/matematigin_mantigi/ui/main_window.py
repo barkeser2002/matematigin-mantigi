@@ -72,11 +72,18 @@ def _sound_text(audio_err: str) -> str:
     return f"Kaydın sesinde sorun var: {audio_err}"
 
 
-def _record_error_text(err: str, audio_err: str | None) -> str:
-    """Kayıt hatası penceresinin metni: kaydedicinin hatası ve (atılmadan) ses uyarısı."""
+def _video_text(video_warn: str) -> str:
+    """Kaydedicinin görüntü uyarısı (video_warning: kodlayıcı kayda yetişemedi) kendi önekiyle: ses uyarısı değil."""
+    return f"Kaydın görüntüsünde sorun var: {video_warn}"
+
+
+def _record_error_text(err: str, audio_err: str | None, video_warn: str | None = None) -> str:
+    """Kayıt hatası penceresinin metni: kaydedicinin hatası ve (atılmadan) ses ve görüntü uyarıları."""
     text = f"{RECORD_FAILED}\n{err}"
     if audio_err and audio_err not in err:
         text += f"\n\n{_sound_text(audio_err)}"
+    if video_warn and video_warn not in err:
+        text += f"\n\n{_video_text(video_warn)}"
     return text
 
 
@@ -460,10 +467,13 @@ class MainWindow(QMainWindow):
             pass
         return True
 
-    def _record_problems(self, exc: str | None) -> tuple[str | None, str | None]:
-        """(hata, ses uyarısı). Önce kaydedicinin anlamlı hatası (sebep, dosyaların yeri); işçinin ham istisna metni
-        yalnız yedek."""
-        return getattr(self.recorder, "error", None) or exc, getattr(self.recorder, "audio_error", None)
+    def _record_problems(self, exc: str | None) -> tuple[str | None, str | None, str | None]:
+        """(hata, ses uyarısı, görüntü uyarısı). Önce kaydedicinin anlamlı hatası (sebep, dosyaların yeri); işçinin ham
+        istisna metni yalnız yedek. Görüntü uyarısı (kodlayıcı kayda yetişemedi) kaydedicinin ayrı alanında
+        (video_warning): eskiden audio_error'daydı ve 'Kaydın sesinde sorun var' diye gösteriliyordu (U7). Alanı
+        olmayan kaydedicide None."""
+        return (getattr(self.recorder, "error", None) or exc, getattr(self.recorder, "audio_error", None),
+                getattr(self.recorder, "video_warning", None))
 
     def _record_details(self) -> list[str]:
         cap = getattr(self.recorder, "capture_fps", 0.0)
@@ -485,16 +495,18 @@ class MainWindow(QMainWindow):
         Uyarıların ayrıntısı kaydırılabilir ayrıntı bölümünde, ana metinde yalnız sayıları: hepsi ana metinde olunca
         özet MacBook Air'de 1138 px boyla ekrandan taşıyor, Tamam ekranın dışında kalıyordu (U4). blocked_by: pencere
         kapanmıyor, şu başlıklı modal pencere hâlâ açık (U3; başlıksızsa boş metin): özet bunu da söyler."""
-        err, audio_err = self._record_problems(exc)
+        err, audio_err, video_warn = self._record_problems(exc)
         parts: list[str] = []
         if err:
-            parts.append(_record_error_text(err, audio_err))
+            parts.append(_record_error_text(err, audio_err, video_warn))
         else:
             if path is not None:
                 details = self._record_details()
                 parts.append(f"Kayıt kaydedildi: {path}" + ("\n" + " · ".join(details) if details else ""))
             if audio_err:
                 parts.append(_sound_text(audio_err))
+            if video_warn:
+                parts.append(_video_text(video_warn))
         notices = error_notice.take_all()
         if notices:
             parts.append(f"{len(notices)} uyarı var: ayrıntısı aşağıda ('{DETAILS_SHOW}' düğmesi) ve hatalar.log'da.")
@@ -504,7 +516,7 @@ class MainWindow(QMainWindow):
                          "kaybolurdu. Onu kapattıktan sonra uygulamayı yeniden kapatın.")
         if not parts:
             return
-        warn = bool(err or audio_err or notices or blocked_by is not None)
+        warn = bool(err or audio_err or video_warn or notices or blocked_by is not None)
         box = QMessageBox(QMessageBox.Icon.Warning if warn else QMessageBox.Icon.Information,
                           "Kayıt sonucu" if warn else "Kayıt kaydedildi", "\n\n".join(parts),
                           QMessageBox.StandardButton.Ok, self)
@@ -515,22 +527,26 @@ class MainWindow(QMainWindow):
         box.deleteLater()
 
     def _report_record_result(self, path, exc: str | None) -> None:
-        """Hata pencerede (o an kayıt yok), ses uyarısıyla birlikte. Başarı durum satırında; başarılı kaydın ses uyarısı
-        (mikrofon kesildi) uyarı kutusunda: durum satırı sahnede, sonraki kayda girer ve uyarı taşımaz (Temel ilke).
+        """Hata pencerede (o an kayıt yok), ses ve görüntü uyarılarıyla birlikte. Başarı durum satırında; başarılı
+        kaydın ses uyarısı (mikrofon kesildi) ve görüntü uyarısı (kodlayıcı kayda yetişemedi) uyarı kutusunda, her biri
+        kendi başlığı, öneki ve anahtarıyla: durum satırı sahnede, sonraki kayda girer ve uyarı taşımaz (Temel ilke).
         Eskiden hata varken ses uyarısı atılıyordu (ffmpeg kayıt ortasında ölünce yalnız 'ffmpeg borusu kapandı'
         görünüyordu); başarıda da yalnız durum satırındaydı."""
-        err, audio_err = self._record_problems(exc)
+        err, audio_err, video_warn = self._record_problems(exc)
         if err:
-            QMessageBox.warning(self, "Kayıt hatası", _record_error_text(err, audio_err))
+            QMessageBox.warning(self, "Kayıt hatası", _record_error_text(err, audio_err, video_warn))
             return
         if path is not None:
             details = self._record_details()
             self.work_area.set_status(f"Kayıt kaydedildi: {path}" + (" · " + " · ".join(details) if details else ""))
+        # Her kaydın uyarısı kendi anahtarıyla: aynı anahtar oturumda bir kez gösterilir.
+        where = f"Kayıt kaydedildi: {path}\n" if path is not None else ""
         if audio_err:
-            # Her kaydın uyarısı kendi anahtarıyla: aynı anahtar oturumda bir kez gösterilir.
-            where = f"Kayıt kaydedildi: {path}\n" if path is not None else ""
             error_notice.post("Kayıtta ses sorunu", f"{where}{_sound_text(audio_err)}",
                               key=f"kayit-sesi:{path if path is not None else audio_err}")
+        if video_warn:
+            error_notice.post("Kayıtta görüntü sorunu", f"{where}{_video_text(video_warn)}",
+                              key=f"kayit-goruntu:{path if path is not None else video_warn}")
 
     def _check_recorder(self, _seconds: int) -> None:
         """Yazıcı borusu koptuysa (ffmpeg çöktü) kaydı hemen kapat ve kullanıcıya söyle."""

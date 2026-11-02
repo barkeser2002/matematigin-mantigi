@@ -265,6 +265,24 @@ def test_wav_close_error_is_returned_not_raised(tmp_path, monkeypatch):
     assert raised and res.error == "[Errno 28] No space left on device" and res.samples == 10 * 960
 
 
+# --- O1: son örneğin zamanı: mikrofon durdurmadan önce sustu mu ------------------------------------------------
+
+def test_capture_records_when_the_last_sample_arrived(tmp_path, monkeypatch):
+    """Mikrofon durdurmadan önce susarsa (kablo çekildi, AirPods koptu) akış açık kalır, geri çağrı gelmez; örnek
+    sayısı / süre oranı düşer. Kaydedici bunu saat kaymasından ancak son örneğin ne zaman geldiğini bilirse ayırır:
+    sonuçta son bloğun sonunun zamanı (ilk örnekle aynı zaman tabanı) ve ondan durdurmaya dek geçen süre var."""
+    sd = FakeSoundDevice(blocks=10)
+    monkeypatch.setattr(ac, "_sd", lambda: sd)
+    cap = ac.AudioCapture("USB Mikrofon")
+    cap.start(tmp_path / "a.wav")
+    assert sd.fed.wait(10)
+    fed = time.monotonic()
+    time.sleep(0.3)                                             # mikrofon sustu; durdurma sonra geliyor
+    res = cap.stop()
+    assert res.first_sample_monotonic < res.last_sample_monotonic <= fed
+    assert res.tail_gap == pytest.approx(res.stopped_monotonic - res.last_sample_monotonic) and res.tail_gap >= 0.3
+
+
 @pytest.mark.skipif(not ac.list_input_devices(), reason="mikrofon yok")
 def test_real_microphone_short_capture(tmp_path):
     import sounddevice

@@ -361,15 +361,28 @@ def sound_note(audio: AudioResult | None) -> str:
     return f"ses sağlam, {clock_text(audio.duration)}"
 
 
+# Saat kayması düzeltmesinin üst sınırı. Mikrofonun örnekleme saati bilgisayarın saatinden biraz farklı işler: kristal
+# toleransı tipik ±20-100 ppm, ucuz USB/Bluetooth aygıtlarda en çok birkaç yüz ppm (60 dk'da 0,1-1 sn). Bundan büyük
+# fark saat kayması değildir: kaybolan örnek (taşma, takılan sürücü) ya da kesilen mikrofon. Onu "düzeltmek" (asetrate)
+# sesi bütün derse yayar: ton düşer, senkron giderek kayar, kesinti uyarısız kalırdı (O1: eski sınır %1'di, 620 sn'lik
+# derste son 5 sn'lik kesik %0,8 çıkıp düzeltiliyordu).
+MAX_DRIFT_PPM = 1000.0
+
+
 def audio_rate_correction(result: AudioResult, min_duration: float = 600.0, min_ppm: float = 100.0) -> int | None:
-    """Uzun kayıtta mikrofon saati ile bilgisayar saati arasındaki farkı ölç: örnek sayısı / duvar süresi.
-    Kısa kayıtta ölçüm gürültüsü (±30 ms) gerçek kaymadan büyük olduğu için uygulanmaz."""
-    wall = result.wall_duration
-    if wall < min_duration or result.samples <= 0:
+    """Uzun kayıtta mikrofon saati ile bilgisayar saati arasındaki farkı ölç: örnek sayısı / ilk ile son örnek arasında
+    geçen gerçek süre. Kısa kayıtta ölçüm gürültüsü (±30 ms) gerçek kaymadan büyük olduğu için uygulanmaz.
+    Mikrofon durdurmadan MIC_GAP_S'den önce sustuysa uygulanmaz: eksik ses kayma değil kesintidir; birleştirme sesi
+    olduğu gibi koyar, sonu sessizlikle dolar, uyarı kesildiği yeri söyler (O1). Ölçü son örneğe dek: sona yakın kısa
+    bir susma (MIC_GAP_S'den kısa) ölçümü bozmaz."""
+    if result.tail_gap > MIC_GAP_S:
         return None
-    actual = result.samples / wall
+    span = result.heard_duration
+    if span < min_duration or result.samples <= 0:
+        return None
+    actual = result.samples / span
     ppm = abs(actual / result.samplerate - 1.0) * 1e6
-    if ppm < min_ppm or ppm > 10_000:            # %1'den büyük fark ölçüm hatasıdır, dokunma
+    if ppm < min_ppm or ppm > MAX_DRIFT_PPM:
         return None
     return int(round(actual))
 
@@ -773,16 +786,16 @@ class MssFfmpegRecorder:
         offset = t0 - (audio.first_sample_monotonic if audio.first_sample_monotonic is not None else t0)
         rate = audio_rate_correction(audio)
         end = audio_end_in_video(audio, offset, rate)
-        cut = mic_cut_text(length, end)
+        skipped = s.frames_skipped / s.fps
+        stop_s = s.stopped_at - s.video_t0 if s.video_t0 is not None and s.stopped_at else length + skipped
+        cut = mic_cut_text(max(length, stop_s), end)    # video erken bittiyse de (K1) ses durdurmaya dek sürmeliydi
         if cut:                                      # yazıcı hatası varsa sebep odur; yalnız yeri eklenir
             s.audio_error = f"{s.audio_error} ({cut})" if s.audio_error else f"Mikrofon kayıt sırasında kesildi ({cut})"
         # Kodlayıcı yetişemediği için durdurmada borç yazılmadıysa video düğmeye basılan andan erken biter; sesin o
         # aralığı korunur: -shortest onu keserdi, ara WAV da silinince dersin son sözleri kaybolurdu (K1). Ölçü
         # yazıcının bıraktığı borç: stop() geç çağrıldıysa (arayüz meşgul) düğmeden sonraki ses eklenmez.
-        skipped = s.frames_skipped / s.fps
         end_s = None
         if video_s is not None and skipped > TAIL_KEEP_S:
-            stop_s = s.stopped_at - s.video_t0 if s.video_t0 is not None and s.stopped_at else video_s + skipped
             tail = min(end, video_s + skipped, stop_s)   # sesin ucu, en çok durdurma anına dek
             end_s = tail if tail > video_s + TAIL_KEEP_S else None
         args = mux_args(exe, video, audio.path, out, offset, asetrate=rate, video_s=length, end_s=end_s)

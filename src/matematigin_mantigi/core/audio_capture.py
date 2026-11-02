@@ -28,6 +28,7 @@ class AudioResult:
     overflows: int = 0
     dropped_blocks: int = 0
     error: str | None = None          # WAV yazılamadı (disk dolu...): samples o ana dek yazılabilen ses
+    last_sample_monotonic: float | None = None    # son bloğun sonu (ilk örnekle aynı zaman tabanı); bilinmiyorsa None
 
     @property
     def duration(self) -> float:
@@ -35,10 +36,29 @@ class AudioResult:
 
     @property
     def wall_duration(self) -> float:
-        """İlk örnekten durdurmaya kadar geçen gerçek süre (saat kaymasını ölçmek için)."""
+        """İlk örnekten durdurmaya kadar geçen gerçek süre."""
         if self.first_sample_monotonic is None:
             return 0.0
         return max(0.0, self.stopped_monotonic - self.first_sample_monotonic)
+
+    @property
+    def heard_duration(self) -> float:
+        """İlk örnekten son örneğe dek geçen gerçek süre: saat kayması bununla ölçülür. Mikrofon durdurmadan önce
+        sustuysa durdurmaya dek geçen süre örnek sayısıyla karşılaştırılamaz (eksik ses kayma sanılır, O1). Son
+        örneğin zamanı bilinmiyorsa wall_duration."""
+        if self.first_sample_monotonic is None:
+            return 0.0
+        if self.last_sample_monotonic is None:
+            return self.wall_duration
+        return max(0.0, self.last_sample_monotonic - self.first_sample_monotonic)
+
+    @property
+    def tail_gap(self) -> float:
+        """Son örnekten durdurmaya dek geçen süre. Mikrofon kesilince (kablo çekildi, AirPods koptu) CoreAudio'da akış
+        açık kalır, geri çağrı gelmez: bu süre büyür. Kesilmeyen mikrofonda sürücü tamponu kadardır; bilinmiyorsa 0."""
+        if self.last_sample_monotonic is None:
+            return 0.0
+        return max(0.0, self.stopped_monotonic - self.last_sample_monotonic)
 
 
 def _reason(err: BaseException) -> str:
@@ -129,6 +149,7 @@ class AudioCapture:
         self.device = device
         self.channels = channels
         self.first_sample_monotonic: float | None = None
+        self.last_sample_monotonic: float | None = None     # son bloğun sonu: mikrofon durdurmadan önce sustu mu
         self.samples = 0
         self.overflows = 0
         self.dropped_blocks = 0
@@ -179,22 +200,27 @@ class AudioCapture:
             raise RuntimeError("kullanılabilir mikrofon bulunamadı")
         return fallback, sd.query_devices(fallback, "input")
 
+    def _block_lag(self, time_info, frames: int) -> float:
+        """Bloğun ilk örneğinin alındığı andan geri çağrıya dek geçen süre (0-0,5 sn). Sürücünün zaman bilgisinden;
+        vermiyorsa (WASAPI vb. güvenilmez) sürücünün bildirdiği gecikme + bu bloğun süresi."""
+        lag = None
+        try:
+            adc, cur = float(time_info.inputBufferAdcTime), float(time_info.currentTime)
+            if adc > 0 and cur > 0 and 0.0 <= cur - adc < 0.5:
+                lag = cur - adc
+        except Exception:  # noqa: BLE001 - bazı sürücüler zaman bilgisi vermez
+            lag = None
+        if lag is None:
+            lag = float(getattr(self._stream, "latency", 0.0) or 0.0) + frames / float(self.samplerate)
+        return min(max(lag, 0.0), 0.5)
+
     def _callback(self, indata, frames, time_info, status) -> None:
         if status and getattr(status, "input_overflow", False):
             self.overflows += 1
+        start = time.monotonic() - self._block_lag(time_info, frames)       # bu bloğun ilk örneği
         if self.first_sample_monotonic is None:
-            now = time.monotonic()
-            lag = None
-            try:
-                adc, cur = float(time_info.inputBufferAdcTime), float(time_info.currentTime)
-                if adc > 0 and cur > 0 and 0.0 <= cur - adc < 0.5:
-                    lag = cur - adc
-            except Exception:  # noqa: BLE001 - bazı sürücüler zaman bilgisi vermez
-                lag = None
-            if lag is None:
-                # WASAPI vb. zaman bilgisi güvenilmez: sürücünün bildirdiği gecikme + bu bloğun süresi
-                lag = float(getattr(self._stream, "latency", 0.0) or 0.0) + frames / float(self.samplerate)
-            self.first_sample_monotonic = now - min(max(lag, 0.0), 0.5)
+            self.first_sample_monotonic = start
+        self.last_sample_monotonic = start + frames / float(self.samplerate)
         try:
             self._q.put_nowait(indata.copy())
         except queue.Full:
@@ -240,4 +266,5 @@ class AudioCapture:
                 crash_log.log_handled(err, "ses dosyası kapatılırken")
             self._wav = None
         return AudioResult(self.path or Path(), self.samplerate, self.channels, self.samples,
-                           self.first_sample_monotonic, stopped, self.overflows, self.dropped_blocks, self.error)
+                           self.first_sample_monotonic, stopped, self.overflows, self.dropped_blocks, self.error,
+                           self.last_sample_monotonic)

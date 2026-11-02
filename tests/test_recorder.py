@@ -104,6 +104,91 @@ def test_audio_rate_correction_only_for_long_clear_drift():
     assert audio_rate_correction(broken) is None
 
 
+def test_rate_fix_is_not_mistaken_for_a_microphone_cut_or_lost_samples():
+    """O1: eksik sesi %1'e dek 'saat kayması' sayıyordu. Mikrofon dersin sonuna yakın kesilince (620 sn'de son 5 sn:
+    %0,8) asetrate sesi bütün derse yayıyordu: ton düşüyor, senkron giderek kayıyor, uyarı çıkmıyordu. Şimdi (1) son
+    örnek durdurmadan MIC_GAP_S'den önce geldiyse mikrofon kesilmiştir, düzeltme yok (kayma olsa bile); (2) kayma
+    son örneğe dek ölçülür (durdurmaya değil: sona yakın kısa bir kesik ölçümü bozmasın); (3) 1000 ppm'den büyük fark
+    saat kayması değildir (gerçek mikrofon saati onlarca, kötü durumda birkaç yüz ppm)."""
+    from matematigin_mantigi.core.audio_capture import AudioResult
+    a, rate = Path("a.wav"), 48000
+    s2 = AudioResult(a, rate, 1, rate * 615, 0.0, 620.0, last_sample_monotonic=615.0)      # son 5 sn kesik
+    assert audio_rate_correction(s2) is None                                                # eskiden 47613
+    cut = AudioResult(a, rate, 1, round(48014.4 * 3597), 0.0, 3600.0, last_sample_monotonic=3597.0)
+    assert audio_rate_correction(cut) is None             # 300 ppm kayma var ama mikrofon son 3 sn'de kesildi
+    span = AudioResult(a, rate, 1, round(48014.4 * 1199.9), 0.0, 1200.0, last_sample_monotonic=1199.9)
+    assert audio_rate_correction(span) == 48014           # kayma son örneğe dek ölçülür (durdurmaya dek değil)
+    near = AudioResult(a, rate, 1, round(48000 * 1.0008 * 1200), 0.0, 1200.0, last_sample_monotonic=1200.0)
+    assert audio_rate_correction(near) == 48038           # 800 ppm: gerçekçi sınırın içinde
+    lost = AudioResult(a, rate, 1, round(48000 * 1.005 * 1200), 0.0, 1200.0)
+    assert audio_rate_correction(lost) is None            # %0,5: saat kayması değil (eskiden 48240)
+
+
+def _beep_times(exe, path, rate: int = 8000) -> list[float]:
+    """Birleşik dosyanın sesindeki biplerin başlangıçları (sn): 1 sn'den uzun aralıkla ayrılmış yüksek örnekler."""
+    raw = subprocess.run([exe, "-hide_banner", "-loglevel", "error", "-i", str(path), "-vn", "-f", "s16le", "-ac", "1",
+                          "-ar", str(rate), "-"], capture_output=True, check=True).stdout
+    loud = np.flatnonzero(np.abs(np.frombuffer(raw, np.int16).astype(np.int32)) > 5000)
+    starts = [loud[0]] + [loud[i] for i in range(1, loud.size) if loud[i] - loud[i - 1] > rate] if loud.size else []
+    return [round(float(i) / rate, 3) for i in starts]
+
+
+def _mux_lesson(tmp_path, video_s: float, heard_s: float, stop_s: float, beeps=(), skipped_s: float = 0.0):
+    """Kaydedicinin kendi birleştirmesi (_mux), gerçek ffmpeg: video_s'lik küçük test videosu (2 kare/sn), mikrofonun
+    heard_s'de sustuğu (son örnek) bir WAV (beeps'te 0,2 sn'lik bipler) ve stop_s'de durdurulan kayıt. skipped_s:
+    kodlayıcı yetişemediği için durdurmada yazılmayan borç (video erken biter). Oturum döner."""
+    from matematigin_mantigi.core.audio_capture import AudioResult
+    from matematigin_mantigi.core.recorder import _Session
+    exe, fps, rate = find_ffmpeg(), 2, 8000
+    video, wav = tmp_path / "kayit_x.video.mp4", tmp_path / "kayit_x.wav"
+    subprocess.run([exe, "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                    f"testsrc=s=64x48:r={fps}:d={video_s}", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt",
+                    "yuv420p", str(video)], check=True, capture_output=True)
+    pcm = np.zeros(int(heard_s * rate), np.int16)
+    for beep in beeps:
+        i = int(beep * rate)
+        pcm[i:i + rate // 5] = (np.sin(2 * np.pi * 1000 * np.arange(rate // 5) / rate) * 15000).astype(np.int16)
+    with wave.open(str(wav), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate); w.writeframes(pcm.tobytes())
+    s = _Session(rect=RecordRect(0, 0, 64, 48), encoder="libx264", final_path=tmp_path / "kayit_x.mp4",
+                 video_path=video, log_path=tmp_path / "kayit_x.log", wav_path=wav, fps=fps)
+    t0 = 1000.0
+    s.video_t0, s.stopped_at, s.duration, s.frames_skipped = t0, t0 + stop_s, stop_s, round(skipped_s * fps)
+    MssFfmpegRecorder(lambda: tmp_path)._mux(s, AudioResult(wav, rate, 1, len(pcm), t0, t0 + stop_s,
+                                                            last_sample_monotonic=t0 + heard_s))
+    return s
+
+
+@pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
+def test_microphone_cut_near_the_end_of_a_long_lesson_is_not_taken_for_clock_drift(tmp_path):
+    """O1 (son inceleme s2): 620 sn'lik ders, mikrofon son 5 sn'de kesildi. asetrate=47613 uygulanıyordu: WAV'da 60.,
+    300. ve 600. saniyedeki bipler birleşik dosyada 60,49 / 302,44 / 604,88'de; audio_error yoktu, ara dosyalar
+    silindi. Şimdi düzeltme yok, bipler yerinde, uyarı kesildiği yeri söyler, eksik ses sessizlikle dolar (dosya
+    videonun uzunluğunda)."""
+    from matematigin_mantigi.core.recorder import media_duration
+    s = _mux_lesson(tmp_path, video_s=620, heard_s=615, stop_s=620, beeps=(60.0, 300.0, 600.0))
+    assert s.error is None, s.error
+    assert s.audio_error == "Mikrofon kayıt sırasında kesildi (10:15. dakikadan sonra ses yok)", s.audio_error
+    exe = find_ffmpeg()
+    assert _beep_times(exe, s.final_path) == pytest.approx([60.0, 300.0, 600.0], abs=0.05)
+    assert media_duration(exe, s.final_path) == pytest.approx(620.0, abs=0.1)
+    assert not s.video_path.exists() and not s.wav_path.exists()      # birleşik dosya tam: ara dosyalar silindi
+
+
+@pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
+def test_microphone_cut_is_reported_even_when_the_video_ended_early(tmp_path):
+    """Kodlayıcı yetişemediği için video durdurmadan erken bittiyse (K1: 10 sn video, 30 sn'lik kayıt) mikrofonun
+    kesildiği yer videonun sonuna değil durdurma anına göre ölçülür: ses 20. saniyede sustu, uyarı bunu söyler;
+    birleşik dosya sesin sonuna dek sürer (son kare ekranda)."""
+    from matematigin_mantigi.core.recorder import media_duration
+    s = _mux_lesson(tmp_path, video_s=10, heard_s=20, stop_s=30, beeps=(18.0,), skipped_s=20)
+    assert s.error is None, s.error
+    assert s.audio_error == "Mikrofon kayıt sırasında kesildi (0:20. dakikadan sonra ses yok)", s.audio_error
+    exe = find_ffmpeg()
+    assert s.tail_kept and media_duration(exe, s.final_path) == pytest.approx(20.0, abs=0.1)
+    assert _beep_times(exe, s.final_path) == pytest.approx([18.0], abs=0.05)
+
+
 def synthetic_grabber(rect: RecordRect) -> np.ndarray:
     t = int(time.monotonic() * 20) % rect.width
     frame = np.full((rect.height, rect.width, 4), (255, 255, 255, 255), np.uint8)

@@ -302,6 +302,163 @@ def test_real_recorder_with_audio_muxes_and_cleans_up(window, qtbot, tmp_path):
     assert frames > 10
 
 
+# --- #2: kayıt kaydedilirken yeni kayıt yok; uyarı araç çubuğunda (denetim app#1, e2e#2) -----------------------
+
+def test_r_while_previous_recording_is_saving_starts_nothing_and_warns_in_toolbar(window, qtbot, tmp_path,
+                                                                                  monkeypatch):
+    """Durdurma arka planda sürerken kayıt düğmesi kilitliydi ama R değildi: yeni kayıt başlıyor, ilk dersin
+    kapanışı yeni kaydın alanlarını devralıyor, araç çubuğu kayıt sürerken 'kayıt yok' gösteriyordu. Şimdi
+    kaydedilirken R hiçbir şey başlatmaz; uyarı araç çubuğundadır (tahtadaki durum satırı kayda girer, uyarı
+    taşımaz) ve kayıt kapanınca kalkar. Gerçek ffmpeg; uzun birleştirme olayla bekletilir (sleep yok)."""
+    import pytest
+    from PyQt6.QtWidgets import QMessageBox
+    from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState, find_ffmpeg
+    from tests.test_recorder import FakeAudioCapture, SlowMux, stepping_clock, synthetic_grabber, wait_until
+    if find_ffmpeg() is None:
+        pytest.skip("ffmpeg yok")
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: shown.append(a[1:3])))
+    mux = SlowMux(monkeypatch)
+    window.settings.audio_device = "Sahte Mikrofon"
+    rec = window.recorder = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=20, grabber=synthetic_grabber,
+                                              out_height=0, audio_device="Sahte Mikrofon",
+                                              audio_factory=FakeAudioCapture, clock=stepping_clock())
+    tb, status = window.toolbar, window.work_area.status_label
+    qtbot.keyClick(window, Qt.Key.Key_R)                                 # 1. ders
+    assert rec.is_recording
+    first = rec.last_path
+    wait_until(lambda: rec.frames_written >= 10)
+    qtbot.keyClick(window, Qt.Key.Key_R)                                 # durdur: kapanış arka planda
+    try:
+        assert mux.entered.wait(20)                                      # ilk ders birleştiriliyor
+        assert not tb.record_button.isEnabled()
+        qtbot.keyClick(window, Qt.Key.Key_R)                             # kaydedilirken yine R
+        assert rec.state is RecorderState.FINALIZING and rec.last_path == first and not window.badge.active
+        assert not tb.record_button.isChecked() and tb.record_label.text() == "KAYIT"
+        assert tb.alert_label.isVisible() and tb.alert_label.text() == "Kayıt kaydediliyor…"
+        assert "kaydediliyor" not in status.text() and "kapatılıyor" not in status.text()
+        assert shown == []                                               # modal pencere de açılmadı
+    finally:
+        mux.release()
+    qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=20000)
+    assert tb.alert_label.isHidden() and shown == []                     # kayıt kapandı: uyarı kalktı, hata yok
+    assert first.exists() and not list(first.parent.glob("*.video.mp4")) and not list(first.parent.glob("*.wav"))
+    qtbot.keyClick(window, Qt.Key.Key_R)                                 # artık yeni kayıt başlar
+    assert rec.state is RecorderState.RECORDING and rec.last_path != first and tb.record_button.isChecked()
+    wait_until(lambda: rec.frames_written >= 3)
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=20000)
+    assert rec.last_path.exists() and shown == []
+
+
+def test_r_before_the_stop_result_reaches_the_window_starts_nothing(window, qtbot, tmp_path, monkeypatch):
+    """Kaydedici IDLE'a döndükten sonra da, durdurma sonucu pencereye ulaşana (_on_record_stopped) dek yeni kayıt
+    yok: yoksa geç gelen sonuç yeni kaydın araç çubuğunu 'kayıt yok'a çevirir ve onun hata alanlarını okur."""
+    import threading
+    import pytest
+    from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState, find_ffmpeg
+    from tests.test_recorder import stepping_clock, synthetic_grabber, wait_until
+    if find_ffmpeg() is None:
+        pytest.skip("ffmpeg yok")
+    rec = window.recorder = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=10, grabber=synthetic_grabber,
+                                              out_height=0, clock=stepping_clock())
+    held, go = threading.Event(), threading.Event()
+    real_stop = rec.stop
+
+    def stop_then_hold():
+        path = real_stop()                     # kaydedici bitirdi (IDLE) ...
+        held.set()
+        assert go.wait(20)                     # ... ama sonuç henüz pencereye gönderilmedi
+        return path
+    monkeypatch.setattr(rec, "stop", stop_then_hold)
+    tb = window.toolbar
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    first = rec.last_path
+    wait_until(lambda: rec.frames_written >= 3)
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    try:
+        assert held.wait(20) and rec.state is RecorderState.IDLE
+        qtbot.keyClick(window, Qt.Key.Key_R)
+        assert rec.state is RecorderState.IDLE and rec.last_path == first          # yeni kayıt başlamadı
+        assert tb.alert_label.isVisible() and not tb.record_button.isEnabled()
+    finally:
+        go.set()
+    qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=20000)
+    assert tb.alert_label.isHidden() and not tb.record_button.isChecked() and first.exists()
+
+
+def test_exception_while_saving_is_shown_and_window_does_not_stay_locked(window, qtbot, tmp_path, monkeypatch):
+    """Kapanışın bir adımı patlarsa (ör. Windows'ta kullanımdaki dosyanın yeniden adlandırılması) hata gösterilir ve
+    arayüz 'kaydediliyor'da takılı kalmaz: şerit kalkar, düğme açılır, sonraki R yeni kayıt başlatır."""
+    from pathlib import Path
+    import pytest
+    from PyQt6.QtWidgets import QMessageBox
+    from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState, find_ffmpeg
+    from tests.test_recorder import stepping_clock, synthetic_grabber, wait_until
+    if find_ffmpeg() is None:
+        pytest.skip("ffmpeg yok")
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: shown.append(a[1:3])))
+
+    class NoMic:
+        def __init__(self, device): pass
+        def start(self, path): raise RuntimeError("aygıt yok")
+    rec = window.recorder = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=10, grabber=synthetic_grabber,
+                                              out_height=0, audio_device="Yok", audio_factory=NoMic,
+                                              clock=stepping_clock())
+    real_replace = Path.replace
+
+    def busy(self, target):
+        if self.name.endswith(".video.mp4"):
+            raise PermissionError(13, "dosya kullanımda", str(self))
+        return real_replace(self, target)
+    tb = window.toolbar
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    wait_until(lambda: rec.frames_written >= 3)
+    monkeypatch.setattr(Path, "replace", busy)                 # mikrofonsuz kayıt: .video.mp4 -> .mp4 patlar
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=20000)
+    assert shown and shown[0][0] == "Kayıt hatası" and "dosya kullanımda" in shown[0][1]
+    assert tb.alert_label.isHidden() and rec.state is RecorderState.IDLE
+    monkeypatch.setattr(Path, "replace", real_replace)
+    qtbot.keyClick(window, Qt.Key.Key_R)                        # kilitli kalmadı: yeni kayıt başlar
+    assert rec.state is RecorderState.RECORDING and tb.record_button.isChecked()
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=20000)
+    assert rec.last_path.exists() and len(shown) == 1
+
+
+def test_record_start_oserror_is_shown_and_toolbar_returns_to_idle(window, qtbot, monkeypatch):
+    """Başlatmadaki OSError (disk dolu, izin yok, macOS'ta Belgeler izni) eskiden yalnız RecorderError yakalandığı
+    için yuvadan kaçıyordu; PyQt6 yuvadaki yakalanmamış hatada uygulamayı kapatır. Şimdi anlamlı mesaj gösterilir,
+    araç çubuğu 'kayıt yok'a döner; düğme ve R aynı yoldan."""
+    from PyQt6.QtWidgets import QMessageBox
+    from matematigin_mantigi.core.recorder import RecorderState
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: shown.append(a[1:3])))
+
+    def disk_full(rect, fps=60):
+        raise OSError(28, "No space left on device", "/Users/ogretmen/Documents/oturum")
+    monkeypatch.setattr(window.recorder, "start", disk_full)
+    tb = window.toolbar
+    qtbot.mouseClick(tb.record_button, Qt.MouseButton.LeftButton)
+    assert shown and shown[0][0] == "Kayıt başlatılamadı"
+    assert "Kayıt dosyası yazılamadı" in shown[0][1] and "No space left on device" in shown[0][1]
+    assert window.recorder.state is RecorderState.IDLE and not window.badge.active
+    assert not tb.record_button.isChecked() and tb.record_label.text() == "KAYIT"
+    qtbot.keyClick(window, Qt.Key.Key_R)
+    assert len(shown) == 2 and not tb.record_button.isChecked()
+
+
+def test_writer_failure_stops_recording_on_next_badge_tick(window):
+    """ffmpeg borusu koparsa (kaydedici failed) saniyelik rozet tikinde kayıt kapatılır (_check_recorder)."""
+    window.toggle_recording(True)
+    assert window.recorder.is_recording
+    window.recorder.failed = True
+    window.badge.tick()
+    assert not window.recorder.is_recording and not window.toolbar.record_button.isChecked()
+
+
 def test_layout_edit_persists_to_file(window, qtbot, tmp_path):
     qtbot.mouseClick(window.toolbar.layout_button, Qt.MouseButton.LeftButton)
     assert window.work_area.edit_mode

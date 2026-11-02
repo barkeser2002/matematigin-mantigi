@@ -13,7 +13,7 @@ from matematigin_mantigi.core import layout_model as lm
 from matematigin_mantigi.core.models import (SHAPE_META, TOOL_META, PenSettings, Question, QuestionStatus, Tool,
                                              next_shape)
 from matematigin_mantigi.core.question_flow import QuestionFlow
-from matematigin_mantigi.core.recorder import Recorder, RecorderError, record_rect_for
+from matematigin_mantigi.core.recorder import DISK_HINT, Recorder, RecorderError, RecorderState, record_rect_for
 from matematigin_mantigi.core.session_store import SessionStore
 from matematigin_mantigi.core.settings import AppSettings
 from matematigin_mantigi.ui.camera_worker import FrameSource
@@ -52,6 +52,7 @@ class _StopWorker(QThread):
 WEBCAM_HIDE_TIMEOUT_MS = 400   # apply_ui_settings'in "webcam" görünürlüğü kapatma yolu: closeEvent'in
                                # varsayılanından (2000ms) çok daha kısa -- bkz. apply_ui_settings ve
                                # WebcamPanel.shutdown docstring'i.
+SAVING_ALERT = "Kayıt kaydediliyor…"   # kapanış (ffmpeg + ses birleştirme) sürerken araç çubuğundaki uyarı
 
 
 class MainWindow(QMainWindow):
@@ -169,7 +170,7 @@ class MainWindow(QMainWindow):
         sc("N", self.flow.next_question)
         sc("P", self.flow.prev_question)
         sc("Space", self.flow.toggle_work)
-        sc("R", lambda: self.toggle_recording(not self.recorder.is_recording))
+        sc("R", lambda: self.toggle_recording(self.recorder.state is not RecorderState.RECORDING))
         sc("H", lambda: self.flow.show_question() if not self.flow.is_question_shown() else self.flow.hide_question())
         sc("Left", self.flow.hint_prev)
         sc("Right", self.flow.hint_next)
@@ -269,21 +270,31 @@ class MainWindow(QMainWindow):
         self.settings.font_scale = v
         self.apply_ui_settings()
 
+    def _record_saving(self) -> bool:
+        """Önceki kayıt hâlâ kaydediliyor (kaydedici FINALIZING) ya da durdurma sonucu pencereye henüz ulaşmadı
+        (_StopWorker'ın done'ı _on_record_stopped'ta işlenmedi). Bu sürede ne yeni kayıt ne ikinci durdurma."""
+        return self.recorder.state is RecorderState.FINALIZING or getattr(self, "_stop_worker", None) is not None
+
     def toggle_recording(self, on: bool) -> None:
+        if self._record_saving():               # düğme kilitli; R de kapanan kaydın yollarına karışmasın (#2)
+            self.toolbar.set_alert(SAVING_ALERT)
+            return
         fps = self.settings.record_fps
-        if on and not self.recorder.is_recording:
+        state = self.recorder.state
+        if on and state is RecorderState.IDLE:
             rect = record_rect_for(self.work_area.recording_rect())
             try:
                 self.recorder.start(rect, fps=fps)
-            except RecorderError as err:
+            except (RecorderError, OSError) as err:   # OSError (disk, izin) yuvadan kaçıp uygulamayı kapatmasın
                 self.toolbar.set_recording(False)
-                QMessageBox.warning(self, "Kayıt başlatılamadı", str(err))
+                text = str(err) if isinstance(err, RecorderError) else f"Kayıt dosyası yazılamadı: {err}\n{DISK_HINT}"
+                QMessageBox.warning(self, "Kayıt başlatılamadı", text)
                 return
             h = self.settings.record_height or rect.height
             self.badge.set_format(round(rect.width * h / rect.height), h, fps)
             self.badge.start()
             self.work_area.relayout()
-        elif not on and self.recorder.is_recording:
+        elif not on and state is RecorderState.RECORDING:
             self.badge.stop()
             self.work_area.relayout()
             if getattr(self.recorder, "stop_is_quick", False):
@@ -291,19 +302,24 @@ class MainWindow(QMainWindow):
             else:
                 self.toolbar.set_recording(False)
                 self.toolbar.record_button.setEnabled(False)
-                self.work_area.set_status("Kayıt kapatılıyor, ses birleştiriliyor…")
+                self.toolbar.set_alert(SAVING_ALERT)      # durum satırına değil: o tahtada, kayda girer
                 self._stop_worker = _StopWorker(self.recorder, self)
                 self._stop_worker.done.connect(self._on_record_stopped)
                 self._stop_worker.start()
                 return
-        self.toolbar.set_recording(self.recorder.is_recording)
-        if self.recorder.is_recording:
+        recording = self.recorder.state is RecorderState.RECORDING
+        self.toolbar.set_recording(recording)
+        if recording:
             self.toolbar.set_recording_time(self.badge.seconds)
 
     def _on_record_stopped(self, path) -> None:
+        worker = getattr(self, "_stop_worker", None)
+        if worker is not None:
+            worker.wait()                    # done run()'ın son adımı: iş parçacığı bitsin, öyle bırakılsın
+        self._stop_worker = None             # kapanış bitti: düğme ve R yeniden kayıt başlatabilir
+        self.toolbar.set_alert(None)
         self.toolbar.record_button.setEnabled(True)
         self.toolbar.set_recording(False)
-        worker = getattr(self, "_stop_worker", None)
         err = (worker.exc if worker is not None and worker.exc else None) or getattr(self.recorder, "error", None)
         audio_err = getattr(self.recorder, "audio_error", None)
         if err:
@@ -325,7 +341,7 @@ class MainWindow(QMainWindow):
 
     def _check_recorder(self, _seconds: int) -> None:
         """Yazıcı borusu koptuysa (ffmpeg çöktü) kaydı hemen kapat ve kullanıcıya söyle."""
-        if getattr(self.recorder, "failed", False) and self.recorder.is_recording:
+        if getattr(self.recorder, "failed", False) and self.recorder.state is RecorderState.RECORDING:
             self.toggle_recording(False)
 
     def open_pen_settings(self) -> None:
@@ -467,7 +483,7 @@ class MainWindow(QMainWindow):
                 setattr(self.recorder, attr, val)
 
     def closeEvent(self, e):
-        if self.recorder.is_recording:
+        if self.recorder.state is RecorderState.RECORDING:
             self.recorder.stop()                 # pencere kapanırken kayıt dosyası tamamlansın
         worker = getattr(self, "_stop_worker", None)
         if worker is not None and worker.isRunning():

@@ -168,7 +168,11 @@ tampon tutar ve video karesi geciktiğinde onu düşürür (cızırtı, birikinc
 dakikalarca yer olan bir kuyruğa koyar, ayrı iş parçacığı WAV yazar; ilk örneğin zamanı ölçülür. Durdurunca ffmpeg
 videoyu kopyalayıp sesi ölçülen farkla hizalar (48 kHz AAC 160 kb/s), ara `.video.mp4`/`.wav` dosyaları silinir;
 10 dakikadan uzun kayıtlarda mikrofon saati kayması da (ppm düzeyi) `asetrate` ile düzeltilir. ffmpeg'in çıktısı
-`kayit_<saat>.log` dosyasına gider. Durdurma birkaç saniye sürebilir; arayüz "Kayıt kapatılıyor…" der ve donmaz.
+`kayit_<saat>.log` dosyasına gider. Durdurma birkaç saniye (uzun derste onlarca saniye) sürebilir: arayüz donmaz,
+kayıt düğmesinin üstünde kırmızı "Kayıt kaydediliyor…" şeridi görünür ve kayıt bitene kadar ne düğme ne R yeni kayıt
+başlatır (kapanan dersin dosyaları yenisine karışmasın). Şerit araç çubuğunda olduğu için kayda girmez (tahtadaki
+durum satırı ve rozet girer). Kayıt başlatılamazsa (ffmpeg yok, kayıt klasörü ya da dosyası açılamıyor: disk dolu,
+izin yok) sebebi bir pencerede yazar ve araç çubuğu "KAYIT"a döner.
 Durdurunca durum satırı gerçek yakalama hızını yazar (Windows'ta GDI ~30 kare/sn ile sınırlar; macOS CoreGraphics daha hızlıdır).
 macOS'ta ilk kayıtta "Ekran Kaydı" izni istenir (Sistem Ayarları > Gizlilik ve Güvenlik); izin verilmezse kare siyah gelir.
 

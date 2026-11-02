@@ -130,6 +130,45 @@ def test_startup_error_is_logged_and_exits_cleanly(tmp_path):
     assert "RuntimeError: açılışta yapay hata" in (tmp_path / "hatalar.log").read_text(encoding="utf-8")
 
 
+def test_half_written_question_file_still_opens_the_app_with_samples(tmp_path):
+    """#17 / B-2 uçtan uca: yazımı yarıda kalmış soru dosyası (inceleme s03: 5575 -> 2289 bayt) açılışta KeyError
+    veriyordu; app.py yalnız QuestionTemplateError'ı yakaladığı için uygulama bir daha hiç açılmıyordu (çıkış 1,
+    pencere yok). Artık uyarı dosya adını ve sebebi söyler, pencere örnek sorularla açılır, ayrıntı hatalar.log'da."""
+    from matematigin_mantigi.core.models import SAMPLE_QUESTIONS
+    from matematigin_mantigi.core.question_loader import write_questions
+    xlsx = write_questions(tmp_path / "sorular.xlsx", SAMPLE_QUESTIONS)
+    xlsx.write_bytes(xlsx.read_bytes()[:2289])
+    r = _run(tmp_path, textwrap.dedent('''
+        import sys
+        from PyQt6.QtCore import QSettings, QTimer
+        from PyQt6.QtWidgets import QApplication, QMessageBox
+        from matematigin_mantigi import app as app_mod
+        from matematigin_mantigi.core.settings import AppSettings
+
+        QMessageBox.warning = staticmethod(lambda _p, title, text, *a, **k: print("UYARI", title, "|",
+                                           text.replace(chr(10), " / "), flush=True))
+        real_build = app_mod.build_window
+
+        def build(args, fam, settings=None):
+            win = real_build(args, fam, AppSettings(QSettings("ayarlar.ini", QSettings.Format.IniFormat)))
+            def report():
+                print("PENCERE", win.isVisible(), [q.id for q in win.flow.questions], flush=True)
+                win.close()
+                QApplication.instance().quit()
+            QTimer.singleShot(300, report)
+            return win
+
+        app_mod.build_window = build
+        sys.exit(app_mod.main(["matematigin-mantigi", "--kamera-yok", "--sorular", "sorular.xlsx",
+                               "--duzen", "duzen.json"]))
+    '''))
+    assert r.returncode == 0, f"uygulama açılmadı ({r.returncode}):\n{r.stderr[-2000:]}"
+    assert "PENCERE True ['S1', 'S2', 'S3']" in r.stdout
+    warning = next(ln for ln in r.stdout.splitlines() if ln.startswith("UYARI"))
+    assert "sorular.xlsx" in warning and "Sebep:" in warning and "Örnek sorularla" in warning
+    assert "yakalanan hata (soru dosyası" in (tmp_path / "hatalar.log").read_text(encoding="utf-8")
+
+
 # --- süreç içi: kancanın kendi sözleşmesi -------------------------------------------------------------------
 @pytest.fixture
 def installed(tmp_path):

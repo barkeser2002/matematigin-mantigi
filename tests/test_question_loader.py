@@ -210,3 +210,36 @@ def test_disk_full_in_the_middle_of_a_write_keeps_the_file_and_the_backup(tmp_pa
     assert res["yedekte_dosya_ayni"] and res["yedekte_onceki_yedek_ayni"], res
     assert res["yazimda_dosya_ayni"] and res["yazimda_yuklenen"] == 2, res
     assert res["dosyalar"] == ["calistir.py", "sorular.xlsx", "sorular.xlsx.bak"], res
+
+
+# --- açılış: soru dosyası okunamazsa uygulama örnek sorularla açılır (#17) -----------------------------------
+def _broken(kind: str, p: Path) -> None:
+    if kind == "yarim":                          # yazımı yarıda kalmış xlsx (s03: 5575 -> 2289 bayt)
+        write_questions(p, SAMPLE_QUESTIONS)
+        p.write_bytes(p.read_bytes()[:2289])
+    elif kind == "metin":                        # adı xlsx, içi değil
+        p.write_text("bu bir Excel dosyası değil", encoding="utf-8")
+    elif kind == "klasor":                       # okunamayan yol
+        p.mkdir()
+    elif kind == "sutun":                        # başka bir çizelge: zorunlu sütun eksik
+        wb = openpyxl.Workbook(); wb.active.append(["id", "soru"]); wb.save(p)
+
+
+@pytest.mark.parametrize("kind", ["yarim", "metin", "klasor", "sutun"])
+def test_unreadable_question_file_opens_with_samples_and_names_the_file(tmp_path, monkeypatch, kind):
+    """#17: açılış yalnız QuestionTemplateError'ı yakalıyordu; yarım kalmış xlsx (KeyError), xlsx olmayan dosya
+    (BadZipFile) ya da okunamayan yol uygulamayı açılmaz yapıyordu (çıkış 1, pencere yok). Her hatada dosya adı ve
+    sebep söylenir, uygulama örnek sorularla açılır; yedek varsa nerede olduğu da söylenir."""
+    from PyQt6.QtWidgets import QMessageBox
+    from matematigin_mantigi import app as app_mod
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda _p, title, text, *a, **k: shown.append(
+        (title, text))))
+    p = tmp_path / "sorular.xlsx"
+    _broken(kind, p)
+    _bak(p).write_bytes(b"onceki")
+    assert app_mod.load_questions_or_samples(p) == list(SAMPLE_QUESTIONS)
+    assert len(shown) == 1 and "sorular.xlsx" in shown[0][1] and "Sebep:" in shown[0][1]
+    assert "sorular.xlsx.bak" in shown[0][1] and "Örnek sorularla" in shown[0][1]
+    if kind in ("yarim", "metin"):
+        assert "bozuk" in shown[0][1]

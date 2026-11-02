@@ -81,8 +81,9 @@ class ToolBar(QWidget):
 
     İçerik (self.content) bir QScrollArea içinde: pencere kısaldıkça düğmeler önce
     üç kademede küçülür (FULL -> COMPACT -> MINI, bkz. _TierSpec), en küçük kademenin
-    altında da kaydırma bir güvenlik ağı olarak devreye girer. Kayıt düğmesi bu
-    kaydırma alanının DIŞINDA, dış layout'ta durur; böylece hep görünür ve tıklanabilir.
+    altında da kaydırma bir güvenlik ağı olarak devreye girer. Kayıt düğmesi ve üstündeki
+    uyarı şeridi (set_alert) bu kaydırma alanının DIŞINDA, dış layout'ta durur; böylece hep
+    görünür ve tıklanabilir.
     """
 
     toolSelected = pyqtSignal(object)      # Tool
@@ -213,6 +214,17 @@ class ToolBar(QWidget):
         outer.setSpacing(6)
         outer.addWidget(self.scroll_area, 1)
 
+        # Uyarı şeridi (set_alert): kayıt düğmesinin hemen üstünde, kaydırma alanının dışında -- hep görünür.
+        # Kayıt yalnız sahneyi yakalar; tahtadaki durum satırı ve rozet kayda girdiği için uyarı yeri burası.
+        self.alert_label = QLabel()
+        self.alert_label.setWordWrap(True)
+        self.alert_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.alert_label.setFont(theme.font(fam, 10, 700))
+        self.alert_label.setStyleSheet(f"QLabel {{ color: white; background: {theme.REC_DOT}; border-radius: 5px;"
+                                       f" padding: 4px 3px; margin: 0 5px; }}")
+        self.alert_label.hide()
+        outer.addWidget(self.alert_label)
+
         self.record_button = RecordButton()
         self.record_button.clicked.connect(lambda: self.recordToggled.emit(self.record_button.isChecked()))
         self.record_label = self._caption("KAYIT")
@@ -237,7 +249,14 @@ class ToolBar(QWidget):
     # --- kademe (FULL / COMPACT / MINI) -------------------------------------
     def resizeEvent(self, e) -> None:
         super().resizeEvent(e)
-        spec = _tier_for_height(self.height())
+        self._update_tier()
+
+    def _update_tier(self) -> None:
+        """Kademe, görünen uyarı şeridinin aldığı yer düşüldükten sonra kalan yüksekliğe göre seçilir: eşikler
+        şeritsiz ölçüldü, şerit içeriği kaydırmaya itip düğme yazılarını kırpmasın."""
+        alert = self.alert_label
+        room = 0 if alert.isHidden() else alert.heightForWidth(self.width()) + self.layout().spacing()
+        spec = _tier_for_height(self.height() - room)
         if spec.name != self.tier:
             self.tier = spec.name
             self._apply_tier(spec)
@@ -305,6 +324,12 @@ class ToolBar(QWidget):
     def set_recording_time(self, seconds: int) -> None:
         """Kayıt süresi araç çubuğunda sayar (kayda girmez): 'DURDUR · 01:23'."""
         self.record_label.setText(f"DURDUR · {seconds // 60:02d}:{seconds % 60:02d}")
+
+    def set_alert(self, text: str | None) -> None:
+        """Kayıt düğmesinin üstündeki kırmızı uyarı şeridi (araç çubuğu kayda girmez); None ya da boş gizler."""
+        self.alert_label.setText(text or "")
+        self.alert_label.setVisible(bool(text))
+        self._update_tier()
 
     def set_undo_enabled(self, on: bool) -> None:
         self.undo_button.setEnabled(on)

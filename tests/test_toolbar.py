@@ -1,5 +1,6 @@
 import pytest
 from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication
 
 from matematigin_mantigi import paths
 from matematigin_mantigi.core.models import PALETTE, Tool
@@ -189,6 +190,62 @@ def test_record_button_always_visible_and_outside_scroll_area(qtbot):
         assert tb.record_label.isVisible()
         assert tb.record_button.parent() is tb                # dış layout'ta, kaydırmanın dışında
     assert tb.tool_buttons[Tool.PEN].parent() is not tb        # içerik kaydırma alanında (content/viewport)
+
+
+def test_alert_strip_sits_above_record_button_and_fits_in_every_tier(qtbot):
+    """Kayıt yalnız 16:9 sahneyi yakalar, araç çubuğu sahnenin dışındadır: kayıtla ilgili her uyarı kayıt
+    düğmesinin üstündeki kırmızı şeritte görünür (tahtadaki durum satırı ve rozet kayda girer). Şerit kaydırma
+    alanının dışında; üç kademede de görünür, düğmenin üstünde kalır, metni kırpılmaz; None gizler.
+    Ölçüm gerçek yazı tipiyle (bkz. test_glyph_button_hides_label_ink...: fontsuz offscreen kutu çizer)."""
+    if not list(paths.FONTS_DIR.glob("*.ttf")):
+        pytest.skip("bundled fonts not downloaded")
+    tb = ToolBar(theme.load_fonts(paths.FONTS_DIR))
+    qtbot.addWidget(tb)
+    tb.show()
+    alert = tb.alert_label
+    assert alert.isHidden()                                   # varsayılan: uyarı yok
+    for text in ("Kayıt kaydediliyor…", "Kayıt sürerken pencere değiştirilemez"):
+        tb.set_alert(text)
+        assert alert.text() == text
+        for h, tier in ((1100, "full"), (900, "compact"), (700, "mini"), (400, "mini")):
+            tb.resize(88, h)
+            QApplication.processEvents()                      # kademe değişiminin yeniden yerleşimi
+            g, btn = alert.geometry(), tb.record_button.geometry()
+            assert tb.tier == tier and alert.isVisible() and tb.record_button.isVisible(), (text, h)
+            assert alert.parent() is tb                       # kaydırma alanının dışında: hep görünür
+            assert g.left() >= 0 and g.right() < tb.width() and g.bottom() < btn.top(), (text, h, g, btn)
+            assert alert.height() >= alert.heightForWidth(alert.width()), (text, h)   # dikeyde kırpılmıyor
+            room = alert.contentsRect().width()
+            assert all(alert.fontMetrics().horizontalAdvance(w) <= room for w in text.split()), (text, h)
+    g = alert.geometry()
+    assert tb.grab().toImage().pixelColor(g.center().x(), g.top() + 1).name() == theme.REC_DOT   # kırmızı şerit
+    tb.set_alert(None)
+    assert alert.isHidden()
+
+
+def test_alert_strip_takes_only_its_own_room_so_content_does_not_start_scrolling(qtbot):
+    """Kademe eşikleri şeritsiz ölçüldü; görünen şerit kaydırma alanından yer alır. Kademe, şeridin yeri düşülmüş
+    yükseklikle seçilir: şeritli araç çubuğu her yükseklikte, şerit kadar kısa şeritsiz olanla aynı kademede ve aynı
+    kaydırma alanı yüksekliğinde kalır. Yoksa ~1000 px'lik FULL'da (1080p tam ekran) şerit içeriği kaydırmaya itiyor,
+    kaydırma çubuğu daralttığı düğmelerin yazısını kırpıyordu."""
+    shown, plain = make(qtbot), make(qtbot)
+    for text in ("Kayıt kaydediliyor…", "Kayıt sürerken pencere değiştirilemez"):
+        shown.set_alert(text)
+        room = shown.alert_label.heightForWidth(shown.width()) + shown.layout().spacing()
+        for h in range(400, 1201, 10):
+            shown.resize(88, h)
+            plain.resize(88, h - room)
+            QApplication.processEvents()
+            assert shown.tier == plain.tier, (text, h)
+            assert shown.scroll_area.viewport().height() == plain.scroll_area.viewport().height(), (text, h)
+    shown.set_alert(None)
+    shown.resize(88, 960)
+    QApplication.processEvents()
+    assert shown.tier == "full"
+    shown.set_alert("Kayıt kaydediliyor…")                    # yeniden boyutlanmadan: kalan yere COMPACT sığar
+    assert shown.tier == "compact"
+    shown.set_alert(None)
+    assert shown.tier == "full"                               # şerit kalkınca kademe geri gelir
 
 
 def test_record_button_paint_adapts_to_smaller_diameter(qtbot):

@@ -12,12 +12,14 @@ def test_dev_mode_uses_cwd(tmp_path, monkeypatch):
     assert paths.default_template_path() == tmp_path / "sorular_sablon.xlsx"
     assert paths.default_session_root() == tmp_path / "oturum"
     assert paths.default_layout_path() == tmp_path / "duzen.json"
+    assert paths.default_error_log_path() == tmp_path / "hatalar.log"
 
 
 def test_frozen_app_uses_documents_folder(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     assert paths.data_dir() == tmp_path / "Documents" / "Matematiğin Mantığı"
+    assert paths.default_error_log_path() == tmp_path / "Documents" / "Matematiğin Mantığı" / "hatalar.log"
 
 
 def test_ensure_user_data_copies_bundled_template_and_images_once(tmp_path, monkeypatch):

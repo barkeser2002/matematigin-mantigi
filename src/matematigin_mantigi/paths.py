@@ -53,3 +53,8 @@ def default_session_root() -> Path:
 
 def default_layout_path() -> Path:
     return data_dir() / "duzen.json"
+
+
+def default_error_log_path() -> Path:
+    """Yakalanmamış hataların günlüğü (core/crash_log.py)."""
+    return data_dir() / "hatalar.log"

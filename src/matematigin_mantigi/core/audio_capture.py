@@ -161,6 +161,7 @@ class AudioCapture:
         self._stream = None
         self._stream_closed: threading.Event | None = None     # akışın kapanışı (stop + close) bitti; bkz. closing
         self._wav: wave.Wave_write | None = None
+        self._wav_file = None
         self._q: queue.Queue = queue.Queue(maxsize=self.QUEUE_BLOCKS)
         self._stop = threading.Event()
         self._writer: threading.Thread | None = None
@@ -177,7 +178,8 @@ class AudioCapture:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            self._wav = wave.open(str(self.path), "wb")
+            self._wav_file = self.path.open("xb")
+            self._wav = wave.open(self._wav_file, "wb")
             self._wav.setnchannels(channels)
             self._wav.setsampwidth(2)
             self._wav.setframerate(self.samplerate)
@@ -192,7 +194,7 @@ class AudioCapture:
             raise
 
     def _abandon_start(self) -> None:
-        """Yarım açılışı geri alır (k2): açılan akış kapanır, yazıcı durur, WAV kapanıp silinir (içinde ses yok).
+        """Yarım açılışı geri alır: akış ve dosya kapanır; yol başka dosyayla değiştirilmiş olabileceğinden silinmez.
         Eskiden her başarısız denemede bir yazıcı iş parçacığı ve açık 0 B'lık WAV kalıyordu; Windows'ta dosya
         kilitli kalıyordu. İstisna fırlatmaz: asıl hata start()'tan fırlar."""
         stream, self._stream = self._stream, None
@@ -205,14 +207,15 @@ class AudioCapture:
         if self._wav is not None:
             try:
                 self._wav.close()
-            except Exception:  # noqa: BLE001 - kapatılamayan boş WAV: silmeyi yine dene
+            except Exception:  # noqa: BLE001 - asıl açılış hatasını koru
                 pass
             self._wav = None
-        if self.path is not None:
+        if self._wav_file is not None:
             try:
-                self.path.unlink(missing_ok=True)
+                self._wav_file.close()
             except OSError:
                 pass
+            self._wav_file = None
 
     def _pick_device(self, sd) -> tuple[int | None, dict]:
         """Aygıtı sağlam çöz: seçilen ad, sonra PortAudio varsayılanı, o da yoksa listedeki ilk mikrofon.
@@ -330,6 +333,12 @@ class AudioCapture:
                 self.error = self.error or _reason(err)
                 crash_log.log_handled(err, "ses dosyası kapatılırken")
             self._wav = None
+        if self._wav_file is not None:
+            try:
+                self._wav_file.close()
+            except OSError as err:
+                self.error = self.error or _reason(err)
+            self._wav_file = None
         return AudioResult(self.path or Path(), self.samplerate, self.channels, self.samples,
                            self.first_sample_monotonic, stopped, self.overflows, self.dropped_blocks, self.error,
                            self.last_sample_monotonic, self.close_error)

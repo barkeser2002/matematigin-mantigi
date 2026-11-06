@@ -172,7 +172,7 @@ def test_microphone_cut_near_the_end_of_a_long_lesson_is_not_taken_for_clock_dri
     exe = find_ffmpeg()
     assert _beep_times(exe, s.final_path) == pytest.approx([60.0, 300.0, 600.0], abs=0.05)
     assert media_duration(exe, s.final_path) == pytest.approx(620.0, abs=0.1)
-    assert not s.video_path.exists() and not s.wav_path.exists()      # birleşik dosya tam: ara dosyalar silindi
+    assert s.video_path.exists() and s.wav_path.exists()  # atomik güvenli silme yok: ham dosyalar korunur
 
 
 @pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
@@ -315,8 +315,8 @@ def test_recorder_muxes_audio_aligned_with_video(tmp_path):
     assert rec.error is None and rec.audio_error is None, (rec.error, rec.audio_error)
     assert path.exists() and rec.audio_result is not None and rec.audio_result.samples > 48000
     assert rec.av_offset_ms is not None and 0 <= rec.av_offset_ms < 500      # ses videodan önce başladı
-    assert not (tmp_path / path.name.replace(".mp4", ".video.mp4")).exists()  # ara dosyalar silindi
-    assert not list(tmp_path.glob("*.wav"))
+    assert (tmp_path / path.name.replace(".mp4", ".video.mp4")).exists()
+    assert list(tmp_path.glob("*.wav"))
     exe = find_ffmpeg()
     v, a = _stream_seconds(exe, path, "-an"), _stream_seconds(exe, path, "-vn")
     assert abs(v - a) < 0.15, (v, a)
@@ -405,7 +405,7 @@ def test_second_start_is_refused_while_first_recording_is_still_finalizing(tmp_p
     assert stopped == [first]                                 # kapanış kendi kaydının yolunu döndürür
     assert first.exists() and rec.error is None and rec.audio_error is None, (rec.error, rec.audio_error)
     assert _stream_seconds(find_ffmpeg(), first, "-vn") > 0.3  # kendi WAV'ıyla birleşti: dosyada ses var
-    assert not list(tmp_path.glob("*.video.mp4")) and not list(tmp_path.glob("*.wav"))   # ara dosyalar silindi
+    assert list(tmp_path.glob("*.video.mp4")) and list(tmp_path.glob("*.wav"))
     rec.start(rect)                                           # kapanış bitti: yeni kayıt temiz oturumla
     second = rec.last_path
     assert second != first and rec.audio_result is None and rec.error is None and rec.audio_error is None
@@ -491,7 +491,7 @@ def test_exception_while_finalizing_still_returns_recorder_to_idle(tmp_path, mon
     class Broken:
         def __init__(self, device): pass
         def start(self, path): raise RuntimeError("aygıt yok")
-    real_replace = Path.replace
+    real_replace = MssFfmpegRecorder._move_video_without_overwrite
 
     def busy(self, target):
         if self.name.endswith(".video.mp4"):
@@ -502,7 +502,7 @@ def test_exception_while_finalizing_still_returns_recorder_to_idle(tmp_path, mon
     rect = RecordRect(0, 0, 160, 120)
     rec.start(rect)
     wait_until(lambda: rec.frames_written >= 3)
-    monkeypatch.setattr(Path, "replace", busy)
+    monkeypatch.setattr(MssFfmpegRecorder, "_move_video_without_overwrite", staticmethod(busy))
     with pytest.raises(PermissionError):
         rec.stop()                                            # mikrofonsuz kayıt: .video.mp4 -> .mp4 adlandırması
     assert rec.state is RecorderState.IDLE and not rec.is_recording
@@ -548,7 +548,7 @@ def test_microphone_that_goes_quiet_mid_lesson_does_not_cut_the_video(tmp_path, 
     assert abs(v - video_s) < 0.15 and abs(a - v) < 0.15, (v, a, video_s)         # düzeltmesiz: v ≈ a ≈ 1,4 sn
     assert rec.audio_result.samples == 75 * 960 and rec.error is None, rec.error
     assert MIC_CUT.fullmatch(rec.audio_error or ""), rec.audio_error
-    assert not list(tmp_path.glob("*.video.mp4")) and not list(tmp_path.glob("*.wav"))    # dosya tam: silindi
+    assert list(tmp_path.glob("*.video.mp4")) and list(tmp_path.glob("*.wav"))
 
 
 @pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
@@ -612,7 +612,7 @@ def test_microphone_that_gives_no_samples_at_all_keeps_the_full_video(tmp_path):
     path = rec.stop()
     assert rec.error is None and rec.audio_error == "Ses kaydedilemedi (örnek yok)", (rec.error, rec.audio_error)
     assert abs(_stream_seconds(find_ffmpeg(), path, "-an") - rec.frames_written / 20) < 0.15
-    assert not list(tmp_path.glob("*.video.mp4"))
+    assert list(tmp_path.glob("*.video.mp4"))
 
 
 @pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
@@ -862,7 +862,7 @@ def test_exception_while_finalizing_is_recorded_and_the_waiting_stop_sees_it(tmp
     error boş kalıyor, kapanışı bekleyen ikinci stop() (pencere kapatma) var olmayan dosyanın yolunu istisnasız
     döndürüyordu. Şimdi sebep oturuma yazılır ('Kayıt kapatılamadı: …' ve kayıt klasörü), kapatan stop() istisnayı
     yine fırlatır, bekleyen stop() aynı hatayı RecorderError ile görür."""
-    real_replace = Path.replace
+    real_replace = MssFfmpegRecorder._move_video_without_overwrite
     entered, go = threading.Event(), threading.Event()
 
     def busy(self, target):
@@ -875,7 +875,7 @@ def test_exception_while_finalizing_is_recorded_and_the_waiting_stop_sees_it(tmp
                             audio_device="Yok", audio_factory=NoMic, clock=stepping_clock())
     rec.start(RecordRect(0, 0, 160, 120))
     wait_until(lambda: rec.frames_written >= 3)
-    monkeypatch.setattr(Path, "replace", busy)
+    monkeypatch.setattr(MssFfmpegRecorder, "_move_video_without_overwrite", staticmethod(busy))
     waiter_in = waiting_stop_signal(monkeypatch)
     outcomes: list = [None, None]
     stoppers = [threading.Thread(target=lambda i=i: outcomes.__setitem__(i, _outcome(rec.stop)), daemon=True)
@@ -1063,7 +1063,7 @@ def test_previous_recordings_errors_do_not_carry_over_to_the_next_one(tmp_path, 
                             audio_device="Sahte Mikrofon", audio_factory=lambda dev: next(mics)(dev),
                             clock=stepping_clock())
     rect = RecordRect(0, 0, 160, 120)
-    real_replace = Path.replace
+    real_replace = MssFfmpegRecorder._move_video_without_overwrite
 
     def busy(self, target):
         if self.name.endswith(".video.mp4"):
@@ -1071,13 +1071,27 @@ def test_previous_recordings_errors_do_not_carry_over_to_the_next_one(tmp_path, 
         return real_replace(self, target)
     rec.start(rect)                                                     # 1. kayıt: ses yok, kapanış da patlıyor
     wait_until(lambda: rec.frames_written >= 3)
-    monkeypatch.setattr(Path, "replace", busy)
+    monkeypatch.setattr(MssFfmpegRecorder, "_move_video_without_overwrite", staticmethod(busy))
     with pytest.raises(PermissionError):
         rec.stop()
     assert rec.error and rec.audio_error == "Mikrofon açılamadı: aygıt yok", (rec.error, rec.audio_error)
-    monkeypatch.setattr(Path, "replace", real_replace)
+    monkeypatch.setattr(MssFfmpegRecorder, "_move_video_without_overwrite", staticmethod(real_replace))
     rec.start(rect)                                                     # 2. kayıt: temiz
     assert rec.error is None and rec.audio_error is None, (rec.error, rec.audio_error)
     wait_until(lambda: rec.frames_written >= 3)
     path = rec.stop()
     assert path.exists() and rec.error is None and rec.audio_error is None, (rec.error, rec.audio_error)
+
+
+def test_video_promotion_when_hardlinks_unsupported(monkeypatch, tmp_path):
+    import errno
+    import os
+    video = tmp_path / "raw.mp4"
+    out = tmp_path / "final.mp4"
+    video.write_bytes(b"recorded video")
+    def unsupported(*args):
+        raise OSError(errno.EOPNOTSUPP, "no hard links")
+    monkeypatch.setattr(os, "link", unsupported)
+    MssFfmpegRecorder._move_video_without_overwrite(video, out)
+    assert out.read_bytes() == b"recorded video"
+    assert video.read_bytes() == b"recorded video"

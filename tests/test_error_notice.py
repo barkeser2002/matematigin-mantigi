@@ -5,6 +5,7 @@ import sys
 import textwrap
 import threading
 
+import pytest
 from PyQt6 import sip
 from PyQt6.QtCore import QRect, QSize, Qt
 from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
@@ -562,7 +563,7 @@ def _run_app(tmp_path, body: str, screens: list) -> dict:
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen:configfile=ekranlar.json", XDG_CONFIG_HOME=str(tmp_path / "cfg"))
     r = subprocess.run([sys.executable, str(script)], cwd=tmp_path, env=env, capture_output=True, text=True,
                        timeout=120)
-    assert r.returncode == 0, f"süreç düştü ({r.returncode}):\n{r.stderr[-2000:]}"
+    assert r.returncode == 0, f"süreç düştü ({r.returncode}):\n{r.stdout[-2000:]}\n{r.stderr[-2000:]}"
     line = next((ln for ln in r.stdout.splitlines() if ln.startswith("SONUC ")), None)
     assert line is not None, r.stdout + r.stderr[-2000:]
     return json.loads(line[len("SONUC "):])
@@ -614,12 +615,15 @@ def build(args, fam, settings=None):
             error_notice.post(f"Beklenmeyen hata {i + 1}", TEXT, key=f"k{i}")
         later(lambda: "8 uyarı" in win.toolbar.alert_label.text(), stop)
 
+    def notice_boxes():
+        return [b for b in boxes() if "Beklenmeyen hata 8" in b.text()]
+
     def stop():
         win.toggle_recording(False)
-        later(lambda: bool(boxes()), lambda: QTimer.singleShot(3 * POLL_MS, measure))
+        later(lambda: bool(notice_boxes()), lambda: QTimer.singleShot(3 * POLL_MS, measure))
 
     def measure():
-        b = boxes()[0]
+        b = notice_boxes()[0]
         ok = b.button(QMessageBox.StandardButton.Ok)
         screen = b.screen().availableGeometry()
         res["kutu"], res["ekran"], res["metin"] = rect(b.frameGeometry()), rect(screen), b.text()
@@ -627,11 +631,25 @@ def build(args, fam, settings=None):
             QRect(ok.mapToGlobal(QPoint(0, 0)), ok.size()))
         done(win)
 
-    later(lambda: win.isFullScreen(), start)
+    # isFullScreen() durum bayrağıdır; offscreen pencerenin gerçek boyutu daha sonra değişebilir.
+    later(lambda: win.isFullScreen() and win.width() == 1470 and win.height() == 956, start, tries=100000)
+    # Beklenmeyen modal veya işçi hatası offscreen koşuyu süresiz kilitlemesin.
+    QTimer.singleShot(15000, lambda: QApplication.exit(3))
     return win
 
 run(build)
 '''
+
+
+def test_unexpected_modal_cannot_hang_small_screen_scenario(tmp_path):
+    """İç içe modal olay döngüsünde de bekçi süreçten hatayla çıkar."""
+    body = _MANY_NOTICES_WHILE_RECORDING.replace(
+        'win.toggle_recording(False)',
+        'print("SENTINEL modal", flush=True); QMessageBox.warning(win, "", "beklenmeyen modal")',
+    ).replace('singleShot(15000,', 'singleShot(5000,')
+    with pytest.raises(AssertionError, match=r"süreç düştü \(3\)") as failure:
+        _run_app(tmp_path, body, _MBA13)
+    assert "SENTINEL modal" in str(failure.value)
 
 
 def test_merged_box_after_recording_fits_on_a_small_laptop_screen(tmp_path):

@@ -221,6 +221,7 @@ LAG_START_S = 5.0       # kodlayıcı kaydın ilk bu kadar saniyesinde geride ka
 # FFMPEG_EXIT_S boyunca dosyaya tek bayt yazılmadıysa. Yavaş ama okuyan/yazan ffmpeg beklenir: öldürülen ffmpeg moov'u
 # yazamaz, videonun TAMAMI açılmaz (K1). Öldürülünce yazıcı kırılan borudan KILL_JOIN_S içinde çıkar.
 WRITER_JOIN_S = 10.0    # kapanışta yazıcının bir kareyi daha yazabilmesi için beklenen süre (ilerleme penceresi)
+WRITER_STALL_S = 10.0   # kayıt sırasında tek bir write bu kadar süre dönmezse
 KILL_JOIN_S = 2.0       # yanıt vermeyen ffmpeg öldürüldükten sonra yazıcının çıkması için süre
 FFMPEG_EXIT_S = 60.0    # stdin kapandıktan sonra ffmpeg'in dosyaya hiç yazmadan geçirebileceği en uzun süre
 FFMPEG_EXIT_MAX_S = 600.0   # EOF'tan sonra ilerlese de en çok bu kadar beklenir (moov sonda: gerçekte saniyeler)
@@ -442,6 +443,10 @@ class _Session:
     video_warning: str | None = None  # görüntü uyarısı (kodlayıcı yetişemedi): dosya tam, görüntü donarak ilerledi
     error: str | None = None
     failed: bool = False
+    capture_error: str | None = None
+    last_capture_at: float = 0.0
+    write_started_at: float = 0.0
+    encoder_stalled: bool = False
     tail_kept: bool = False           # video erken bittiği için birleştirme sesin ucunu korudu (son kare ekranda)
     mic_lost: str | None = None       # mikrofon kapanmadı/kapatılamadı: ses dosyası birleştirilemez (sebep)
 
@@ -528,7 +533,7 @@ class MssFfmpegRecorder:
                 self._finalize(s)
             except BaseException as err:             # sebep oturuma: arayüz ve kapanışı bekleyen stop() da görsün
                 s.error = _with_paragraph(s.error, f"Kayıt kapatılamadı: {exception_text(err)}\n"
-                                                   f"Kayıt klasörü: {s.final_path.parent}")
+                                                   f"Ham dosyalar korunuyor: {s.video_path}\nSes: {s.wav_path}\nKayıt klasörü: {s.final_path.parent}")
                 raise
             finally:                                 # kapanış patlasa da FINALIZING'de takılı kalınmasın
                 with self._lock:
@@ -588,10 +593,29 @@ class MssFfmpegRecorder:
         except OSError as err:                       # disk dolu, izin yok (macOS'ta Belgeler izni reddedildi)...
             raise RecorderError(f"Kayıt klasörü oluşturulamadı: {err}\n{DISK_HINT}") from err
         stamp = self._clock().strftime("%Y%m%d-%H%M%S")
-        out = out_dir / f"kayit_{stamp}.mp4"
-        s = _Session(rect=rect, encoder=encoder, final_path=out, log_path=out_dir / f"kayit_{stamp}.log",
-                     video_path=out_dir / f"kayit_{stamp}.video.mp4" if self.audio_device else out,
-                     wav_path=out_dir / f"kayit_{stamp}.wav" if self.audio_device else None, fps=fps)
+        # Log is an atomic, persistent name reservation across processes and restarts.
+        for number in range(1, 1000000):
+            name = f"kayit_{stamp}" + (f"-{number}" if number > 1 else "")
+            paths = [out_dir / (name + suffix) for suffix in (".mp4", ".video.mp4", ".wav", ".log")]
+            if any(p.exists() for p in paths):
+                continue
+            try:
+                log_file = open(paths[3], "xb")
+            except FileExistsError:
+                continue
+            except OSError as err:
+                raise RecorderError(f"Kayıt dosyası açılamadı: {err}\n{DISK_HINT}") from err
+            if any(p.exists() for p in paths[:3]):
+                log_file.close()
+                continue
+            break
+        else:
+            raise RecorderError("Kayıt için boş dosya adı bulunamadı")
+        out = paths[0]
+        s = _Session(rect=rect, encoder=encoder, final_path=out, log_path=paths[3],
+                     video_path=paths[1] if self.audio_device else out,
+                     wav_path=paths[2] if self.audio_device else None, fps=fps)
+        s.log_file = log_file
         if s.wav_path is not None and self._mic_still_closing():
             # Önceki kaydın mikrofonu kapanmadı (ses sürücüsü takıldı, k1). start() arayüz iş parçacığında ve kilit
             # altında koşar; aynı sürücüde yeni akış açmak da takılırsa arayüz donardı (son inceleme s11). Kayıt sessiz.
@@ -605,11 +629,7 @@ class MssFfmpegRecorder:
                 self._abort_audio(s)                 # yarım açılan yakalayıcı iz bırakmasın (yazıcı, açık WAV; k2)
                 s.audio_error = f"Mikrofon açılamadı: {err}"
         args = ffmpeg_args(exe, w, h, fps, s.video_path, out_height=self.out_height, encoder=encoder)
-        try:
-            s.log_file = open(s.log_path, "wb")     # stderr borusu dolarsa ffmpeg donar; dosyaya yaz
-        except OSError as err:
-            self._abort_audio(s)
-            raise RecorderError(f"Kayıt dosyası açılamadı: {err}\n{DISK_HINT}") from err
+        args[1] = "-n"  # A foreign file appearing after reservation must never be overwritten.
         try:
             s.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=s.log_file,
                                       **no_window())
@@ -645,8 +665,19 @@ class MssFfmpegRecorder:
             hung = True                              # EOF'tan sonra da kapanmadı: öldürüldü
         self._close_log(s)
         audio = self._end_audio_stop(s, mic)
+        if s.encoder_stalled:
+            s.error = _with_paragraph(s.error, "Görüntü kodlayıcısı yanıt vermedi; görüntü donmuş ve sesle süresi farklı olabilir.\n"
+                                      "Dosyalar silinmedi:\n" + "\n".join(self._raw_lines(s, audio, None)))
+            if hung:
+                s.error = _with_paragraph(s.error, self._hung_text(s, audio))
+            return
         if hung:                                     # (yazıcının öldürmeden sonra yazdığı boru hatası sebep değil)
             s.error = self._hung_text(s, audio)
+            return
+        if s.capture_error:
+            lines = self._raw_lines(s, audio, None)
+            s.error = (f"Ekran yakalanamadığı için kayıt durduruldu: {s.capture_error}\n"
+                       "Dosyalar silinmedi:\n" + "\n".join(lines))
             return
         if s.failed:                                 # ffmpeg kayıt sırasında durdu (kodlayıcı çöktü, bellek, disk)
             self._report_death(s, proc, audio)
@@ -657,7 +688,7 @@ class MssFfmpegRecorder:
             self._mux(s, audio)
         else:
             if s.video_path != s.final_path and s.video_path.exists():
-                s.video_path.replace(s.final_path)  # mikrofon açılamadı ya da kapanmadı: yalnız video
+                self._move_video_without_overwrite(s.video_path, s.final_path)
             if s.mic_lost:
                 self._report_lost_audio(s)
         self._report_lag(s)
@@ -897,11 +928,30 @@ class MssFfmpegRecorder:
             text += f"\n{NEXT_RECORDINGS_SILENT[0].upper()}{NEXT_RECORDINGS_SILENT[1:]}."
         s.error = _with_paragraph(s.error, text)
 
+    @staticmethod
+    def _move_video_without_overwrite(video: Path, out: Path) -> None:
+        # Hard-link creation fails atomically if the destination exists (also on Windows).
+        import os
+        try:
+            os.link(video, out)
+        except FileExistsError:
+            raise
+        except OSError:
+            # exFAT and some Windows volumes do not support links. Exclusive
+            # creation is still atomic; retain the original even if copying fails.
+            import shutil
+            with video.open("rb") as source, out.open("xb") as dest:
+                shutil.copyfileobj(source, dest)
+            return
+        # A path identity check followed by unlink is racy on every supported OS.
+        # Retain the source: hard links cost no extra file data on this volume.
+
     def _mux(self, s: _Session, audio: AudioResult) -> None:
         """Video (kopya) + WAV -> son MP4. Birleştirme düşerse ham video ve WAV yerinde kalır, hata ikisinin de yerini
         söyler (_mux_failed); video hiç oluşmadıysa (ffmpeg başta öldü) WAV durur ve hata yerini söyler. Birleştirme
         videoyu asla kısaltmaz (#1): eksik ses sessizlikle dolar; ara dosyalar yalnız birleşik dosyanın videonun tam
-        uzunluğunda olduğu ölçülünce ve kayıt hatasız bittiyse silinir. Mikrofon kesildiyse ya da WAV yazılamadıysa
+        uzunluğunda olduğu ölçülse bile güvenli olmayan yol yarışı nedeniyle silinmez (ek disk alanı kullanılır).
+        Mikrofon kesildiyse ya da WAV yazılamadıysa
         audio_error söyler."""
         exe = self._ffmpeg_exe or find_ffmpeg()
         video, out = s.video_path, s.final_path
@@ -915,7 +965,7 @@ class MssFfmpegRecorder:
         if not exe or audio.samples <= 0 or not audio.path.exists():
             s.audio_error = s.audio_error or "Ses kaydedilemedi (örnek yok)"
             if not s.failed:                         # ffmpeg kayıt sırasında durduysa ara video adıyla kalır
-                video.replace(out)
+                self._move_video_without_overwrite(video, out)
             return
         video_s = media_duration(exe, video)         # ara videonun gerçek süresi: dolgu ve doğrulama ölçüsü
         length = video_s if video_s is not None else s.duration     # ölçülemezse duvar süresi (video ondan uzun değil)
@@ -936,6 +986,8 @@ class MssFfmpegRecorder:
             tail = min(end, video_s + skipped, stop_s)   # sesin ucu, en çok durdurma anına dek
             end_s = tail if tail > video_s + TAIL_KEEP_S else None
         args = mux_args(exe, video, audio.path, out, offset, asetrate=rate, video_s=length, end_s=end_s)
+        if len(args) > 1 and args[1] == "-y":
+            args[1] = "-n"
         timeout = _mux_timeout(s.duration)
         try:
             res = subprocess.run(args, capture_output=True, timeout=timeout, **no_window())
@@ -962,11 +1014,8 @@ class MssFfmpegRecorder:
         s.tail_kept = end_s is not None
         if s.failed:                                 # kayıt hatayla bitti: ham dosyalar kalır (_report_death)
             return
-        for p in (video, audio.path):
-            try:
-                p.unlink()
-            except OSError:
-                pass
+        # No portable atomic unlink-if-same-file exists. Retain both raw inputs,
+        # even on success; this uses additional disk space until manually removed.
 
     def _keep_raw(self, s: _Session, audio: AudioResult, why: str, video_s: float | None) -> None:
         """Birleşik dosyaya güvenilemiyor ya da yok: ham video ve WAV silinmez, son ada taşınmaz; hata (arayüzde 'Kayıt
@@ -983,27 +1032,38 @@ class MssFfmpegRecorder:
         """Birleştirme düştü (hata kodu, zaman aşımı, ffmpeg açılamadı): ara video eskiden son ada taşınıyor (video
         bozuksa 'kaydedildi' görünen açılmaz bir dosya), WAV'ın yeri söylenmiyordu (O3). Şimdi yarım kalan birleşik
         dosya silinir (kaydın tamamı ham dosyalarda), ham dosyalar yerinde kalır, hata ikisini de söyler."""
-        if s.final_path != s.video_path:
-            try:
-                s.final_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        # The destination might have been created by another process; never delete it.
         self._keep_raw(s, audio, f"Ses ile görüntü birleştirilemedi ({reason}).", video_s)
 
     def _grab_loop(self, s: _Session, rect: RecordRect, w: int, h: int, fps: int) -> None:
         """Yakalama iş parçacığı: en fazla fps hızında kare alır, en yenisini bırakır."""
         sct = None
-        if self._grabber is None:
-            sct = _new_mss()                     # mss nesnesi kendi iş parçacığında oluşturulmalı
         period = 1.0 / fps
+        last_success = time.monotonic()
+        s.last_capture_at = last_success
         try:
+            if self._grabber is None:
+                try:
+                    sct = _new_mss()
+                except Exception as err:
+                    s.capture_error = exception_text(err)
+                    s.failed = True
+                    s.stop_event.set()
+                    return
             while not s.stop_event.is_set():
                 t = time.monotonic()
                 try:
                     frame = self._grab(rect, sct)
-                except Exception:  # noqa: BLE001 - tek kare kaçarsa son kare tekrar yazılır
-                    time.sleep(0.005)
+                except Exception as err:  # transient errors may recover; persistent failures stop recording
+                    if time.monotonic() - last_success >= 2.0:
+                        s.capture_error = exception_text(err)
+                        s.failed = True
+                        s.stop_event.set()
+                        return
+                    s.stop_event.wait(0.005)
                     continue
+                last_success = time.monotonic()
+                s.last_capture_at = last_success
                 data = np.ascontiguousarray(frame[:h, :w]).tobytes()
                 with s.latest_lock:
                     s.latest = data
@@ -1017,14 +1077,33 @@ class MssFfmpegRecorder:
 
     def _put_frame(self, s: _Session, data: bytes) -> bool:
         """Bir kareyi bu kaydın ffmpeg'ine yazar. Boru kapandıysa (ffmpeg öldü) sebebi oturuma yazar, False döner."""
+        s.write_started_at = time.monotonic()
         try:
             s.proc.stdin.write(data)      # type: ignore[union-attr]
         except (BrokenPipeError, OSError, ValueError, AttributeError):
             s.error = "ffmpeg borusu kapandı: " + (self._log_tail(s, 200) or "ayrıntı yok")
             s.failed = True
             return False
+        finally:
+            s.write_started_at = 0.0
         s.frames_written += 1
         return True
+
+    def _watch_capture(self, s: _Session) -> None:
+        # The encoder pipe can block the writer indefinitely.
+        while not s.stop_event.wait(0.1):
+            if s.last_capture_at and time.monotonic() - s.last_capture_at >= 2.0:
+                s.capture_error = "Ekran yakalama 2 saniyedir yanıt vermiyor"
+                s.failed = True
+                s.stop_event.set()
+                return
+            started = s.write_started_at
+            if (started and time.monotonic() - started >= WRITER_STALL_S
+                    and s.write_started_at == started and not s.stop_event.is_set()):
+                s.encoder_stalled = True
+                s.failed = True
+                s.stop_event.set()
+                return
 
     def _settle_on_stop(self, s: _Session, t0: float, fps: int, data: bytes) -> None:
         """Durdurma, yazıcı geride kalmışken (borç yazarken) geldi. Borç küçükse (en çok STOP_DEBT_S: kısa bir takılma,
@@ -1052,6 +1131,8 @@ class MssFfmpegRecorder:
         korur (son kare ekranda kalır), uyarı kodlayıcının yetişemediğini söyler (_report_lag)."""
         period = 1.0 / fps
         s.latest = np.ascontiguousarray(first[:h, :w]).tobytes()
+        s.last_capture_at = time.monotonic()
+        threading.Thread(target=self._watch_capture, args=(s,), daemon=True).start()
         grabber = threading.Thread(target=self._grab_loop, args=(s, rect, w, h, fps), daemon=True)
         grabber.start()
         t0 = time.monotonic()
@@ -1059,6 +1140,11 @@ class MssFfmpegRecorder:
         data = s.latest
         try:
             while not s.stop_event.is_set():
+                if s.last_capture_at and time.monotonic() - s.last_capture_at >= 2.0:
+                    s.capture_error = "Ekran yakalama 2 saniyedir yanıt vermiyor"
+                    s.failed = True
+                    s.stop_event.set()
+                    break
                 with s.latest_lock:
                     data = s.latest
                 now = time.monotonic()
@@ -1076,7 +1162,8 @@ class MssFfmpegRecorder:
             # Durduruldu (yazıcı nerede olursa olsun: borç yazarken, bir yazımın içinde, tempoyu beklerken): yalnız
             # küçük borç, sonra son ekran. Durdurma bir yığının son yazımına denk gelince eskiden doğrudan çıkılıyordu:
             # borç hesaba girmiyor (frames_skipped 0), uyarı çıkmıyor, sesin ucu -shortest ile kesiliyordu.
-            self._settle_on_stop(s, t0, fps, data)
+            if not s.capture_error:
+                self._settle_on_stop(s, t0, fps, data)
         finally:
             s.stop_event.set()
             grabber.join(timeout=5)

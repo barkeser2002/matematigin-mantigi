@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Sequence
 
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QEvent, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QKeySequence, QShortcut
 from PyQt6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QMessageBox, QToolTip, QWidget
 
@@ -117,6 +117,10 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
         self.camera_source_factory = camera_source_factory
         self._stop_worker: _StopWorker | None = None    # kayıt kapanışı arka planda sürüyor (sonucu henüz gelmedi)
+        self._record_rect = None
+        self._record_starting = False
+        self._geometry_interrupted = False
+        self._reporting_record_result = False
         self._close_after_save = False                  # pencere kapatılmak istendi: kayıt bitince kapanacak
         self.base_fam = fam                       # paketle gelen aile; Ayarlar'daki dosya bunun üstüne biner
         self.fam, self.settings, self.recorder, self.session_store = fam, settings, recorder, session_store
@@ -135,6 +139,10 @@ class MainWindow(QMainWindow):
         row.setContentsMargins(0, 0, 0, 0); row.setSpacing(0)
         self.toolbar = ToolBar(fam)
         self.work_area = WorkArea(fam)
+        self.work_area.installEventFilter(self)
+        self._geometry_timer = QTimer(self)
+        self._geometry_timer.setInterval(200)
+        self._geometry_timer.timeout.connect(self._check_record_geometry)
         self.canvas = self.work_area.board
         self.question_zone = QuestionZone(fam)
         self.hint_zone = HintZone(fam)
@@ -231,7 +239,7 @@ class MainWindow(QMainWindow):
         sc("Right", self.flow.hint_next)
         sc("Return", self._return_key, while_typing=True)
         sc("L", lambda: self.work_area.set_edit_mode(not self.work_area.edit_mode))
-        sc("F11", lambda: self.showNormal() if self.isFullScreen() else self.showFullScreen())
+        sc("F11", self._toggle_fullscreen)
         sc("Escape", self._escape, while_typing=True)
 
     def _return_key(self) -> None:
@@ -240,13 +248,22 @@ class MainWindow(QMainWindow):
         else:
             self.flow.toggle_reveal()
 
+    def _toggle_fullscreen(self) -> None:
+        if self.recorder.state is RecorderState.RECORDING:
+            self.toolbar.set_alert("window-lock", "Kayıt sürerken pencere değiştirilemez")
+            return
+        self.showNormal() if self.isFullScreen() else self.showFullScreen()
+
     def _escape(self) -> None:
         if self._typing():
             self.canvas.cancel_text()
         elif self.work_area.edit_mode:
             self.work_area.set_edit_mode(False)
         elif self.isFullScreen():
-            self.showNormal()
+            if self.recorder.state is RecorderState.RECORDING:
+                self.toolbar.set_alert("window-lock", "Kayıt sürerken pencere değiştirilemez")
+            else:
+                self.showNormal()
 
     def _restore_settings(self) -> None:
         s = self.settings
@@ -343,6 +360,44 @@ class MainWindow(QMainWindow):
         self.settings.font_scale = v
         self.apply_ui_settings()
 
+    def eventFilter(self, watched, event):
+        if watched is getattr(self, "work_area", None) and event.type() in (QEvent.Type.Move, QEvent.Type.Resize):
+            self._observe_record_geometry()
+            QTimer.singleShot(0, self._check_record_geometry)
+        return super().eventFilter(watched, event)
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        self._observe_record_geometry()
+        QTimer.singleShot(0, self._check_record_geometry)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._observe_record_geometry()
+        QTimer.singleShot(0, self._check_record_geometry)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._observe_record_geometry()
+            QTimer.singleShot(0, self._check_record_geometry)
+
+    def _observe_record_geometry(self):
+        # Yalnız tespit: Qt geometri olayının içinde modal pencere açmak yeniden girişe yol açar.
+        if (getattr(self, "_record_rect", None) is not None
+                and (self._record_starting or self.recorder.state is RecorderState.RECORDING)
+                and not self._record_saving()
+                and (self.isMinimized() or record_rect_for(self.work_area.recording_rect()) != self._record_rect)):
+            self._geometry_interrupted = True
+            self.toolbar.set_alert("geometry", "Çekim alanı değişti; kayıt durduruluyor")
+
+    def _check_record_geometry(self):
+        self._observe_record_geometry()
+        if (self._geometry_interrupted and not self._record_starting
+                and self.recorder.state is RecorderState.RECORDING
+                and not self._record_saving()):
+            self.toggle_recording(False)
+
     def _record_saving(self) -> bool:
         """Önceki kayıt hâlâ kaydediliyor (kaydedici FINALIZING) ya da durdurma sonucu pencereye henüz ulaşmadı
         (_StopWorker'ın done'ı _on_record_stopped'ta işlenmedi). Bu sürede ne yeni kayıt ne ikinci durdurma."""
@@ -376,17 +431,29 @@ class MainWindow(QMainWindow):
         fps = self.settings.record_fps
         state = self.recorder.state
         if on and state is RecorderState.IDLE:
-            rect = record_rect_for(self.work_area.recording_rect())
             self._prepare_first_frame()
+            if self.isMinimized():
+                self._record_start_failed(RecorderError("Pencere simge durumundayken kayıt başlatılamaz."))
+                return
+            rect = record_rect_for(self.work_area.recording_rect())
+            self._record_rect = rect
+            self._record_starting = True
             try:
                 self.recorder.start(rect, fps=fps)
             except Exception as err:  # noqa: BLE001 - hiçbir başlatma hatası yuvadan kaçıp düğmeyi 'kayıtta' bırakmasın
+                self._record_rect = None
+                self._geometry_interrupted = False
+                self.toolbar.set_alert("geometry", None)
                 self._record_start_failed(err)
                 return
+            finally:
+                self._record_starting = False
+            self._geometry_timer.start()
             h = self.settings.record_height or rect.height
             self.badge.set_format(round(rect.width * h / rect.height), h, fps)
             self.badge.start()
             self.work_area.relayout()
+            QTimer.singleShot(0, self._check_record_geometry)
         elif not on and state is RecorderState.RECORDING:
             self.badge.stop()
             self.work_area.relayout()
@@ -435,16 +502,26 @@ class MainWindow(QMainWindow):
         self.toolbar.set_alert(SAVING_KEY, None)
         self.toolbar.record_button.setEnabled(True)
         self.toolbar.set_recording(False)
+        self._record_rect = None
+        self._geometry_timer.stop()
+        self.toolbar.set_alert("window-lock", None)
+        self.toolbar.set_alert("geometry", None)
+        self.work_area.set_aspect_lock(self.settings.aspect_lock)
+        interrupted, self._geometry_interrupted = self._geometry_interrupted, False
         closing, self._close_after_save = self._close_after_save, False
         # Başka bir modal pencere açıksa (ör. 'Durdur ve çık'tan önce açılmış soru editörü) pencere kapanmaz: kapanınca
         # süreç biter, o pencerenin exec döngüsü de biter, içindeki kaydedilmemiş iş sorulmadan kaybolurdu (U3).
         blocker = self._open_dialog_title() if closing else None
+        self._reporting_record_result = True
         try:
+            if interrupted:
+                QMessageBox.warning(self, "Kayıt durduruldu", "Çekim alanı değiştiği için kayıt durduruldu. Değişiklik ile durdurma arasında yanlış alan kaydedilmiş olabilir; kayıt sonucunu kontrol edin.")
             if closing:
                 self._show_closing_summary(path, exc, blocker)
             else:
                 self._report_record_result(path, exc)
         finally:
+            self._reporting_record_result = False
             if closing and blocker is None:  # pencere kapatılmak istenmişti: kayıt bitti, sonuç ve uyarılar gösterildi
                 self.close()
 
@@ -662,7 +739,8 @@ class MainWindow(QMainWindow):
         self.question_zone.set_number_visible(s.visible("question_number"))
         self.question_zone.setVisible(s.visible("question_zone"))
         self.work_area.set_item_visible("question_zone", s.visible("question_zone"))
-        self.work_area.set_aspect_lock(s.aspect_lock)
+        if self.recorder.state is not RecorderState.RECORDING and not self._record_saving():
+            self.work_area.set_aspect_lock(s.aspect_lock)
         self.work_area.set_frame_visible(s.visible("frame"))
         self.work_area.set_frame_style(s.frame_style)
         self.work_area.set_item_visible("frame_titles", s.visible("frame_titles"))
@@ -707,6 +785,9 @@ class MainWindow(QMainWindow):
         Çalışan _StopWorker hiçbir koşulda yok edilmez: Qt süreci 'QThread: Destroyed while thread is still running'
         ile düşürür, kayıt birleşmeden kalırdı. Gerçek kapanışta kamera ve ayarlar, kaydı durdurmak patlasa da her
         koşulda kapanır; ardından `closed` yayılır (app.main süreci bitirir)."""
+        if self._reporting_record_result:
+            e.ignore()  # Modal olay döngüsünde sonuç tamamlanmadan pencere kapanamaz.
+            return
         if self.recorder.state is RecorderState.RECORDING and not self._record_saving():
             if not self._confirm_stop_and_quit():
                 e.ignore()

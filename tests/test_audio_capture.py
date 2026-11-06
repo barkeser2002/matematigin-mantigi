@@ -376,7 +376,7 @@ def test_capture_tells_while_the_driver_is_still_closing_the_stream(tmp_path, mo
 def test_start_that_cannot_open_the_stream_leaves_nothing_behind(tmp_path, monkeypatch):
     """k2: InputStream açılamayınca (aygıt meşgul ya da çıkarıldı: PaErrorCode -9985) WAV açık, yazıcı iş parçacığı
     canlı kalıyordu; her denemede bir tane daha, Windows'ta açık WAV kilitli, klasörde 0 B'lık WAV. Şimdi start()
-    yarım açılışını temizler: istisna yine fırlar, yazıcı durur, WAV kapanıp silinir."""
+    yarım açılışını temizler: istisna yine fırlar, yazıcı durur, WAV kapanır ve güvenle korunur."""
     sd = FakeSoundDevice(blocks=0)
 
     class Busy:
@@ -388,7 +388,7 @@ def test_start_that_cannot_open_the_stream_leaves_nothing_behind(tmp_path, monke
     with pytest.raises(RuntimeError, match="Device unavailable"):
         cap.start(tmp_path / "a.wav")
     assert cap._writer is None or not cap._writer.is_alive()
-    assert cap._wav is None and not (tmp_path / "a.wav").exists()
+    assert cap._wav is None and cap._wav_file is None and (tmp_path / "a.wav").exists()
     assert not [t for t in threading.enumerate() if getattr(getattr(t, "_target", None), "__self__", None) is cap]
 
 
@@ -404,3 +404,13 @@ def test_real_microphone_short_capture(tmp_path):
     res = cap.stop()
     assert res.samples > res.samplerate * 0.3 and res.first_sample_monotonic is not None
     assert res.dropped_blocks == 0
+
+
+def test_start_never_overwrites_or_removes_existing_wav(monkeypatch, tmp_path):
+    monkeypatch.setattr(ac, "_sd", lambda: FakeSoundDevice(0))
+    path = tmp_path / "existing.wav"
+    path.write_bytes(b"foreign audio")
+    capture = ac.AudioCapture()
+    with pytest.raises(FileExistsError):
+        capture.start(path)
+    assert path.read_bytes() == b"foreign audio"

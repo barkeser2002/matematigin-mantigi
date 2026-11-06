@@ -179,7 +179,7 @@ def test_slow_encoder_that_keeps_reading_is_not_killed_and_the_file_opens(tmp_pa
     if mic:                                                             # ses durdurma anına dek tam
         wall = t_stop - rec.video_t0
         assert abs(_stream_seconds(exe, path, "-vn") - wall) < 0.15, wall
-        assert not any(p.exists() for p in _raw_files(path))            # birleşik dosya doğrulandı
+        assert all(p.exists() for p in _raw_files(path))  # ham dosyalar yarışsız silinemediği için kalır
 
 
 @needs_ffmpeg
@@ -715,7 +715,7 @@ def test_failed_mux_does_not_move_the_raw_video_and_names_both_files(tmp_path, m
     wait_until(lambda: rec.frames_written >= 20)
     path = rec.stop()
     video, wav = _raw_files(path)
-    assert not path.exists() and video.exists() and wav.exists()       # yarım çıktı silindi, ham dosyalar yerinde
+    assert path.read_bytes() == b"yarim" and video.exists() and wav.exists()  # kuşkulu çıktı da korunur
     err = rec.error or ""
     assert err.startswith("Ses ile görüntü birleştirilemedi"), err
     assert ("Conversion failed!" in err) if fail == "hata kodu" else ("zaman aşımı" in err), err
@@ -829,7 +829,7 @@ def test_microphone_that_cannot_open_leaks_no_writer_and_leaves_no_wav(tmp_path,
                                   "-9985]", rec.audio_error
         assert path.exists() and rec.error is None, rec.error
     assert writers() == before
-    assert not list(tmp_path.glob("*.wav"))
+    assert len(list(tmp_path.glob("*.wav"))) == 2  # Değiştirilmiş bir yolu silmemek için ham WAV'lar kalır.
 
 
 MIC_STILL_CLOSING = "Mikrofon açılmadı: önceki kaydın mikrofonu hâlâ kapanmadı (uygulamayı yeniden başlatın)"

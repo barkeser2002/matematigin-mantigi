@@ -380,7 +380,7 @@ def test_real_recorder_with_audio_muxes_and_cleans_up(window, qtbot, tmp_path):
     assert path.exists() and window.recorder.error is None and window.recorder.audio_error is None
     assert window.recorder.audio_result is not None and window.recorder.audio_result.samples > 40000
     assert window.recorder.av_offset_ms is not None          # ses-video başlangıç farkı ölçüldü
-    assert not list(path.parent.glob("*.wav")) and not list(path.parent.glob("*.video.mp4"))   # ara dosyalar silindi
+    assert list(path.parent.glob("*.wav")) and list(path.parent.glob("*.video.mp4"))
     import cv2
     cap = cv2.VideoCapture(str(path)); frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)); cap.release()
     assert frames > 10
@@ -418,7 +418,7 @@ def test_microphone_cut_warning_reaches_the_notice_box_not_the_board(window, qtb
     assert len(sound) == 1 and str(rec.last_path) in sound[0][1], posted
     # Kodlayıcı yine de geri kaldıysa görüntü uyarısı kendi kutusunda gelir (ses uyarısına karışmaz).
     assert len(posted) == 1 + bool(rec.video_warning), posted
-    assert shown == [] and rec.last_path.exists() and not list(rec.last_path.parent.glob("*.video.mp4"))
+    assert shown == [] and rec.last_path.exists() and list(rec.last_path.parent.glob("*.video.mp4"))
 
 
 def test_microphone_warning_of_each_saved_recording_is_shown_outside_the_board(window, monkeypatch):
@@ -760,7 +760,7 @@ def test_r_while_previous_recording_is_saving_starts_nothing_and_warns_in_toolba
         mux.release()
     qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=20000)
     assert tb.alert_label.isHidden() and shown == []                     # kayıt kapandı: uyarı kalktı, hata yok
-    assert first.exists() and not list(first.parent.glob("*.video.mp4")) and not list(first.parent.glob("*.wav"))
+    assert first.exists() and list(first.parent.glob("*.video.mp4")) and list(first.parent.glob("*.wav"))
     qtbot.keyClick(window, Qt.Key.Key_R)                                 # artık yeni kayıt başlar
     assert rec.state is RecorderState.RECORDING and rec.last_path != first and tb.record_button.isChecked()
     wait_until(lambda: rec.frames_written >= 3)
@@ -859,7 +859,7 @@ def test_exception_while_saving_is_shown_and_window_does_not_stay_locked(window,
     rec = window.recorder = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=10, grabber=synthetic_grabber,
                                               out_height=0, audio_device="Yok", audio_factory=NoMic,
                                               clock=stepping_clock())
-    real_replace = Path.replace
+    real_replace = MssFfmpegRecorder._move_video_without_overwrite
 
     def busy(self, target):
         if self.name.endswith(".video.mp4"):
@@ -868,14 +868,14 @@ def test_exception_while_saving_is_shown_and_window_does_not_stay_locked(window,
     tb = window.toolbar
     qtbot.keyClick(window, Qt.Key.Key_R)
     wait_until(lambda: rec.frames_written >= 3)
-    monkeypatch.setattr(Path, "replace", busy)                 # mikrofonsuz kayıt: .video.mp4 -> .mp4 patlar
+    monkeypatch.setattr(MssFfmpegRecorder, "_move_video_without_overwrite", staticmethod(busy))
     qtbot.keyClick(window, Qt.Key.Key_R)
     qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=20000)
     assert shown and shown[0][1].startswith(RECORD_FAILED) and "dosya kullanımda" in shown[0][1], shown
     assert rec.error in shown[0][1] and f"Kayıt klasörü: {tmp_path / 'rec'}" in rec.error, shown
     assert (PermissionError, "kayıt kapanışı") in [(type(e), where) for e, where in logged]
     assert tb.alert_label.isHidden() and rec.state is RecorderState.IDLE
-    monkeypatch.setattr(Path, "replace", real_replace)
+    monkeypatch.setattr(MssFfmpegRecorder, "_move_video_without_overwrite", staticmethod(real_replace))
     qtbot.keyClick(window, Qt.Key.Key_R)                        # kilitli kalmadı: yeni kayıt başlar
     assert rec.state is RecorderState.RECORDING and tb.record_button.isChecked()
     qtbot.keyClick(window, Qt.Key.Key_R)
@@ -1626,7 +1626,7 @@ def test_closing_while_recording_saves_in_background_then_the_window_closes_itse
     path = rec.last_path
     assert len(shown) == 1 and shown[0][0].startswith(f"Kayıt kaydedildi: {path}"), shown
     assert shown[0][1:] == (True, False), shown                       # sonuç pencere ve kamera kapanmadan önce
-    assert path.exists() and not list(path.parent.glob("*.video.mp4")) and not list(path.parent.glob("*.wav"))
+    assert path.exists() and list(path.parent.glob("*.video.mp4")) and list(path.parent.glob("*.wav"))
 
 
 def test_closing_while_saving_waits_without_asking_and_closes_when_saved(window, qtbot, tmp_path, monkeypatch):
@@ -2009,4 +2009,188 @@ def test_quitting_while_recording_or_saving_exits_cleanly(tmp_path, scenario):
     saved = [line for line in lines if line.startswith("BILGI")]          # sonuç, pencere kapanmadan önce gösterildi
     assert len(saved) == 1 and saved[0].startswith(f"BILGI Kayıt kaydedildi: {tmp_path / 'rec'}"), lines
     names = sorted(p.name for p in (tmp_path / "rec").iterdir())
-    assert len(names) == 2 and names[0].endswith(".log") and names[1].endswith(".mp4"), names   # birleşti, silindi
+    assert len(names) == 4 and [p.rsplit(".", 1)[-1] for p in names] == ["log", "mp4", "mp4", "wav"], names
+
+
+def test_moving_window_stops_recording_and_warns_after_stop(window, qtbot, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+    messages = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: messages.append((parent.recorder.is_recording, text)))
+    window.toggle_recording(True)
+    window.move(window.x() + 40, window.y() + 20)
+    qtbot.waitUntil(lambda: bool(messages), timeout=3000)
+    assert not window.recorder.is_recording
+    assert messages[0][0] is False and "alanı" in messages[0][1]
+
+
+def test_fullscreen_shortcuts_are_locked_during_recording(window, qtbot):
+    window.showFullScreen()
+    qtbot.waitUntil(window.isFullScreen)
+    window.toggle_recording(True)
+    qtbot.keyClick(window, Qt.Key.Key_F11)
+    assert window.isFullScreen() and window.recorder.is_recording
+    qtbot.keyClick(window, Qt.Key.Key_Escape)
+    assert window.isFullScreen() and window.recorder.is_recording
+    window.toggle_recording(False)
+
+
+def test_aspect_setting_waits_until_recording_stops(window):
+    old = window.work_area.aspect_lock
+    window.toggle_recording(True)
+    window.settings.aspect_lock = not old
+    window.apply_ui_settings()
+    assert window.work_area.aspect_lock == old and window.recorder.is_recording
+    window.toggle_recording(False)
+    assert window.work_area.aspect_lock != old
+
+
+def test_resize_stops_recording_after_geometry_changes(window, qtbot, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+    messages = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: messages.append((parent.recorder.is_recording, text)))
+    window.toggle_recording(True)
+    window.resize(window.width() - 100, window.height() - 100)
+    qtbot.waitUntil(lambda: bool(messages), timeout=3000)
+    assert not window.recorder.is_recording and messages[0][0] is False
+
+
+def test_capture_area_change_without_window_resize_stops_recording(window, qtbot, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+    messages = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: messages.append(text))
+    window.resize(1200, 700)
+    from PyQt6.QtWidgets import QApplication
+    QApplication.processEvents()
+    window.toggle_recording(True)
+    window.work_area.set_aspect_lock(False)
+    try:
+        qtbot.waitUntil(lambda: bool(messages), timeout=1500)
+        assert not window.recorder.is_recording
+    finally:
+        if window.recorder.is_recording:
+            window.recorder.stop()
+
+
+def test_geometry_interrupt_waits_for_real_recorder_finalization(window, qtbot, monkeypatch, tmp_path):
+    from PyQt6.QtWidgets import QMessageBox
+    from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState, find_ffmpeg
+    from tests.test_recorder import synthetic_grabber
+    if not find_ffmpeg():
+        pytest.skip("ffmpeg bulunamadı")
+    messages = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: messages.append((parent.recorder.state, text)))
+    window.settings.record_fps = 10
+    window.recorder = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=10, grabber=synthetic_grabber, out_height=0)
+    window.toggle_recording(True)
+    window.move(window.x() + 50, window.y() + 30)
+    qtbot.waitUntil(lambda: bool(messages), timeout=15000)
+    assert messages[0][0] is RecorderState.IDLE
+    assert window.recorder.last_path.exists()
+
+
+def test_minimize_stops_even_if_capture_rect_unchanged(window, qtbot, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+    messages = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: messages.append(text))
+    original = window.work_area.recording_rect()
+    monkeypatch.setattr(window.work_area, "recording_rect", lambda: original)
+    window.toggle_recording(True)
+    window.showMinimized()
+    qtbot.waitUntil(lambda: bool(messages), timeout=1000)
+    assert not window.recorder.is_recording
+
+
+def test_move_back_then_immediate_stop_preserves_warning(window, qtbot, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+    messages = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: messages.append(text))
+    window.toggle_recording(True)
+    old = window.pos()
+    window.move(old.x() + 50, old.y() + 30)
+    window.move(old)
+    window.toggle_recording(False)
+    assert any("alanı" in text for text in messages)
+
+
+def test_prepare_first_frame_move_uses_new_capture_rect(window, monkeypatch):
+    from matematigin_mantigi.core.recorder import record_rect_for
+    window.recordingAboutToStart.connect(lambda: window.move(window.x() + 50, window.y() + 30))
+    window.toggle_recording(True)
+    assert window.recorder.last_rect == record_rect_for(window.work_area.recording_rect())
+    window.toggle_recording(False)
+
+
+def test_pending_geometry_timer_does_not_stop_next_recording(window, qtbot, monkeypatch):
+    from PyQt6.QtWidgets import QApplication, QMessageBox
+    messages = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: messages.append(text))
+    window.toggle_recording(True)
+    window.move(window.x() + 50, window.y() + 30)
+    window.toggle_recording(False)
+    window.toggle_recording(True)
+    QApplication.processEvents()
+    assert window.recorder.is_recording and len(messages) == 1
+    window.toggle_recording(False)
+
+
+def test_geometry_stop_warning_survives_close_request(window, qtbot, monkeypatch):
+    from PyQt6.QtWidgets import QApplication, QMessageBox
+    messages = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: messages.append(text))
+    _answer_close_question(monkeypatch, STOP_AND_QUIT)
+    window.toggle_recording(True)
+    window.move(window.x() + 50, window.y() + 30)
+    window.close()
+    QApplication.processEvents()
+    assert any("alanı" in text for text in messages)
+    assert not window.recorder.is_recording
+
+
+def test_geometry_warning_reentrant_close_keeps_error_visible(window, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+    from matematigin_mantigi.core.recorder import NullRecorder
+
+    class Broken(NullRecorder):
+        error = "Ham dosya: /tmp/raw.wav"
+
+    seen = []
+    from PyQt6.QtCore import QTimer
+    from PyQt6.QtWidgets import QDialog
+
+    def warning(parent, title, text):
+        seen.append(text)
+        if len(seen) == 1:
+            box = QMessageBox(QMessageBox.Icon.Warning, title, text, parent=parent)
+            def close_during_modal():
+                parent.close()
+                seen.append("VISIBLE" if parent.isVisible() else "CLOSED")
+                box.accept()
+            QTimer.singleShot(0, close_during_modal)
+            QDialog.exec(box)  # gerçek iç içe Qt olay döngüsü
+    monkeypatch.setattr(QMessageBox, "warning", warning)
+    window.recorder = Broken()
+    window.toggle_recording(True)
+    window.move(window.x() + 50, window.y() + 30)
+    window.toggle_recording(False)
+    assert "VISIBLE" in seen
+    assert any("/tmp/raw.wav" in text for text in seen)
+
+
+def test_move_away_and_back_during_recorder_start_reports_risk(window, qtbot, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+    from matematigin_mantigi.core.recorder import NullRecorder
+
+    class MovingStart(NullRecorder):
+        def start(self, rect, fps=60):
+            old = window.pos()
+            window.move(old.x() + 50, old.y() + 30)
+            window.move(old)
+            super().start(rect, fps)
+
+    messages = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: messages.append(text))
+    window.recorder = MovingStart()
+    window.toggle_recording(True)
+    qtbot.waitUntil(lambda: bool(messages), timeout=1500)
+    assert not window.recorder.is_recording
+    assert any("alan" in text and "olabilir" in text for text in messages)

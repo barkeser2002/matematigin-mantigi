@@ -86,13 +86,14 @@ class QuestionEditorDialog(QDialog):
     saved = pyqtSignal(object)      # list[Question]
 
     def __init__(self, questions: Sequence[Question], questions_path: Path, fam: FontFamilies, parent=None, *,
-                 from_file: bool = True):
+                 from_file: bool = True, before_save=None):
         """from_file: sorular questions_path'ten mi okundu. False: uygulama açılışta dosyayı okuyamadı, pencerede örnek
         sorular var; Kaydet onları dosyadaki ya da yedeğindeki gerçek soruların üzerine yazmaz (Q1)."""
         super().__init__(parent)
         self.fam = fam
         self.questions_path = Path(questions_path)
         self.from_file = from_file
+        self.before_save = before_save
         self.images_dir = self.questions_path.parent / "sorular_gorsel"
         self.questions: list[Question] = list(questions)
         self._current = -1
@@ -397,6 +398,8 @@ class QuestionEditorDialog(QDialog):
                                 "Düzenlemeleriniz bu pencerede duruyor.")
             return
         if not self.from_file and self._offer_real_questions(in_file):
+            return
+        if self.before_save is not None and not self.before_save():
             return
         try:
             write_questions(self.questions_path, self.questions)

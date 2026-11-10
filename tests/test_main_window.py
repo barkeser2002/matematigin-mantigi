@@ -68,6 +68,36 @@ def _release_windows_left_open(timeout_ms: int = 30000) -> None:
             w.webcam_panel.shutdown()
 
 
+@pytest.fixture
+def fake_selected_microphone(monkeypatch):
+    """Only the synthetic capture tests get a synthetic device enumeration."""
+    from matematigin_mantigi.core import audio_capture
+
+    class Devices:
+        @staticmethod
+        def query_hostapis():
+            return [{"name": "Test API"}]
+
+        @staticmethod
+        def query_devices():
+            return [{"name": "Sahte Mikrofon", "hostapi": 0, "max_input_channels": 1}]
+
+    monkeypatch.setattr(audio_capture, "_sd", lambda: Devices)
+
+
+@pytest.fixture
+def confirm_silent_recording(monkeypatch):
+    """Bu testlerde öğretmen mikrofonsuz kaydı açıkça onaylar."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    def answer(parent, title, text, buttons, default):
+        assert "Ses olmadan kayıt başlatılsın mı?" in text
+        assert default == QMessageBox.StandardButton.No
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(QMessageBox, "question", answer)
+
+
 def test_window_shell(window):
     assert window.windowTitle() == "Matematiğin Mantığı"
     assert window.toolbar.width() == 88
@@ -139,24 +169,40 @@ def test_next_without_drawing_writes_nothing(window, qtbot):
 
 
 @pytest.mark.parametrize("failure", ["klasor", "png"])
-def test_snapshot_failure_on_question_change_is_reported_and_lesson_continues(window, qtbot, tmp_path, monkeypatch,
-                                                                              failure):
-    """pen#1/app#2: soru değişirken tahta PNG'si yazılamazsa (oturum klasörü yerine dosya / silinmiş klasör, dolu
-    disk) save_snapshot OSError fırlatıyor, yuva uygulamayı süren kayıtla birlikte düşürüyordu. Artık modal
-    olmayan uyarı (kancaya kadar gitmez); sonraki soruya geçilir, tahta temizlenir, ders sürer."""
+@pytest.mark.parametrize("navigation", ["next", "prev", "select"])
+def test_snapshot_failure_preserves_board_and_allows_retry(window, qtbot, tmp_path, monkeypatch, failure, navigation):
     from PyQt6.QtGui import QImage
     posted = _capture_notices(monkeypatch)
-    if failure == "klasor":
-        (tmp_path / "engel").write_text("dosya", encoding="utf-8")
-        window.session_store.session_dir = tmp_path / "engel" / "oturum"
-    else:
-        monkeypatch.setattr(QImage, "save", lambda *a, **k: False)
     c = window.canvas
     c.begin_stroke(QPointF(50, 50), 0.6); c.extend_stroke(QPointF(200, 200), 0.6); c.end_stroke()
-    qtbot.mouseClick(window.toolbar.next_button, Qt.MouseButton.LeftButton)
-    assert window.flow.index == 1 and c.is_empty()
-    assert window.question_zone.number_label.text() == "2."
-    assert posted and posted[0][0] == "Tahta görüntüsü kaydedilemedi" and "S1" in posted[0][1]
+    c.begin_text(QPointF(100, 100)); c.text_edit.setText("Kaybolmasın")
+    original_image = c.snapshot_image()
+    original_dir = window.session_store.session_dir
+    window.flow.toggle_work()
+    with monkeypatch.context() as fail:
+        if failure == "klasor":
+            (tmp_path / "engel").write_text("dosya", encoding="utf-8")
+            window.session_store.session_dir = tmp_path / "engel" / "oturum"
+        else:
+            fail.setattr(QImage, "save", lambda *a, **k: False)
+        if navigation == "next":
+            qtbot.mouseClick(window.toolbar.next_button, Qt.MouseButton.LeftButton)
+        elif navigation == "prev":
+            qtbot.mouseClick(window.toolbar.prev_button, Qt.MouseButton.LeftButton)
+        else:
+            window.flow.select(1)
+        assert window.flow.index == 0
+        assert window.flow.status() == QuestionStatus.WORKING
+        assert window.question_zone.number_label.text() == "1."
+        assert c.snapshot_image() == original_image
+        assert c.text_edit.isVisible() and c.text_edit.text() == "Kaybolmasın"
+        assert window.session_store.count("S1") == 0
+        assert posted and posted[0][0] == "Tahta görüntüsü kaydedilemedi" and "S1" in posted[0][1]
+    window.session_store.session_dir = original_dir
+    window.flow.select(1)
+    assert window.flow.index == 1 and c.is_empty() and not c.text_edit.isVisible()
+    assert window.session_store.count("S1") == 1
+    assert not QImage(str(original_dir / "S1_01.png")).isNull()
 
 
 def test_hint_reveal_and_mask_mode(window, qtbot):
@@ -341,7 +387,7 @@ def test_recorder_error_reverts_button(window, qtbot, monkeypatch):
     assert shown and shown[0].startswith("Kayıt başlamadı") and "ffmpeg bulunamadı" in shown[0], shown
 
 
-def test_real_recorder_through_window(window, qtbot, tmp_path):
+def test_real_recorder_through_window(window, qtbot, tmp_path, confirm_silent_recording):
     import time
     from matematigin_mantigi.core.recorder import MssFfmpegRecorder, find_ffmpeg
     import pytest
@@ -358,6 +404,7 @@ def test_real_recorder_through_window(window, qtbot, tmp_path):
     assert window.recorder.last_path.exists() and "Kayıt kaydedildi" in window.work_area.status_label.text()
 
 
+@pytest.mark.usefixtures("fake_selected_microphone")
 def test_real_recorder_with_audio_muxes_and_cleans_up(window, qtbot, tmp_path):
     """Pencere üzerinden ses+video: mikrofon (sahte) alınır, mux edilir, ara dosyalar silinir, süre gerçek."""
     import time
@@ -608,7 +655,7 @@ def test_saved_recording_path_is_off_the_board_before_the_next_recording_starts(
     assert second_px == first_px                                      # ilk karede de yol yok: olağan satır çizili
 
 
-def test_notice_box_open_when_recording_starts_is_not_in_the_first_frame(window, qtbot, tmp_path, monkeypatch):
+def test_notice_box_open_when_recording_starts_is_not_in_the_first_frame(window, qtbot, tmp_path, monkeypatch, confirm_silent_recording):
     """P4: kayıttan önce açık kalan uyarı kutusu kaydın ilk karelerine giriyordu (k001-k005; kutu hatalar.log'un tam
     yolunu, yani kullanıcı adını taşır): kaydedici ilk kareyi start() içinde, GUI'de yakalar; kutu ise ancak kayıt
     rozetinin ilk tikinde, start() döndükten sonra gizleniyordu. Kutu start()'tan önce gizlenir, uyarı şeride geçer;
@@ -722,6 +769,7 @@ def test_box_hidden_for_a_recording_that_does_not_start_comes_back(window, qtbot
 
 # --- #2: kayıt kaydedilirken yeni kayıt yok; uyarı araç çubuğunda (denetim app#1, e2e#2) -----------------------
 
+@pytest.mark.usefixtures("fake_selected_microphone")
 def test_r_while_previous_recording_is_saving_starts_nothing_and_warns_in_toolbar(window, qtbot, tmp_path,
                                                                                   monkeypatch):
     """Durdurma arka planda sürerken kayıt düğmesi kilitliydi ama R değildi: yeni kayıt başlıyor, ilk dersin
@@ -769,6 +817,7 @@ def test_r_while_previous_recording_is_saving_starts_nothing_and_warns_in_toolba
     assert rec.last_path.exists() and shown == []
 
 
+@pytest.mark.usefixtures("fake_selected_microphone")
 def test_stopping_shows_the_saving_strip_until_the_recording_is_saved(window, qtbot, tmp_path, monkeypatch):
     """Normal durdurmada (R) kapanış sürerken araç çubuğunda 'Kayıt kaydediliyor…' görünür, düğme kilitli; kayıt
     bitince şerit kalkar. (Önceki test şeridi ancak kaydedilirken ikinci R'den sonra görüyordu: durdurmanın kendisi
@@ -802,7 +851,7 @@ def test_stopping_shows_the_saving_strip_until_the_recording_is_saved(window, qt
     assert tb.alert_label.isHidden() and shown == [] and rec.last_path.exists()
 
 
-def test_r_before_the_stop_result_reaches_the_window_starts_nothing(window, qtbot, tmp_path, monkeypatch):
+def test_r_before_the_stop_result_reaches_the_window_starts_nothing(window, qtbot, tmp_path, monkeypatch, confirm_silent_recording):
     """Kaydedici IDLE'a döndükten sonra da, durdurma sonucu pencereye ulaşana (_on_record_stopped) dek yeni kayıt
     yok: yoksa geç gelen sonuç yeni kaydın araç çubuğunu 'kayıt yok'a çevirir ve onun hata alanlarını okur."""
     import threading
@@ -838,7 +887,7 @@ def test_r_before_the_stop_result_reaches_the_window_starts_nothing(window, qtbo
     assert tb.alert_label.isHidden() and not tb.record_button.isChecked() and first.exists()
 
 
-def test_exception_while_saving_is_shown_and_window_does_not_stay_locked(window, qtbot, tmp_path, monkeypatch):
+def test_exception_while_saving_is_shown_and_window_does_not_stay_locked(window, qtbot, tmp_path, monkeypatch, confirm_silent_recording):
     """Kapanışın bir adımı patlarsa (ör. Windows'ta kullanımdaki dosyanın yeniden adlandırılması) hata gösterilir ve
     arayüz 'kaydediliyor'da takılı kalmaz: şerit kalkar, düğme açılır, sonraki R yeni kayıt başlatır. Pencere önce
     kaydedicinin anlamlı hatasını gösterir (sebep + kayıt klasörü), ham istisna metnini değil; istisna günlüğe gider."""
@@ -859,23 +908,21 @@ def test_exception_while_saving_is_shown_and_window_does_not_stay_locked(window,
     rec = window.recorder = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=10, grabber=synthetic_grabber,
                                               out_height=0, audio_device="Yok", audio_factory=NoMic,
                                               clock=stepping_clock())
-    real_replace = MssFfmpegRecorder._move_video_without_overwrite
+    real_report = MssFfmpegRecorder._report_lag
 
-    def busy(self, target):
-        if self.name.endswith(".video.mp4"):
-            raise PermissionError(13, "dosya kullanımda", str(self))
-        return real_replace(self, target)
+    def busy(self, session):
+        raise PermissionError(13, "dosya kullanımda", str(session.final_path))
     tb = window.toolbar
     qtbot.keyClick(window, Qt.Key.Key_R)
     wait_until(lambda: rec.frames_written >= 3)
-    monkeypatch.setattr(MssFfmpegRecorder, "_move_video_without_overwrite", staticmethod(busy))
+    monkeypatch.setattr(MssFfmpegRecorder, "_report_lag", busy)
     qtbot.keyClick(window, Qt.Key.Key_R)
     qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=20000)
     assert shown and shown[0][1].startswith(RECORD_FAILED) and "dosya kullanımda" in shown[0][1], shown
     assert rec.error in shown[0][1] and f"Kayıt klasörü: {tmp_path / 'rec'}" in rec.error, shown
     assert (PermissionError, "kayıt kapanışı") in [(type(e), where) for e, where in logged]
     assert tb.alert_label.isHidden() and rec.state is RecorderState.IDLE
-    monkeypatch.setattr(MssFfmpegRecorder, "_move_video_without_overwrite", staticmethod(real_replace))
+    monkeypatch.setattr(MssFfmpegRecorder, "_report_lag", real_report)
     qtbot.keyClick(window, Qt.Key.Key_R)                        # kilitli kalmadı: yeni kayıt başlar
     assert rec.state is RecorderState.RECORDING and tb.record_button.isChecked()
     qtbot.keyClick(window, Qt.Key.Key_R)
@@ -956,6 +1003,7 @@ def test_stop_error_without_message_is_still_shown_and_logged(window, qtbot, mon
     assert [(type(e), where) for e, where in logged] == [(OSError, "kayıt kapanışı")]
 
 
+@pytest.mark.usefixtures("fake_selected_microphone")
 def test_ffmpeg_dying_at_start_shows_why_and_where_the_sound_is(window, qtbot, tmp_path, monkeypatch):
     """Mikrofonlu kayıtta ffmpeg başta ölünce (kodlayıcı açılamadı, disk dolu) pencere ham 'No such file or
     directory' metnini gösteriyordu. Şimdi kaydedicinin hatası: ffmpeg'in sebebi ve silinmeyen ses dosyasının yeri."""
@@ -1006,7 +1054,7 @@ def test_layout_edit_persists_to_file(window, qtbot, tmp_path):
 def _capture_notices(monkeypatch) -> list:
     from matematigin_mantigi.ui import error_notice
     posted = []
-    monkeypatch.setattr(error_notice, "post", lambda title, text, key=None: posted.append((title, text, key)))
+    monkeypatch.setattr(error_notice, "post", lambda title, text, key=None, **kwargs: posted.append((title, text, key)))
     return posted
 
 
@@ -1585,6 +1633,7 @@ def test_closing_while_recording_asks_and_keep_recording_cancels_the_close(windo
     window.toggle_recording(False)                                    # (teardown'da soru açılmasın)
 
 
+@pytest.mark.usefixtures("fake_selected_microphone")
 def test_closing_while_recording_saves_in_background_then_the_window_closes_itself(window, qtbot, tmp_path,
                                                                                   monkeypatch):
     """'Durdur ve çık': kayıt arka planda kaydedilir (pencere donmaz), kapanma olayı yok sayılır, araç çubuğu
@@ -1629,6 +1678,7 @@ def test_closing_while_recording_saves_in_background_then_the_window_closes_itse
     assert path.exists() and list(path.parent.glob("*.video.mp4")) and list(path.parent.glob("*.wav"))
 
 
+@pytest.mark.usefixtures("fake_selected_microphone")
 def test_closing_while_saving_waits_without_asking_and_closes_when_saved(window, qtbot, tmp_path, monkeypatch):
     """Kayıt zaten kaydedilirken (durdurma işçisi çalışıyor) kapatma soru sormaz: kapanma olayı yok sayılır, kayıt
     bitince sonuç gösterilir ve pencere kendisi kapanır. Eskiden 60 sn bekleyip çalışan _StopWorker'ı yok ediyordu
@@ -1930,6 +1980,8 @@ def main() -> int:
     settings = AppSettings(QSettings(str(tmp / "ayarlar.ini"), QSettings.Format.IniFormat))
     settings.set_pen(PenSettings(reading_ms=0))
     settings.audio_device = "Sahte"
+    from matematigin_mantigi.core import audio_capture
+    audio_capture.resolve_input_device = lambda name: 0 if name == "Sahte" else None
     if scenario == "kapanis-hatasi":
         rec = BrokenStop()
     else:
@@ -2071,7 +2123,7 @@ def test_capture_area_change_without_window_resize_stops_recording(window, qtbot
             window.recorder.stop()
 
 
-def test_geometry_interrupt_waits_for_real_recorder_finalization(window, qtbot, monkeypatch, tmp_path):
+def test_geometry_interrupt_waits_for_real_recorder_finalization(window, qtbot, monkeypatch, tmp_path, confirm_silent_recording):
     from PyQt6.QtWidgets import QMessageBox
     from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState, find_ffmpeg
     from tests.test_recorder import synthetic_grabber
@@ -2112,12 +2164,14 @@ def test_move_back_then_immediate_stop_preserves_warning(window, qtbot, monkeypa
     assert any("alanı" in text for text in messages)
 
 
-def test_prepare_first_frame_move_uses_new_capture_rect(window, monkeypatch):
-    from matematigin_mantigi.core.recorder import record_rect_for
+def test_prepare_first_frame_move_aborts_capture(window, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: warnings.append(text))
     window.recordingAboutToStart.connect(lambda: window.move(window.x() + 50, window.y() + 30))
     window.toggle_recording(True)
-    assert window.recorder.last_rect == record_rect_for(window.work_area.recording_rect())
-    window.toggle_recording(False)
+    assert window.recorder.last_rect is None and not window.recorder.is_recording
+    assert warnings and "çekim alanı değişti" in warnings[0]
 
 
 def test_pending_geometry_timer_does_not_stop_next_recording(window, qtbot, monkeypatch):
@@ -2194,3 +2248,27 @@ def test_move_away_and_back_during_recorder_start_reports_risk(window, qtbot, mo
     qtbot.waitUntil(lambda: bool(messages), timeout=1500)
     assert not window.recorder.is_recording
     assert any("alan" in text and "olabilir" in text for text in messages)
+
+
+def test_microphone_open_failure_asks_before_starting_video(window, qtbot, tmp_path, monkeypatch):
+    from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState
+    from PyQt6.QtWidgets import QMessageBox
+    import numpy as np
+    class Broken:
+        def __init__(self, device): pass
+        def start(self, path): raise RuntimeError("device busy")
+        def stop(self): pass
+    rec = MssFfmpegRecorder(lambda: tmp_path, fps=10, out_height=0, audio_device="chosen",
+                            grabber=lambda r: np.zeros((64, 64, 4), dtype=np.uint8), audio_factory=Broken)
+    window.recorder = rec
+    window.settings.audio_device = "chosen"
+    monkeypatch.setattr("matematigin_mantigi.core.audio_capture.resolve_input_device", lambda name: 1)
+    answers = []
+    def no(*args, **kwargs):
+        answers.append(rec.state)
+        return QMessageBox.StandardButton.No
+    monkeypatch.setattr(QMessageBox, "question", no)
+    window.toggle_recording(True)
+    assert answers == [RecorderState.IDLE]
+    assert rec.state is RecorderState.IDLE
+    assert not list(tmp_path.glob("*.mp4"))

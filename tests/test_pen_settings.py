@@ -14,7 +14,8 @@ def test_dialog_reflects_current_and_returns_edits(qtbot):
     assert d.curve_slider.value() == 50 and d.smoothing_slider.value() == 35
     assert d.min_slider.value() == 1 and d.max_slider.value() == 12
     assert d.nib_buttons[Nib.ROUND].isChecked()
-    assert d.toggles["math_recognition"].isChecked() and not d.toggles["template_matching"].isChecked()
+    assert not d.toggles["math_recognition"].isEnabled()
+    assert not d.toggles["template_matching"].isEnabled()
     d.smoothing_slider.setValue(60); d.max_slider.setValue(20)
     d.nib_buttons[Nib.CHALK].click()
     d.toggles["autosave"].setChecked(False)
@@ -42,3 +43,10 @@ def test_min_never_exceeds_max(qtbot):
     qtbot.addWidget(d)
     d.min_slider.setValue(10)
     assert d.value().min_width <= d.value().max_width
+
+
+def test_existing_inverted_widths_are_made_consistent_on_open(qtbot):
+    d = PenSettingsDialog(PenSettings(min_width=20, max_width=4, reading_ms=90), QColor("#000"), 4, FAM)
+    qtbot.addWidget(d)
+    assert d.min_slider.value() <= d.max_slider.value()
+    assert d.value().reading_ms == 90

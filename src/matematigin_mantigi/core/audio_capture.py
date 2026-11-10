@@ -96,49 +96,37 @@ def _hostapi_rank(sd):
     return rank
 
 
+def _input_labels(sd):
+    """API adı kimliğin parçasıdır; aynı API/ad çakışması çözümlenemez."""
+    devices = _all_input_devices(sd)
+    apis = sd.query_hostapis()
+    pairs = [(i, d["name"], apis[int(d["hostapi"])]["name"]) for i, d in devices if d.get("name")]
+    counts = {(name, api): sum(1 for _, n, a in pairs if (n, a) == (name, api))
+              for _, name, api in pairs}
+    return [(i, name, f"{name} [{api}]" + (f" #{i}" if counts[name, api] > 1 else ""),
+             counts[name, api] == 1) for i, name, api in pairs]
+
+
 def list_input_devices() -> list[str]:
-    """Mikrofon adları (ayarlar listesi için). Girişi olan en iyi host API'nin aygıtları; boşsa bir alt API.
-    Böylece adlar tekrarlanmaz ve tam gelir; aygıt indeksleri değişse de liste boş kalmaz."""
+    """Tüm girişleri API etiketleriyle listele; PortAudio'yu yeniden başlatmaz."""
     try:
-        sd = _sd()
-        by_api: dict[int, list[str]] = {}
-        for _, d in _all_input_devices(sd):
-            by_api.setdefault(int(d["hostapi"]), []).append(d["name"])
-        if not by_api:
-            return []
-        rank = _hostapi_rank(sd)
-        best = min(by_api, key=rank)
-        seen: set[str] = set()
-        names: list[str] = []
-        for name in by_api[best]:
-            if name and name not in seen:
-                seen.add(name)
-                names.append(name)
-        return names
-    except Exception:  # noqa: BLE001 - PortAudio yoksa / aygıt sorgusu patlarsa liste boş
+        return [label for _, _, label, _ in _input_labels(_sd())]
+    except Exception:  # noqa: BLE001
         return []
 
 
 def resolve_input_device(name: str | None) -> int | None:
-    """Ad -> sounddevice indeksi. Tam ad önce, sonra alt dize; her ikisinde de en iyi host API'yi seçer.
-    Bulunmazsa None (varsayılan giriş). Aygıtlar tüm host API'lerden aranır, böylece eski kayıtlı adlar da tutar."""
+    """Etiket veya eski tam ad yalnız tek ve güvenilir eşleşmede çözülür."""
     if not name:
         return None
     try:
-        sd = _sd()
-        cands = _all_input_devices(sd)
-        rank = _hostapi_rank(sd)
+        entries = _input_labels(_sd())
+        matches = [(i, unique) for i, raw, label, unique in entries if label == name]
+        if not matches:
+            matches = [(i, unique) for i, raw, label, unique in entries if raw == name]
+        return matches[0][0] if len(matches) == 1 and matches[0][1] else None
     except Exception:  # noqa: BLE001
         return None
-    exact = [(rank(int(d["hostapi"])), i) for i, d in cands if d["name"] == name]
-    if exact:
-        return min(exact)[1]
-    low = name.lower()
-    sub = [(rank(int(d["hostapi"])), i) for i, d in cands
-           if low in d["name"].lower() or d["name"].lower() in low]
-    if sub:
-        return min(sub)[1]
-    return None
 
 
 class AudioCapture:
@@ -218,14 +206,15 @@ class AudioCapture:
             self._wav_file = None
 
     def _pick_device(self, sd) -> tuple[int | None, dict]:
-        """Aygıtı sağlam çöz: seçilen ad, sonra PortAudio varsayılanı, o da yoksa listedeki ilk mikrofon.
-        Bu makinede varsayılan giriş -1 olabilir (PortAudioError); o durumda ilk mikrofona düşer."""
+        """Seçilen aygıtı aç; seçili aygıt yoksa hata ver. Adsız seçimde varsayılanı kullan."""
         idx = resolve_input_device(self.device)
-        if idx is not None:
+        if self.device:
+            if idx is None:
+                raise RuntimeError(f"Seçilen mikrofon bulunamadı: {self.device}")
             try:
                 return idx, sd.query_devices(idx, "input")
-            except Exception:  # noqa: BLE001 - seçilen indeks geçersiz: varsayılana düş
-                pass
+            except Exception as err:
+                raise RuntimeError(f"Seçilen mikrofon kullanılamıyor: {self.device}") from err
         try:
             return None, sd.query_devices(kind="input")          # None = PortAudio varsayılan girişi
         except Exception:  # noqa: BLE001 - varsayılan giriş yok (-1)

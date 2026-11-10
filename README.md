@@ -112,7 +112,11 @@ Mac'te proje kökünde:
 Betik `.venv` kurar, tüm kütüphaneleri (`PyQt6, opencv-python, numpy, openpyxl, pymupdf, pytest, pyinstaller`)
 yükler, testleri koşar ve `dist/Matematiğin Mantığı.app` üretir. Kamera, mikrofon ve ekran kaydı izin metinleri
 (`NSCameraUsageDescription` vb.) `mac/matematigin_mantigi.spec` içinde gömülüdür; ilk açılışta macOS izin sorar.
-İmzasız uygulama için ilk açılış: sağ tık > Aç (veya `xattr -dr com.apple.quarantine "dist/Matematiğin Mantığı.app"`).
+Uygulama Apple tarafından onaylı değil (ad-hoc imzalı). Tarayıcıdan inen zip karantina işareti alır; açılmazsa ya da
+"hasarlı" derse `.app`'i Uygulamalar'a taşıyıp Terminal'de çalıştırın:
+`xattr -dr com.apple.quarantine "/Applications/Matematiğin Mantığı.app"`. Başka yol: Sistem Ayarları > Gizlilik ve
+Güvenlik > "Yine de Aç" (macOS 15'te sağ tık > Aç artık işe yaramıyor). Her yeni sürümde kamera, mikrofon ve ekran
+kaydı izinleri yeniden istenebilir (imza her derlemede değişir).
 
 Paketlenmiş uygulama verilerini `~/Documents/Matematiğin Mantığı/` altında tutar: ilk açılışta `sorular_sablon.xlsx`
 ve `sorular_gorsel/` oraya kopyalanır; `oturum/` (kayıtlar, PNG'ler) ve `duzen.json` da orada oluşur. Soruları
@@ -147,7 +151,8 @@ Yerelde: `powershell -ExecutionPolicy Bypass -File windows\build_win.ps1` — `.
 GitHub Release'e (`build-<numara>`) ekler. Elle: Actions > **Release** > Run workflow (ya da `gh workflow run release.yml`).
 Bir daldan elle çalıştırılırsa yalnız derler, Release yayınlamaz (dalı main'e almadan önce iki platformu denemek için).
 Yalnız Mac için `.github/workflows/mac.yml` de var. İndirdikten sonra Windows: klasörü kopyala, `.exe` çalıştır;
-macOS: `.app`'i sağ tık > Aç (imzasız).
+macOS: zipi aç, `.app`'i Uygulamalar'a taşı; açılmazsa yukarıdaki `xattr -dr com.apple.quarantine` komutunu çalıştır
+(ya da Sistem Ayarları > Gizlilik ve Güvenlik > "Yine de Aç").
 
 Kütüphane sürümleri `constraints.txt` dosyasında sabittir; derleme betikleri ve CI `pip install -c constraints.txt`
 ile kurar. Yerelde de aynısı: `python -m pip install -e ".[dev,pdf]" -c constraints.txt`. Sürüm yükseltmek için

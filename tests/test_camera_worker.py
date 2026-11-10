@@ -60,7 +60,7 @@ def test_dead_camera_reports_error_and_finishes(qtbot, dead_camera):
     assert w.wait(2000)
 
 
-def test_opencv_source_scans_other_indices(monkeypatch):
+def test_opencv_source_does_not_scan_other_indices(monkeypatch):
     import cv2
     from matematigin_mantigi.ui import camera_worker as cw
 
@@ -77,7 +77,7 @@ def test_opencv_source_scans_other_indices(monkeypatch):
 
     monkeypatch.setattr(cv2, "VideoCapture", FakeCapture)
     src = cw.OpenCvSource(0)
-    assert src.open() is True and src.index == 1
+    assert src.open() is False and src.index == 0
     src.release()
     dead = cw.OpenCvSource(5)
     monkeypatch.setattr(FakeCapture, "isOpened", lambda self: False)

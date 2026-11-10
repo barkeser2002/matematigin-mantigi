@@ -34,7 +34,13 @@ rm -rf build dist
 pyinstaller --noconfirm mac/matematigin_mantigi.spec
 
 APP="dist/Matematiğin Mantığı.app"
+echo "== Ad-hoc imza (derin) ve doğrulama"
+codesign --force --deep --sign - "$APP"
+codesign --verify --deep --strict --verbose=2 "$APP"
 echo "== Bitti: $APP"
 echo "   İlk açılışta macOS kamera ve mikrofon izni sorar (Info.plist metinleri gömülü)."
-echo "   Gatekeeper uyarısı için: sağ tık > Aç, ya da:  xattr -dr com.apple.quarantine \"$APP\""
+echo "   Uygulama ad-hoc imzalı, Apple onaylı değil. Başka Mac'e zip ile götürülürse açılmazsa/\"hasarlı\" derse:"
+echo "     xattr -dr com.apple.quarantine \"/Applications/Matematiğin Mantığı.app\""
+echo "   ya da Sistem Ayarları > Gizlilik ve Güvenlik > \"Yine de Aç\" (macOS 15'te sağ tık > Aç çalışmaz)."
+echo "   Her yeni derlemede imza değişir; kamera/mikrofon/ekran kaydı izinleri yeniden istenebilir."
 echo "   Kalem basıncı için XP-Pen sürücüsünü kurun; Sistem Ayarları > Gizlilik > Erişilebilirlik ve Giriş İzleme."

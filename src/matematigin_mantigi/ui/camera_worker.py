@@ -25,10 +25,7 @@ class FrameSource(Protocol):
 
 
 class OpenCvSource:
-    """OpenCV kamera kaynağı. İstenen indeks açılmazsa 0-3 arası diğer indeksleri de dener
-    (ör. bağlı olmayan bir sanal kamera 0'ı işgal ederken gerçek kamera 1'de olabilir)."""
-
-    SCAN_INDICES = (0, 1, 2, 3)
+    """OpenCV kamera kaynağı: yalnız seçilen indeksi açar."""
 
     def __init__(self, index: int = 0):
         self.index = index
@@ -37,7 +34,7 @@ class OpenCvSource:
     def open(self) -> bool:
         # Windows'ta CAP_ANY, FFmpeg eklentisini de dolaştırır ve o kendi uyarısını basar; DSHOW + MSMF yeterli.
         backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF] if sys.platform == "win32" else [cv2.CAP_ANY]
-        candidates = [self.index] + [i for i in self.SCAN_INDICES if i != self.index]
+        candidates = [self.index]
         log = cv2.utils.logging
         prev = log.getLogLevel()
         log.setLogLevel(log.LOG_LEVEL_SILENT)         # deneme sırasındaki sürücü uyarıları konsolu kirletmesin
@@ -49,9 +46,7 @@ class OpenCvSource:
                         ok, frame = cap.read()        # açılan ama kare vermeyen sürücüleri ele
                         if ok and frame is not None:
                             self._cap = cap
-                            if index != self.index:
-                                print(f"Kamera {self.index} açılmadı, {index} kullanılıyor", file=sys.stderr)
-                                self.index = index
+
                             return True
                     cap.release()
         finally:

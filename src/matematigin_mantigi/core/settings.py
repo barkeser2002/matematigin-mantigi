@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import fields
+import json
 
 from PyQt6.QtCore import QSettings
 
@@ -61,6 +62,26 @@ class AppSettings:
             return enum(self._str(key, default.value))
         except ValueError:
             return default
+
+    def _screen_key(self, key):
+        try:
+            value = json.loads(self._str(key, "null"))
+            if (isinstance(value, list) and len(value) == 4
+                    and all(isinstance(v, str) for v in value) and value[0]):
+                return tuple(value)
+        except (ValueError, TypeError):
+            pass
+        return None
+
+    @property
+    def board_screen_key(self): return self._screen_key("screens/board")
+    @board_screen_key.setter
+    def board_screen_key(self, value): self._q.setValue("screens/board", json.dumps(value))
+
+    @property
+    def preview_screen_key(self): return self._screen_key("screens/preview")
+    @preview_screen_key.setter
+    def preview_screen_key(self, value): self._q.setValue("screens/preview", json.dumps(value))
 
     # --- properties --------------------------------------------------------------
     @property
@@ -151,6 +172,11 @@ class AppSettings:
     def audio_device(self) -> str: return self._str("record/audio_device", "")
     @audio_device.setter
     def audio_device(self, name: str) -> None: self._q.setValue("record/audio_device", name or "")
+
+    @property
+    def record_folder(self) -> str: return self._str("record/folder", "")
+    @record_folder.setter
+    def record_folder(self, path: str) -> None: self._q.setValue("record/folder", path)
 
     def set_visible(self, key: str, on: bool) -> None:
         self._q.setValue(f"ui/show_{key}", bool(on))

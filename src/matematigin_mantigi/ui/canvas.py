@@ -3,13 +3,14 @@ yazı (tıkla, yaz, Enter), 30 adım geri al."""
 from __future__ import annotations
 
 from collections import deque
+import random
 
 from PyQt6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (QBrush, QColor, QFont, QImage, QKeyEvent, QMouseEvent, QPainter, QPaintEvent, QPen, QPixmap,
                          QPointingDevice, QPolygonF, QResizeEvent, QTabletEvent)
 from PyQt6.QtWidgets import QLineEdit, QWidget
 
-from matematigin_mantigi.core.models import Shape, Tool
+from matematigin_mantigi.core.models import Nib, PenSettings, Shape, Tool
 from matematigin_mantigi.core.stroke import LASER_COLOR, MOUSE_PRESSURE, eraser_diameter, pressure_width
 from matematigin_mantigi.ui import theme
 
@@ -56,6 +57,9 @@ class DrawingCanvas(QWidget):
         self.shape = Shape.RECT
         self.color = QColor(theme.INK)
         self.base_width = 4
+        self._pen_settings: PenSettings | None = None
+        self._chalk_color = None
+        self._chalk_brush = None
         self._strokes = QImage()
         self._overlay = QImage()
         self._undo: deque[tuple[QImage, int]] = deque(maxlen=self.MAX_UNDO)
@@ -63,6 +67,7 @@ class DrawingCanvas(QWidget):
         self._tablet_down = False
         self._mouse_down = False
         self._last: QPointF | None = None
+        self._raw_last: QPointF | None = None
         self._last_p = MOUSE_PRESSURE
         self._shape_start: QPointF | None = None
         self._active_tool = Tool.PEN
@@ -89,6 +94,19 @@ class DrawingCanvas(QWidget):
     def set_shape(self, s: Shape) -> None: self.shape = s
     def set_color(self, c: QColor) -> None: self.color = QColor(c)
     def set_base_width(self, w: int) -> None: self.base_width = int(w)
+    def set_pen_settings(self, settings: PenSettings) -> None:
+        self._pen_settings = settings
+
+    def _pen_width(self, pressure: float) -> float:
+        settings = self._pen_settings
+        if settings is None:
+            return pressure_width(self.base_width, pressure)
+        low = max(0.1, float(settings.min_width))
+        high = max(low, float(settings.max_width))
+        curve = max(0, min(100, settings.pressure_curve))
+        exponent = 2.0 ** ((curve - 50) / 50)
+        value = max(0.0, min(1.0, pressure)) ** exponent
+        return (low + (high - low) * value) * max(1, self.base_width) / 4
     def can_undo(self) -> bool: return len(self._undo) > 0
     def is_empty(self) -> bool: return self._stroke_count == 0
     def strokes_image(self) -> QImage: return self._strokes
@@ -97,8 +115,18 @@ class DrawingCanvas(QWidget):
         out = QImage(self._strokes.size(), QImage.Format.Format_RGB32)
         out.setDevicePixelRatio(self._strokes.devicePixelRatio())
         out.fill(Qt.GlobalColor.white)
-        p = QPainter(out); p.drawImage(0, 0, self._strokes); p.end()
+        p = QPainter(out); p.drawImage(0, 0, self._strokes)
+        if self._text_pos is not None and self.text_edit.text().strip():
+            p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+            f = QFont(self.font()); f.setPixelSize(text_pixel_size(self.base_width)); f.setWeight(QFont.Weight(600))
+            p.setFont(f); p.setPen(self.color)
+            p.drawText(QPointF(self._text_pos.x() + 6, self._text_pos.y() + text_pixel_size(self.base_width) * 0.35),
+                       self.text_edit.text().strip())
+        p.end()
         return out
+
+    def has_snapshot_content(self) -> bool:
+        return not self.is_empty() or (self._text_pos is not None and bool(self.text_edit.text().strip()))
 
     # --- stroke API (used by tablet, mouse and tests) -------------------------
     def begin_stroke(self, pos: QPointF, pressure: float, eraser_tip: bool = False) -> None:
@@ -114,7 +142,7 @@ class DrawingCanvas(QWidget):
         elif self._active_tool == Tool.TEXT:
             self.begin_text(pos)
             return
-        self._last, self._last_p = pos, pressure
+        self._last, self._raw_last, self._last_p = pos, pos, pressure
         self._draw_segment(pos, pos, pressure)
         self.strokeStarted.emit()
 
@@ -125,10 +153,17 @@ class DrawingCanvas(QWidget):
             self._preview_shape(pos)
             self._last = pos
             return
+        self._raw_last = pos
+        if self._active_tool == Tool.PEN and self._pen_settings is not None:
+            smoothing = max(0, min(100, self._pen_settings.smoothing)) / 100
+            pos = self._last + (pos - self._last) * (1 - smoothing * 0.8)
         self._draw_segment(self._last, pos, (self._last_p + pressure) / 2)
         self._last, self._last_p = pos, pressure
 
     def end_stroke(self) -> None:
+        if (self._active_tool == Tool.PEN and self._last is not None
+                and self._raw_last is not None and self._last != self._raw_last):
+            self._draw_segment(self._last, self._raw_last, self._last_p)
         if self._active_tool == Tool.SHAPE and self._shape_start is not None and self._last is not None:
             self._overlay.fill(Qt.GlobalColor.transparent)
             self._push_undo()
@@ -139,6 +174,7 @@ class DrawingCanvas(QWidget):
             self._shape_start = None
             self.update()
         self._last = None
+        self._raw_last = None
         if self._active_tool == Tool.LASER:
             self._laser_alpha = 1.0
             self._laser_timer.start()                 # iz hemen silinmez, sönerek kaybolur
@@ -236,6 +272,20 @@ class DrawingCanvas(QWidget):
             p.drawPolygon(QPolygonF([QPointF(rect.center().x(), rect.top()), rect.bottomRight(), rect.bottomLeft()]))
 
     # --- painting ------------------------------------------------------------
+    def _chalk_texture(self, color: QColor) -> QBrush:
+        key = color.rgba()
+        if self._chalk_color != key:
+            image = QImage(32, 32, QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(Qt.GlobalColor.transparent)
+            rng = random.Random(31)
+            for y in range(32):
+                for x in range(32):
+                    if rng.random() < .72:
+                        image.setPixelColor(x, y, color)
+            self._chalk_brush = QBrush(QPixmap.fromImage(image))
+            self._chalk_color = key
+        return self._chalk_brush
+
     def _draw_segment(self, a: QPointF, b: QPointF, pressure: float) -> None:
         tool = self._active_tool
         if tool in (Tool.TEXT, Tool.SHAPE, Tool.CLICK):   # yazı kutuyla, şekil bırakınca, tıklama hiç çizmez
@@ -248,14 +298,25 @@ class DrawingCanvas(QWidget):
             width = float(eraser_diameter(self.base_width))
             color = QColor(0, 0, 0, 255)
         else:
-            width = pressure_width(self.base_width, pressure)
+            width = (self._pen_width(pressure) if tool == Tool.PEN
+                     else pressure_width(self.base_width, pressure))
             color = QColor(LASER_COLOR) if tool == Tool.LASER else self.color
+        nib = self._pen_settings.nib if tool == Tool.PEN and self._pen_settings else Nib.ROUND
+        if nib == Nib.FELT:
+            width = self._pen_width(.5 + (max(0., min(1., pressure)) - .5) * .5)
+            color = QColor(color)
+            color.setAlpha(round(color.alpha() * .85))
+        brush = self._chalk_texture(color) if nib == Nib.CHALK else QBrush(color)
         if a == b:                                # tek dokunuş: sıfır uzunluklu çizgi çizilmez, nokta bas
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QBrush(color))
-            p.drawEllipse(a, width / 2, width / 2)
+            p.setBrush(brush)
+            if nib == Nib.FELT:
+                p.drawRect(QRectF(a.x() - width / 2, a.y() - width / 2, width, width))
+            else:
+                p.drawEllipse(a, width / 2, width / 2)
         else:
-            p.setPen(QPen(color, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            cap = Qt.PenCapStyle.FlatCap if nib == Nib.FELT else Qt.PenCapStyle.RoundCap
+            p.setPen(QPen(brush, width, Qt.PenStyle.SolidLine, cap, Qt.PenJoinStyle.RoundJoin))
             p.drawLine(a, b)
         p.end()
         m = int(width) + 2

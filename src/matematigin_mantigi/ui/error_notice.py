@@ -2,8 +2,8 @@
 
 `post()` her iş parçacığından çağrılabilir (hata kancası kamera/kayıt iş parçacığından da gelir); kutu her zaman
 GUI iş parçacığında, olay döngüsünün bir sonraki turunda açılır (kancanın içinden pencere kurulmaz). Aynı anahtar
-oturumda bir kez gösterilir ve hep aynı kutu kullanılır: aynı hata art arda yüzlerce kez gelse de pencere yağmuru
-olmaz. Kutu odağı çalmaz (kalem ve kısayollar tahtada kalır).
+oturumda varsayılan olarak bir kez gösterilir; işlem hataları repeat=True ile yeniden iletilebilir. Hep aynı kutu
+kullanılır: aynı hata art arda yüzlerce kez gelse de pencere yağmuru olmaz. Kutu odağı çalmaz (kalem ve kısayollar tahtada kalır).
 
 Uyarılar kayda girmeyen yerde (tasarım, "Temel ilke"): kayıt sürerken (kayıt kaydedilirken de) kutu hiç açılmaz;
 uyarı araç çubuğunun kırmızı şeridine kısa bir satır olarak yazılır ve kayıt bitince kutuyla gösterilir. Kayıt kutu
@@ -100,7 +100,7 @@ def _compose(items: Items) -> tuple[str, str]:
 class ErrorNotice(QObject):
     """Tek, modal olmayan uyarı kutusunun sahibi. GUI iş parçacığında kurulmalı (QApplication'dan sonra)."""
 
-    _requested = pyqtSignal(str, str, str)          # başlık, metin, anahtar
+    _requested = pyqtSignal(str, str, str, bool)          # başlık, metin, anahtar
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -221,10 +221,10 @@ class ErrorNotice(QObject):
         if self._is_recording is not None:
             self._poll()
 
-    def post(self, title: str, text: str, key: str | None = None) -> None:
+    def post(self, title: str, text: str, key: str | None = None, *, repeat: bool = False) -> None:
         """Herhangi bir iş parçacığından güvenle çağrılır; istisna fırlatmaz."""
         try:
-            self._requested.emit(title, text, key or title)
+            self._requested.emit(title, text, key or title, repeat)
         except Exception:  # noqa: BLE001 - (ör. kapanışta silinmiş nesne) uyarı gösterilemezse de uygulama düşmez
             pass
 
@@ -264,8 +264,8 @@ class ErrorNotice(QObject):
         except Exception:  # noqa: BLE001 - sorulamazsa kutu gösterilir: uyarı kaybolmasın
             return False
 
-    def _show(self, title: str, text: str, key: str) -> None:
-        if key in self._shown:                     # aynı uyarı bu oturumda gösterildi: yeni pencere açılmaz
+    def _show(self, title: str, text: str, key: str, repeat: bool = False) -> None:
+        if key in self._shown and not repeat:      # aynı uyarı bu oturumda gösterildi: yeni pencere açılmaz
             return
         self._shown.add(key)
         self._deliver({key: (title, text)})
@@ -472,14 +472,14 @@ def install() -> ErrorNotice:
     return _instance
 
 
-def post(title: str, text: str, key: str | None = None) -> None:
+def post(title: str, text: str, key: str | None = None, *, repeat: bool = False) -> None:
     """Uygulama çapındaki uyarı kutusuna yazar ve hatalar.log'a da ekler; kutu kurulmamışsa (QApplication öncesi,
     testler) yalnız stderr'e. Hata kancasının uyarısı (crash_log -> ErrorNotice.post) günlüğe kancanın kendisince
     traceback'iyle yazılır; burada ikinci kez yazılmaz. Herhangi bir iş parçacığından çağrılabilir."""
     _log(title, text, key or title)
     n = _instance
     if n is not None and not sip.isdeleted(n):
-        n.post(title, text, key)
+        n.post(title, text, key, repeat=repeat)
     else:
         _to_stderr(title, text)
 

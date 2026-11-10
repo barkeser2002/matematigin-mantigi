@@ -58,6 +58,12 @@ class CameraView(QWidget):
 
 class WebcamPanel(Zone):
     chromaToggled = pyqtSignal(bool)
+    frameReady = pyqtSignal(QImage)
+    placeholderChanged = pyqtSignal(str)
+
+    def _set_placeholder(self, text: str) -> None:
+        self.view.set_placeholder(text)
+        self.placeholderChanged.emit(text)
 
     MAX_PENDING_WORKERS = 2   # durdurulamamış (takılı) worker üst sınırı; doluyken start() yeni iş parçacığı açmaz
 
@@ -95,10 +101,14 @@ class WebcamPanel(Zone):
     def _make_worker(self, source_factory: Callable[[], FrameSource]) -> CameraWorker:
         w = CameraWorker(source_factory(), self._params, self.chroma_enabled, auto_key=self._auto_key, parent=self,
                          open_retries=self.open_retries)
-        w.frameReady.connect(lambda img: self.view.set_frame(img))
+        w.frameReady.connect(self._on_frame)
         w.opened.connect(self._on_opened)
         w.cameraError.connect(self._on_error)
         return w
+
+    def _on_frame(self, img: QImage) -> None:
+        self.view.set_frame(img)
+        self.frameReady.emit(img)
 
     def set_source_factory(self, source_factory: Callable[[], FrameSource]) -> None:
         """Kamera değişimi: eski iş parçacığı durur, yenisi aynı ayarlarla başlar."""
@@ -112,7 +122,7 @@ class WebcamPanel(Zone):
         # Panel BOŞTAYKEN (was_running False -- ör. bir önceki start() üst sınıra takıldığı için worker hiç
         # başlatılmamışsa) start() çağrılmaz; koşulsuz "bekleniyor" yazmak üst sınırda YANILTICI olurdu
         # (takılı kamera sürerken Ayarlar'dan kamera değiştirmek 'yanıt vermiyor'u siliyordu -- review bulgusu).
-        self.view.set_placeholder("Kamera yanıt vermiyor" if self._at_pending_cap() else "Kamera bekleniyor…")
+        self._set_placeholder("Kamera yanıt vermiyor" if self._at_pending_cap() else "Kamera bekleniyor…")
         if was_running:
             self.start()                 # üst sınır + "yanıt vermiyor" göstergesi tek yerde: start()
 
@@ -196,7 +206,7 @@ class WebcamPanel(Zone):
         self._stop_requested = False                # buradan sonra self.worker ya taze ya da durmuş
         if self._at_pending_cap():
             self.has_camera = False
-            self.view.set_placeholder("Kamera yanıt vermiyor")
+            self._set_placeholder("Kamera yanıt vermiyor")
             return                                  # iş parçacığı açılmaz; self.worker yine de geçerli
         self.worker.start()
 
@@ -239,4 +249,4 @@ class WebcamPanel(Zone):
 
     def _on_error(self, msg: str) -> None:
         self.has_camera = False
-        self.view.set_placeholder(f"{msg} · Kamera izni / bağlantı kontrol edin")
+        self._set_placeholder(f"{msg} · Kamera izni / bağlantı kontrol edin")

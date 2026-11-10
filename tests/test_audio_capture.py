@@ -83,9 +83,9 @@ def test_list_and_resolve_prefer_wasapi_on_windows(monkeypatch):
                     {"name": "Mik A", "max_input_channels": 2, "hostapi": 1},
                     {"name": "USB Mik", "max_input_channels": 1, "hostapi": 1}]
     monkeypatch.setattr(ac, "_sd", lambda: SD)
-    assert ac.list_input_devices() == ["Mik A", "USB Mik"]
-    assert ac.resolve_input_device("Mik A") == 2               # WASAPI kopyası, MME değil
-    assert ac.resolve_input_device("usb") == 3                 # alt dize
+    assert ac.list_input_devices() == ["Mik A [MME]", "Mik A [Windows WASAPI]", "USB Mik [Windows WASAPI]"]
+    assert ac.resolve_input_device("Mik A") is None  # eski ad birden fazla girişle eşleşiyor
+    assert ac.resolve_input_device("usb") is None               # kısmi adla yanlış cihaza geçme
     assert ac.resolve_input_device("yok böyle") is None and ac.resolve_input_device("") is None
 
 
@@ -105,8 +105,8 @@ def test_list_falls_back_when_wasapi_has_no_inputs(monkeypatch):
                     {"name": "Realtek Mik (WDM)", "max_input_channels": 2, "hostapi": 3}]
     monkeypatch.setattr(ac, "_sd", lambda: SD)
     # WASAPI'de giriş yok -> DirectSound (rank 1) seçilir, MME (rank 2) değil
-    assert ac.list_input_devices() == ["Realtek Mik"]
-    assert ac.resolve_input_device("Realtek Mik") == 1          # DirectSound kopyası
+    assert ac.list_input_devices() == ["Realtek Mik [MME]", "Realtek Mik [Windows DirectSound]", "Realtek Mik (WDM) [Windows WDM-KS]"]
+    assert ac.resolve_input_device("Realtek Mik") is None
 
 
 def test_list_never_empty_when_only_wdmks_has_inputs(monkeypatch):
@@ -119,7 +119,7 @@ def test_list_never_empty_when_only_wdmks_has_inputs(monkeypatch):
         def query_devices(*a, **k):
             return [{"name": "USB Mik (U850)", "max_input_channels": 1, "hostapi": 2}]  # yalnız WDM-KS
     monkeypatch.setattr(ac, "_sd", lambda: SD)
-    assert ac.list_input_devices() == ["USB Mik (U850)"]
+    assert ac.list_input_devices() == ["USB Mik (U850) [Windows WDM-KS]"]
     assert ac.resolve_input_device("USB Mik (U850)") == 0
 
 

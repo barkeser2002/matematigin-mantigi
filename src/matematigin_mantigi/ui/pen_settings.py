@@ -57,6 +57,8 @@ class PenSettingsDialog(QDialog):
         self.smoothing_slider = self._slider(0, 100, current.smoothing)
         self.min_slider = self._slider(1, 30, current.min_width)
         self.max_slider = self._slider(1, 40, current.max_width)
+        # Eski/geçersiz aralığı açarken iki tercihi de koruyarak üst sınırı yükselt.
+        self.max_slider.setValue(max(self.min_slider.value(), self.max_slider.value()))
         self._current = current                 # yazma hızı Ayarlar penceresinde; burada değişmez
         self.curve_value = QLabel(); self.smoothing_value = QLabel(); self.min_value = QLabel(); self.max_value = QLabel()
         for name, slider, value in (("Basınç eğrisi", self.curve_slider, self.curve_value),
@@ -67,6 +69,8 @@ class PenSettingsDialog(QDialog):
             lab = QLabel(name); lab.setFont(theme.font(fam, 11, 500))
             form.addRow(lab, row)
         pen_col.addLayout(form)
+        scale_note = QLabel("Kalınlıklar, araç çubuğunda 4 px seçiliyken geçerlidir; diğer kademeler aralığı orantılı ölçekler.")
+        scale_note.setWordWrap(True); pen_col.addWidget(scale_note)
         nib_row = QHBoxLayout(); nib_row.setSpacing(6)
         nib_lab = QLabel("Kalem ucu"); nib_lab.setFont(theme.font(fam, 11, 500)); nib_row.addWidget(nib_lab)
         self._nib_group = QButtonGroup(self); self._nib_group.setExclusive(True)
@@ -78,30 +82,34 @@ class PenSettingsDialog(QDialog):
         nib_row.addStretch(1); pen_col.addLayout(nib_row)
         grid.addWidget(pen_card, 0, 1)
 
-        fx_card, fx_col = _card("Otomatik FX (Keras)", fam)
-        fx_note = QLabel("El yazısı matematiksel anlama dönüşür; çizim estetiği düzeltilir.")
+        fx_card, fx_col = _card("Tanıma özellikleri · Yakında", fam)
+        fx_note = QLabel("Bu özellikler henüz kullanılamıyor; tanıma yapılmaz.")
         fx_note.setFont(theme.font(fam, 11, 400)); fx_col.addWidget(fx_note)
         self.toggles: dict[str, QCheckBox] = {}
-        for key, name, desc, on in (
-            ("math_recognition", "Matematik tanıma", "El yazısı denklemleri düzgün metne çevir", current.math_recognition),
-            ("shape_correction", "Şekil düzeltme", "Titrek daire/çizgi → geometrik şekil", current.shape_correction),
-            ("autosave", "Otomatik kaydet", "Her 30 sn ve soru değişiminde", current.autosave),
-            ("template_matching", "Ön tanımlı soru tanıma", "Yazılan soruyu şablonla eşleştir", current.template_matching),
+        for key, name, desc in (
+            ("math_recognition", "Matematik tanıma", "El yazısı denklemleri düzgün metne çevir"),
+            ("shape_correction", "Şekil düzeltme", "Titrek daire/çizgi → geometrik şekil"),
+            ("template_matching", "Ön tanımlı soru tanıma", "Yazılan soruyu şablonla eşleştir"),
         ):
-            cb = QCheckBox(name); cb.setChecked(on); cb.setFont(theme.font(fam, 12, 600))
+            cb = QCheckBox(f"{name} · Yakında"); cb.setEnabled(False); cb.setFont(theme.font(fam, 12, 600))
             d = QLabel(desc); d.setFont(theme.font(fam, 10, 400)); d.setStyleSheet(f"color: {theme.MUTED};")
             fx_col.addWidget(cb); fx_col.addWidget(d)
             self.toggles[key] = cb
         grid.addWidget(fx_card, 1, 0, 1, 2)
         root.addLayout(grid)
 
-        preview_card, preview_col = _card("Canlı tanıma önizlemesi", fam)
+        autosave = QCheckBox("Otomatik kaydet · Her 30 sn ve soru değişiminde")
+        autosave.setChecked(current.autosave); autosave.setFont(theme.font(fam, 12, 600))
+        self.toggles["autosave"] = autosave
+        root.addWidget(autosave)
+
+        preview_card, preview_col = _card("Sabit örnek gösterim · Canlı tanıma değil", fam)
         prow = QHBoxLayout()
         for hand, typed in (("3x + 5 = 20", "3x + 5 = 20"), ("x = 15 / 3", "x = 15 ÷ 3"),
                             ("2/3 + 1/6", "²⁄₃ + ¹⁄₆ = ⁵⁄₆"), ("Ç = 2(a+b)", "Ç = 2 · (a + b)")):
             cell = QVBoxLayout()
             h = QLabel(hand); h.setFont(theme.hand_font(fam, 22, 500))
-            arrow = QLabel("↓ tanındı"); arrow.setFont(theme.font(fam, 9, 600)); arrow.setStyleSheet(f"color: {theme.OK_DOT};")
+            arrow = QLabel("↓ örnek"); arrow.setFont(theme.font(fam, 9, 600)); arrow.setStyleSheet(f"color: {theme.OK_DOT};")
             t = QLabel(typed); t.setFont(theme.font(fam, 14, 500))
             for w in (h, arrow, t):
                 w.setAlignment(Qt.AlignmentFlag.AlignCenter); cell.addWidget(w)
@@ -136,10 +144,10 @@ class PenSettingsDialog(QDialog):
         nib = next(n for n, b in self.nib_buttons.items() if b.isChecked())
         return PenSettings(pressure_curve=self.curve_slider.value(), smoothing=self.smoothing_slider.value(),
                            min_width=self.min_slider.value(), max_width=self.max_slider.value(), nib=nib,
-                           math_recognition=self.toggles["math_recognition"].isChecked(),
-                           shape_correction=self.toggles["shape_correction"].isChecked(),
+                           math_recognition=self._current.math_recognition,
+                           shape_correction=self._current.shape_correction,
                            autosave=self.toggles["autosave"].isChecked(),
-                           template_matching=self.toggles["template_matching"].isChecked(),
+                           template_matching=self._current.template_matching,
                            reading_ms=self._current.reading_ms)
 
     def _apply(self) -> None:

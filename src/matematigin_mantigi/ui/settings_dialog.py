@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel,
@@ -29,9 +30,12 @@ class SettingsValues:
     record_fps: int = 60
     record_height: int = 1440
     audio_device: str = ""
+    record_folder: str = ""
     aspect_lock: bool = True
     frame_style: FrameStyle = FrameStyle.CLASSIC
     visible: dict[str, bool] = field(default_factory=dict)
+    board_screen: object = None
+    preview_screen: object = None
 
 
 def _card(title: str, fam: FontFamilies) -> tuple[QFrame, QVBoxLayout]:
@@ -125,6 +129,15 @@ class SettingsDialog(QDialog):
 
         rec_card, rcol = _card("Kayıt (mss + ffmpeg, MP4)", fam)
         row = QHBoxLayout()
+        self.record_folder_edit = QLineEdit(settings.record_folder); self.record_folder_edit.setReadOnly(True)
+        self.record_folder_edit.setPlaceholderText("Varsayılan: ders oturumu klasörü")
+        self.choose_record_folder_button = QPushButton("Klasör seç…")
+        self.default_record_folder_button = QPushButton("Varsayılan")
+        self.choose_record_folder_button.clicked.connect(self._choose_record_folder)
+        self.default_record_folder_button.clicked.connect(lambda: self.record_folder_edit.setText(""))
+        row.addWidget(self.record_folder_edit, 1); row.addWidget(self.choose_record_folder_button); row.addWidget(self.default_record_folder_button)
+        rcol.addLayout(row)
+        row = QHBoxLayout()
         fps_lab = QLabel("Kare hızı"); fps_lab.setFont(theme.font(fam, 11, 500))
         self.fps_combo = QComboBox()
         for f in (30, 60):
@@ -150,10 +163,39 @@ class SettingsDialog(QDialog):
         self.list_audio_button.clicked.connect(self._list_audio)
         row.addWidget(mic_lab); row.addWidget(self.audio_combo, 1); row.addWidget(self.list_audio_button)
         rcol.addLayout(row)
-        rec_note = QLabel("Kayıt dosyası: oturum/<tarih>/kayit_<saat>.mp4. Araç çubuğu kayda girmez.")
+        rec_note = QLabel("Seçim yeni kayıtları etkiler; ders anlık görüntüleri oturum klasöründe kalır. Araç çubuğu kayda girmez.")
+        rec_note.setWordWrap(True)
         rec_note.setFont(theme.font(fam, 10, 400)); rec_note.setStyleSheet(f"color: {theme.MUTED};")
         rcol.addWidget(rec_note)
         col.addWidget(rec_card)
+
+        screen_card, screen_col = _card("Ekranlar", fam)
+        self.board_screen_combo = QComboBox()
+        self.preview_screen_combo = QComboBox()
+        self.board_screen_combo.addItem("Mevcut tahta ekranı", None)
+        self.preview_screen_combo.addItem("Kapalı", None)
+        screens = QApplication.screens()
+        for screen in screens:
+            label = f"{screen.name()} · {screen.serialNumber() or 'seri numarası yok'} · {screen.geometry().x()},{screen.geometry().y()}"
+            self.board_screen_combo.addItem(label, screen)
+            self.preview_screen_combo.addItem(label, screen)
+        from matematigin_mantigi.ui.dual_screen import resolve_screen_key
+        for combo, key in ((self.board_screen_combo, settings.board_screen_key),
+                           (self.preview_screen_combo, settings.preview_screen_key)):
+            if key:
+                screen = resolve_screen_key(screens, key)
+                if screen is not None:
+                    combo.setCurrentIndex(combo.findData(screen))
+                else:
+                    combo.addItem(f"{key[0]} (bulunamadı veya belirsiz)", tuple(key))
+                    combo.setCurrentIndex(combo.count() - 1)
+        # Eksik ekranın kullanıcı tarafından açıkça kapatılmasına da izin ver.
+        self.preview_screen_combo.setEnabled(len(screens) > 1 or bool(settings.preview_screen_key))
+        screen_col.addWidget(QLabel("Tahta ekranı")); screen_col.addWidget(self.board_screen_combo)
+        screen_col.addWidget(QLabel("Kamera önizleme ekranı")); screen_col.addWidget(self.preview_screen_combo)
+        screen_note = QLabel("Önizleme yalnız aynı ölçekli, ayrı ekranlarda açılır. Kayıt dışı olması garanti edilemez; kayıt sonucunu kontrol edin. Karma ekran ölçekleri desteklenmez.")
+        screen_note.setWordWrap(True); screen_col.addWidget(screen_note)
+        col.addWidget(screen_card)
 
         cam_sel_card, kcol = _card("Kamera", fam)
         row = QHBoxLayout()
@@ -163,7 +205,8 @@ class SettingsDialog(QDialog):
         self.scan_button.clicked.connect(self._scan_cameras)
         row.addWidget(self.camera_combo, 1); row.addWidget(self.scan_button)
         kcol.addLayout(row)
-        self.camera_note = QLabel("Tarama birkaç saniye sürer; kare veren cihazlar listelenir.")
+        self.camera_note = QLabel("Kamera yalnız sıra numarasıyla seçilir; cihaz sırası değişirse farklı bir kamera açılabilir. Her bağlantı değişiminden sonra görüntüyü kontrol edin.")
+        self.camera_note.setWordWrap(True)
         self.camera_note.setFont(theme.font(fam, 10, 400)); self.camera_note.setStyleSheet(f"color: {theme.MUTED};")
         kcol.addWidget(self.camera_note)
         col.addWidget(cam_sel_card)
@@ -215,29 +258,63 @@ class SettingsDialog(QDialog):
         if path:
             self.logo_path_edit.setText(path)
 
+    def _choose_record_folder(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Kayıt klasörü", self.record_folder_edit.text())
+        if path:
+            self.record_folder_edit.setText(path)
+
+    def _audio_value(self) -> str:
+        index = self.audio_combo.currentIndex()
+        text = self.audio_combo.currentText().strip()
+        if index >= 0 and text == self.audio_combo.itemText(index):
+            return self.audio_combo.itemData(index) or ""
+        return text
+
     def _list_audio(self) -> None:
-        from matematigin_mantigi.core.audio_capture import list_input_devices
-        current = self.audio_combo.currentText().strip()
+        from matematigin_mantigi.core.audio_capture import list_input_devices, resolve_input_device
+        current = self._audio_value()
         names = list_input_devices()
         self.audio_combo.clear()
         self.audio_combo.addItem("(ses yok)", "")
         for n in names:
-            self.audio_combo.addItem(n, n)
-        idx = self.audio_combo.findText(current)
+            ambiguous = resolve_input_device(n) is None and bool(re.search(r' #\d+$', n))
+            self.audio_combo.addItem(f"{n} (belirsiz; seçilemez)" if ambiguous else n, n)
+            if ambiguous:
+                self.audio_combo.model().item(self.audio_combo.count() - 1).setEnabled(False)
+        idx = self.audio_combo.findData(current)
+        if current and idx < 0:
+            available = resolve_input_device(current) is not None
+            self.audio_combo.addItem(current if available else f"{current} (bulunamadı veya belirsiz)", current)
+            idx = self.audio_combo.count() - 1
         self.audio_combo.setCurrentIndex(idx if idx >= 0 else 0)
 
     def _scan_cameras(self) -> None:
         from matematigin_mantigi.core.cameras import list_cameras
         current = self.camera_combo.currentData()
-        cams = list_cameras()
+        panel = getattr(self.parent(), "webcam_panel", None)
+        workers = ([panel.worker] + list(panel._pending_workers)) if panel else []
+        running = [worker for worker in workers if worker.isRunning()]
+        busy = {getattr(worker._source, "index", None) for worker in running}
+        unknown = None in busy
+        busy.discard(None)
+        # Kaynağı bilinmeyen çalışan worker herhangi bir indeksi tutabilir.
+        cams = [] if unknown else (list_cameras(skip=busy) if busy else list_cameras())
         self.camera_combo.clear()
+        for index in sorted(busy):
+            self.camera_combo.addItem(f"Kamera {index} (kullanımda veya açılıyor)", index)
         for cam in cams:
             self.camera_combo.addItem(cam.label, cam.index)
-        if not cams:
+        if self.camera_combo.findData(current) < 0:
             self.camera_combo.addItem(f"Kamera {current} (bulunamadı)", current)
         idx = self.camera_combo.findData(current)
         self.camera_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self.camera_note.setText(f"{len(cams)} kamera bulundu." if cams else "Kamera bulunamadı; bağlantı ve izinleri kontrol et.")
+        if unknown:
+            self.camera_note.setText("Kullanımdaki kameranın kaynağı bilinmiyor; güvenlik için tarama yapılmadı.")
+        elif busy:
+            self.camera_note.setText(f"{len(cams)} kamera tarandı; kullanımda veya açılmakta olanlar yeniden açılmadı.")
+        else:
+            self.camera_note.setText(f"{len(cams)} kamera bulundu." if cams else "Kamera bulunamadı; bağlantı ve izinleri kontrol et.")
+        self.camera_note.setText(self.camera_note.text() + " Kamera sırası değişirse farklı bir cihaz açılabilir; görüntüyü kontrol edin.")
 
     def _refresh_reading(self, *_) -> None:
         v = self.reading_slider.value()
@@ -254,11 +331,13 @@ class SettingsDialog(QDialog):
                               camera_index=int(self.camera_combo.currentData() or 0),
                               record_fps=int(self.fps_combo.currentData() or 60),
                               record_height=int(self.res_combo.currentData() or 0),
-                              audio_device=("" if self.audio_combo.currentText().strip() == "(ses yok)"
-                                            else self.audio_combo.currentText().strip()),
+                              record_folder=self.record_folder_edit.text(),
+                              audio_device=self._audio_value(),
                               aspect_lock=self.aspect_lock_check.isChecked(),
                               frame_style=self.frame_style_combo.currentData(),
-                              visible={k: cb.isChecked() for k, cb in self.visibility_checks.items()})
+                              visible={k: cb.isChecked() for k, cb in self.visibility_checks.items()},
+                              board_screen=self.board_screen_combo.currentData(),
+                              preview_screen=self.preview_screen_combo.currentData())
 
     def _apply(self) -> None:
         self.applied.emit(self.value())

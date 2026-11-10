@@ -133,11 +133,13 @@ def build(args, fam, settings=None):
         raise OSError("kayıt sırasında yapay yuva hatası")
 
     def snapshot_fails():                       # gerçek yuva: soru değişirken tahta PNG'si yazılamıyor (disk dolu)
+        real_is_empty = win.canvas.is_empty
         win.canvas.is_empty = lambda: False
         def full(*a, **k):
             raise OSError(errno.ENOSPC, "No space left on device", "oturum")
         store.save_snapshot = full
         win.flow.next_question()
+        win.canvas.is_empty = real_is_empty
 
     def start():
         if MODE == "yetim":                     # kapanış yolunun bilmediği, görünür başka bir üst düzey pencere

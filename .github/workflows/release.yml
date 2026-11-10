@@ -68,7 +68,11 @@ jobs:
           body: |
             Otomatik yapı (commit ${{ github.sha }}).
             - Windows: Matematigin-Mantigi-Windows.zip — aç, klasörü kopyala, "Matematigin Mantigi.exe" çalıştır.
-            - macOS: Matematigin-Mantigi-macOS.zip — aç, .app'i Uygulamalar'a taşı (imzasız: sağ tık > Aç).
+            - macOS: Matematigin-Mantigi-macOS.zip — zipi aç, .app'i Uygulamalar'a taşı.
+              Uygulama Apple tarafından onaylı değil; açılmazsa ya da "hasarlı" derse Terminal'de şunu çalıştır:
+              xattr -dr com.apple.quarantine "/Applications/Matematiğin Mantığı.app"
+              Başka yol: Sistem Ayarları > Gizlilik ve Güvenlik > "Yine de Aç" (macOS 15'te sağ tık > Aç artık işe yaramıyor).
+              Her yeni sürümde kamera, mikrofon ve ekran kaydı izinleri yeniden istenebilir (imza her derlemede değişir).
           files: |
             artifacts/Matematigin-Mantigi-Windows/Matematigin-Mantigi-Windows.zip
             artifacts/Matematigin-Mantigi-macOS/Matematigin-Mantigi-macOS.zip

@@ -1,11 +1,15 @@
 """Soru başına tuval anlık görüntüsü: oturum/<zaman>/<id>_<nn>.png"""
 from __future__ import annotations
 
+import errno
+import os
 import re
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from PyQt6.QtCore import QBuffer, QIODevice
 from PyQt6.QtGui import QImage
 
 from matematigin_mantigi import paths
@@ -29,8 +33,50 @@ class SessionStore:
         key = self._safe(question_id)
         n = self._counts.get(key, 0) + 1
         self.session_dir.mkdir(parents=True, exist_ok=True)
-        target = self.session_dir / f"{key}_{n:02d}.png"
-        if not image.save(str(target), "PNG"):
-            raise OSError(f"PNG yazılamadı: {target}")
+        buffer = QBuffer()
+        if not buffer.open(QIODevice.OpenModeFlag.WriteOnly) or not image.save(buffer, "PNG"):
+            raise OSError(f"PNG kodlanamadı: {self.session_dir}")
+        # Ayrı dosya tamamlanmadan hedef görünmez. Sabit bağlantı, Windows dahil
+        # hedef zaten varsa atomik olarak başarısız olur; os.replace böyle değildir.
+        fd, name = tempfile.mkstemp(prefix=".snapshot-", suffix=".tmp", dir=self.session_dir)
+        temporary = Path(name)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(bytes(buffer.data()))
+            fallback = False
+            while True:
+                target = self.session_dir / f"{key}_{n:02d}.png"
+                if not fallback:
+                    try:
+                        os.link(temporary, target)
+                        break
+                    except FileExistsError:
+                        n += 1
+                        continue
+                    except OSError as exc:
+                        # WinError 1/50: dosya sistemi işlemi desteklemiyor.
+                        # Erişim reddi, dolu disk vb. hatalar geri dönüş değildir.
+                        winerror = getattr(exc, "winerror", None)
+                        unsupported = (winerror in (1, 50) if winerror is not None else
+                                       exc.errno in (errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUPP))
+                        if not unsupported:
+                            raise
+                        fallback = True
+                try:
+                    stream = open(target, "xb")
+                except FileExistsError:
+                    n += 1
+                    continue
+                # CREATE_NEW çakışmayı önler ancak yazım bitene kadar kısmi PNG
+                # görünür olabilir. Başarısız yazımı silmeyiz: başka bir süreç
+                # dosyayı bu sırada değiştirmiş veya yerine yenisini koymuş olabilir.
+                try:
+                    with stream:
+                        stream.write(bytes(buffer.data()))
+                except OSError as exc:
+                    raise OSError(exc.errno, f"PNG yazılamadı; kısmi dosya kalmış olabilir: {target}: {exc}") from exc
+                break
+        finally:
+            temporary.unlink()
         self._counts[key] = n
         return target

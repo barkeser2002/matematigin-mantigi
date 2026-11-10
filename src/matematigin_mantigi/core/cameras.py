@@ -1,5 +1,4 @@
-"""Kamera keşfi: OpenCV ile indeksleri dener, kare veren cihazları listeler. Adlar ffmpeg'in aygıt
-listesinden alınır (macOS avfoundation, Windows dshow); OpenCV ad vermez."""
+"""Kamera keşfi: OpenCV ile indeksleri dener; doğrulanamayan adları eşleştirmez."""
 from __future__ import annotations
 
 import os
@@ -78,17 +77,17 @@ def list_camera_names(exe: str | None = None, platform: str | None = None, runne
     return names
 
 
-def list_cameras(max_index: int = 6, names: list[str] | None = None) -> list[CameraInfo]:
+def list_cameras(max_index: int = 6, names: list[str] | None = None, skip: set[int] | frozenset[int] = frozenset()) -> list[CameraInfo]:
     """0..max_index-1 indekslerini dener; açılıp kare verenleri döndürür (her biri ~0,1-0,5 sn).
-    names verilmezse ffmpeg'den alınır; indeks sırası aygıt listesiyle eşleşir."""
-    if names is None:
-        names = list_camera_names()
+    names geriye uyumluluk için kabul edilir; indeks eşleşmesi doğrulanamadığından kullanılmaz."""
     log = cv2.utils.logging
     prev = log.getLogLevel()
     log.setLogLevel(log.LOG_LEVEL_SILENT)
     found: list[CameraInfo] = []
     try:
         for index in range(max_index):
+            if index in skip:
+                continue
             for backend in _backends():
                 cap = cv2.VideoCapture(index, backend)
                 ok = cap.isOpened()
@@ -97,7 +96,7 @@ def list_cameras(max_index: int = 6, names: list[str] | None = None) -> list[Cam
                     ok, frame = cap.read()
                 cap.release()
                 if ok and frame is not None:
-                    name = names[index] if index < len(names) else ""
+                    name = ""  # ffmpeg sırası OpenCV indeksiyle doğrulanamaz
                     found.append(CameraInfo(index, int(frame.shape[1]), int(frame.shape[0]), name))
                     break
     finally:

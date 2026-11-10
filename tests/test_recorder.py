@@ -55,6 +55,20 @@ def test_badge_text_and_ticks(qtbot):
     assert not b.active and b.isHidden() and b.seconds == 0
 
 
+def test_recording_quality_settings(tmp_path):
+    out = tmp_path / "recording.mp4"
+    for encoder in ("libx264", "h264_nvenc", "h264_qsv", "h264_amf", "h264_videotoolbox"):
+        for width, height, fps, out_height, expected in ((1920, 1080, 30, 0, "5000k"),
+                                                         (1920, 1080, 60, 0, "7000k"),
+                                                         (3840, 2160, 60, 1080, "7000k"),
+                                                         (1280, 720, 30, 0, "2222k")):
+            args = ffmpeg_args("ffmpeg", width, height, fps, out, encoder=encoder, out_height=out_height)
+            assert args[args.index("-b:v") + 1] == expected
+            assert not {"-crf", "-cq", "-global_quality"} & set(args)
+    audio = mux_args("ffmpeg", out, tmp_path / "audio.wav", tmp_path / "final.mp4", 0)
+    assert audio[audio.index("-b:a") + 1] == "192k"
+
+
 def test_ffmpeg_args_video_only(tmp_path):
     out = tmp_path / "k.mp4"
     a = ffmpeg_args("ffmpeg", 640, 480, 30, out, platform="win32")
@@ -229,6 +243,19 @@ def test_detect_encoder_prefers_hardware_when_probe_succeeds():
     assert detect_encoder("ffmpeg", platform="win32", runner=lambda cmd: 0 if "h264_qsv" in cmd else 1) == "h264_qsv"
     assert detect_encoder("ffmpeg", platform="win32", runner=lambda cmd: 1) == "libx264"
     assert detect_encoder("ffmpeg", platform="linux", runner=lambda cmd: 0) == "libx264"
+
+
+def test_detect_encoder_probes_actual_recording_configuration():
+    from matematigin_mantigi.core.recorder import detect_encoder
+    commands = []
+    def runner(cmd):
+        commands.append(cmd)
+        return 1
+    assert detect_encoder("ffmpeg", platform="darwin", runner=runner,
+                          width=1920, height=1080, fps=60) == "libx264"
+    cmd = commands[0]
+    assert "color=c=black:s=1920x1080:r=60" in cmd
+    assert cmd[cmd.index("-b:v") + 1] == "7000k"
 
 
 def test_ffmpeg_args_encoder_selection(tmp_path):
@@ -1095,3 +1122,16 @@ def test_video_promotion_when_hardlinks_unsupported(monkeypatch, tmp_path):
     MssFfmpegRecorder._move_video_without_overwrite(video, out)
     assert out.read_bytes() == b"recorded video"
     assert video.read_bytes() == b"recorded video"
+
+
+def test_strict_audio_open_failure_never_starts_video(tmp_path):
+    class Broken:
+        def __init__(self, device): pass
+        def start(self, path): raise RuntimeError("device busy")
+        def stop(self): pass
+    rec = MssFfmpegRecorder(lambda: tmp_path, fps=10, grabber=synthetic_grabber,
+                            audio_device="chosen", audio_factory=Broken, out_height=0)
+    with pytest.raises(RecorderError, match="Mikrofon"):
+        rec.start(RecordRect(0, 0, 64, 64), require_audio=True)
+    assert not rec.is_recording
+    assert not list(tmp_path.glob("*.mp4"))

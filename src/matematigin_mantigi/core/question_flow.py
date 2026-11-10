@@ -1,7 +1,7 @@
 """Soru akışı: sıra, durumlar, soru gizleme, ipucu gezinme ve açma durumu."""
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Callable, Sequence
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -25,6 +25,7 @@ class QuestionFlow(QObject):
         self._shown = True
         self._hint_index = 0
         self._revealed: set[tuple[int, int]] = set()
+        self.before_question_change: Callable[[int], bool] | None = None
 
     # --- read ------------------------------------------------------------------
     @property
@@ -83,9 +84,14 @@ class QuestionFlow(QObject):
         self._hint_index = 0
         self._revealed = set()
 
-    def select(self, i: int) -> None:
+    def select(self, i: int, *, complete_current: bool = False) -> None:
         if not self._questions or not 0 <= i < len(self._questions):
             return
+        if i != self._index and self.before_question_change is not None:
+            if not self.before_question_change(self._index):
+                return
+        if complete_current and self.status() == QuestionStatus.WORKING:
+            self._set_status(self._index, QuestionStatus.DONE)
         if i != self._index:
             self.questionLeaving.emit(self._index)
         self._index = i
@@ -104,9 +110,7 @@ class QuestionFlow(QObject):
     def next_question(self) -> None:
         if not self._questions:
             return
-        if self.status() == QuestionStatus.WORKING:
-            self._set_status(self._index, QuestionStatus.DONE)
-        self.select((self._index + 1) % len(self._questions))
+        self.select((self._index + 1) % len(self._questions), complete_current=True)
 
     def prev_question(self) -> None:
         """Önceki sayfaya döner; durumları değiştirmez."""

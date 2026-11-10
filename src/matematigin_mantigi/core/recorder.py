@@ -67,6 +67,10 @@ class RecorderError(RuntimeError):
     pass
 
 
+class MicrophoneStartError(RecorderError):
+    """Mikrofon açılamadı; görüntü kaydı henüz başlatılmadı."""
+
+
 class RecordingResult(RecorderError):
     """hatalar.log'daki kayıt sonucu girdisi: bir kaydın hatası, ses ve görüntü uyarısı, tek satır (fırlatılmaz)."""
 
@@ -157,20 +161,21 @@ RESOLUTIONS: tuple[tuple[str, int], ...] = (("Doğal (ekran)", 0), ("1080p", 108
 
 
 ENCODER_ARGS: dict[str, list[str]] = {
-    "h264_videotoolbox": ["-c:v", "h264_videotoolbox", "-b:v", "16M", "-realtime", "1"],
-    "h264_nvenc": ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "23", "-b:v", "0"],
-    "h264_qsv": ["-c:v", "h264_qsv", "-global_quality", "23"],
+    "h264_videotoolbox": ["-c:v", "h264_videotoolbox", "-realtime", "1"],
+    "h264_nvenc": ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr"],
+    "h264_qsv": ["-c:v", "h264_qsv"],
     "h264_amf": ["-c:v", "h264_amf", "-quality", "speed"],
-    "libx264": ["-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-crf", "22"],
+    "libx264": ["-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency"],
 }
 _PREFERRED = {"darwin": ["h264_videotoolbox"], "win32": ["h264_nvenc", "h264_qsv", "h264_amf"]}
 _encoder_cache: dict[str, str] = {}
 
 
-def detect_encoder(exe: str, platform: str | None = None, runner=None) -> str:
-    """Kullanılabilir ilk donanım H.264 kodlayıcısı; her aday 1 karelik deneme kodlamasıyla doğrulanır."""
+def detect_encoder(exe: str, platform: str | None = None, runner=None, *,
+                   width: int = 256, height: int = 144, fps: int = 30, out_height: int = 0) -> str:
+    """Kullanılabilir ilk donanım H.264 kodlayıcısı; kayıt ayarlarıyla deneme kodlaması yapar."""
     platform = platform or sys.platform
-    key = f"{exe}|{platform}"
+    key = f"{exe}|{platform}|{width}|{height}|{fps}|{out_height}"
     if key in _encoder_cache and runner is None:
         return _encoder_cache[key]
 
@@ -182,8 +187,11 @@ def detect_encoder(exe: str, platform: str | None = None, runner=None) -> str:
     run = runner or default_runner
     chosen = "libx264"
     for enc in _PREFERRED.get(platform, []):
-        cmd = [exe, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=256x144:r=30",
-               "-frames:v", "2", *ENCODER_ARGS[enc], "-f", "null", "-"]
+        record_cmd = ffmpeg_args(exe, width, height, fps, Path("unused.mp4"), out_height=out_height, encoder=enc)
+        output_options = record_cmd[record_cmd.index("pipe:0") + 1:-1]
+        cmd = [exe, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+               f"color=c=black:s={width}x{height}:r={fps}", "-frames:v", "2",
+               *output_options, "-f", "null", "-"]
         if run(cmd) == 0:
             chosen = enc
             break
@@ -204,7 +212,13 @@ def ffmpeg_args(exe: str, width: int, height: int, fps: int, out: Path,
             "-f", "rawvideo", "-pix_fmt", "bgra", "-s", f"{width}x{height}", "-framerate", str(fps), "-i", "pipe:0"]
     if out_height and out_height != height:
         args += ["-filter_threads", "4", "-vf", f"scale=-2:{out_height}:flags=bilinear"]
-    args += [*ENCODER_ARGS.get(encoder, ENCODER_ARGS["libx264"]), "-pix_fmt", "yuv420p",
+    # Piksel alanıyla ölçekle; 30 fps'e kadar taban, 60 fps ve üstünde 1,4 kat.
+    # Ara kare hızlarında yumuşak doğrusal geçiş; bu bir VBR hedefidir, kesin çıktı hızı değil.
+    target_h = out_height or height
+    target_w = width if target_h == height else 2 * round(width * target_h / height / 2)
+    fps_factor = 1 + 0.4 * min(max(fps - 30, 0), 30) / 30
+    bitrate_k = max(1, round(5000 * target_w * target_h / (1920 * 1080) * fps_factor))
+    args += [*ENCODER_ARGS.get(encoder, ENCODER_ARGS["libx264"]), "-b:v", f"{bitrate_k}k", "-pix_fmt", "yuv420p",
              "-r", str(fps), "-fps_mode", "cfr", str(out)]
     return args
 
@@ -274,7 +288,7 @@ def mux_args(exe: str, video: Path, audio: Path, out: Path, offset_s: float,
     if pad_to is not None:
         af.append(f"apad=whole_dur={pad_to + PAD_MARGIN_S:.3f}")
     args += ["-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-af", ",".join(af)]
-    args += ["-ar", str(out_rate), "-c:a", "aac", "-b:a", "160k"]
+    args += ["-ar", str(out_rate), "-c:a", "aac", "-b:a", "192k"]
     args += ["-t", f"{end_s:.3f}"] if end_s is not None else ["-shortest"]
     args += ["-movflags", "+faststart", str(out)]
     return args
@@ -479,8 +493,10 @@ class MssFfmpegRecorder:
     def __init__(self, output_dir: Callable[[], Path], fps: int = 60, audio_device: str | None = None,
                  ffmpeg_exe: str | None = None, grabber: Callable[[RecordRect], np.ndarray] | None = None,
                  clock: Callable[[], datetime] = datetime.now, out_height: int = 1440,
-                 audio_factory: Callable[[str | None], AudioCapture] | None = None):
+                 audio_factory: Callable[[str | None], AudioCapture] | None = None,
+                 create_output_dir: bool = True):
         self._output_dir = output_dir
+        self._create_output_dir = create_output_dir
         self.fps = fps
         self.out_height = out_height
         self.audio_device = audio_device or None
@@ -496,7 +512,7 @@ class MssFfmpegRecorder:
         self._closing_mics: list[tuple[threading.Thread | None, AudioCapture]] = []
 
     # --- Recorder ---------------------------------------------------------------
-    def start(self, rect: RecordRect, fps: int | None = None) -> None:
+    def start(self, rect: RecordRect, fps: int | None = None, *, require_audio: bool = False) -> None:
         """Yeni kayıt başlatır; yalnız IDLE'da. Önceki kayıt hâlâ kaydediliyorsa (FINALIZING) RecorderError: yeni
         kayıt eskisinin kapanışına karışmasın (#2). Hata olursa durum IDLE kalır, açılan dosya/mikrofon kapanır."""
         self._ensure_idle()                          # hızlı ret: ekranı yakalayıp kodlayıcı denemeden
@@ -510,10 +526,11 @@ class MssFfmpegRecorder:
         except Exception as err:  # noqa: BLE001
             raise RecorderError(f"Ekran yakalanamadı: {err}") from err
         # Kodlayıcı denemesi ilk çağrıda saniyeler sürebilir: kilit dışında. Testte (grabber verilince) hızlı yol.
-        encoder = detect_encoder(exe) if self._grabber is None else "libx264"
+        encoder = (detect_encoder(exe, width=first.shape[1], height=first.shape[0], fps=fps,
+                                  out_height=self.out_height) if self._grabber is None else "libx264")
         with self._lock:
             self._ensure_idle()                      # asıl kontrol: açılış ile durum değişimi bölünmez
-            self._session = self._open_session(exe, rect, grab_rect, first, fps, encoder)
+            self._session = self._open_session(exe, rect, grab_rect, first, fps, encoder, require_audio)
             self._state, self.fps = RecorderState.RECORDING, fps
 
     def stop(self) -> Path | None:
@@ -583,13 +600,14 @@ class MssFfmpegRecorder:
             raise RecorderError("Kayıt zaten sürüyor")
 
     def _open_session(self, exe: str, rect: RecordRect, grab_rect: RecordRect, first: np.ndarray, fps: int,
-                      encoder: str) -> _Session:
+                      encoder: str, require_audio: bool = False) -> _Session:
         """Yeni kaydın klasörünü, dosyalarını, mikrofonunu ve ffmpeg'ini açıp yazıcıyı başlatır. Bir adım düşerse o
         ana dek açılanlar kapatılır ve anlamlı bir RecorderError fırlar; kaydedicinin durumuna dokunmaz."""
         h, w = _even(first.shape[0]), _even(first.shape[1])
         try:
             out_dir = Path(self._output_dir())
-            out_dir.mkdir(parents=True, exist_ok=True)
+            if self._create_output_dir:
+                out_dir.mkdir(parents=True, exist_ok=True)
         except OSError as err:                       # disk dolu, izin yok (macOS'ta Belgeler izni reddedildi)...
             raise RecorderError(f"Kayıt klasörü oluşturulamadı: {err}\n{DISK_HINT}") from err
         stamp = self._clock().strftime("%Y%m%d-%H%M%S")
@@ -628,6 +646,9 @@ class MssFfmpegRecorder:
             except Exception as err:  # noqa: BLE001 - mikrofon açılmazsa kayıt sessiz devam eder
                 self._abort_audio(s)                 # yarım açılan yakalayıcı iz bırakmasın (yazıcı, açık WAV; k2)
                 s.audio_error = f"Mikrofon açılamadı: {err}"
+        if require_audio and s.audio_error:
+            self._close_log(s)
+            raise MicrophoneStartError(s.audio_error)
         args = ffmpeg_args(exe, w, h, fps, s.video_path, out_height=self.out_height, encoder=encoder)
         args[1] = "-n"  # A foreign file appearing after reservation must never be overwritten.
         try:

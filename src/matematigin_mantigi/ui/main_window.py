@@ -5,16 +5,16 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Sequence
 
-from PyQt6.QtCore import QEvent, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QKeySequence, QShortcut
-from PyQt6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QMessageBox, QToolTip, QWidget
+from PyQt6.QtCore import QEvent, QPoint, QRect, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QImage, QKeySequence, QShortcut
+from PyQt6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QMessageBox, QPushButton, QToolTip, QWidget
 
 from matematigin_mantigi.core import crash_log
 from matematigin_mantigi.core import layout_model as lm
 from matematigin_mantigi.core.models import (SHAPE_META, TOOL_META, PenSettings, Question, QuestionStatus, Tool,
                                              next_shape)
 from matematigin_mantigi.core.question_flow import QuestionFlow
-from matematigin_mantigi.core.recorder import (DISK_HINT, Recorder, RecorderError, RecorderState, exception_text,
+from matematigin_mantigi.core.recorder import (DISK_HINT, Recorder, RecorderError, RecorderState, MicrophoneStartError, MssFfmpegRecorder, exception_text,
                                                record_rect_for)
 from matematigin_mantigi.core.session_store import SessionStore
 from matematigin_mantigi.core.settings import AppSettings
@@ -29,7 +29,8 @@ from matematigin_mantigi.ui.settings_dialog import SettingsDialog, SettingsValue
 from matematigin_mantigi.ui import error_notice, theme
 from matematigin_mantigi.ui.theme import FontFamilies
 from matematigin_mantigi.ui.toolbar import ToolBar
-from matematigin_mantigi.ui.webcam_panel import WebcamPanel
+from matematigin_mantigi.ui.webcam_panel import WebcamPanel, CameraView
+from matematigin_mantigi.ui.dual_screen import layout_supported, resolve_screen_key, screen_key
 from matematigin_mantigi.ui.work_area import WorkArea
 
 
@@ -105,6 +106,25 @@ def _turkish_details_button(box: QMessageBox) -> None:
                                    button.fontMetrics().horizontalAdvance(DETAILS_HIDE) + 32))
 
 
+class _Preview(CameraView):
+    closed = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.close_button = QPushButton("Kapat", self)
+        self.close_button.setObjectName("preview_close")
+        self.close_button.clicked.connect(self.close)
+        self.close_button.adjustSize()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.close_button.move(max(0, self.width() - self.close_button.width() - 8), 8)
+
+    def closeEvent(self, event):
+        self.closed.emit()
+        super().closeEvent(event)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, fam: FontFamilies, questions: Sequence[Question], settings: AppSettings,
                  recorder: Recorder, session_store: SessionStore,
@@ -115,6 +135,10 @@ class MainWindow(QMainWindow):
         questions_from_file: sorular o dosyadan mı okundu. False: açılışta okunamadı, tahtada örnek sorular var; editör
         onları dosyanın (ya da yedeğinin) gerçek sorularının üzerine yazmaz (Q1)."""
         super().__init__(parent)
+        self._preview = None
+        self._preview_board = None
+        self._preview_screen = None
+        self._screen_preferences_restored = False
         self.camera_source_factory = camera_source_factory
         self._stop_worker: _StopWorker | None = None    # kayıt kapanışı arka planda sürüyor (sonucu henüz gelmedi)
         self._record_rect = None
@@ -143,7 +167,11 @@ class MainWindow(QMainWindow):
         self._geometry_timer = QTimer(self)
         self._geometry_timer.setInterval(200)
         self._geometry_timer.timeout.connect(self._check_record_geometry)
+        app = QApplication.instance()
+        app.screenAdded.connect(self._screen_topology_changed)
+        app.screenRemoved.connect(self._screen_topology_changed)
         self.canvas = self.work_area.board
+        self.canvas.set_pen_settings(settings.pen())
         self.question_zone = QuestionZone(fam)
         self.hint_zone = HintZone(fam)
         # Yeşil perde ayarı Ayarlar penceresinden; varsayılan kaldırılmış.
@@ -160,6 +188,12 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         self.flow = QuestionFlow(questions, self)
+        self._last_snapshot = None
+        self._autosave_failed = False
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setInterval(30000)
+        self._autosave_timer.timeout.connect(self._autosave_board)
+        self._autosave_timer.start()
         self._wire()
         self._shortcuts()
         self._restore_settings()
@@ -198,7 +232,7 @@ class MainWindow(QMainWindow):
         c.pressureChanged.connect(lambda p: self._status(f"XP-Pen · {p:.2f}"))
         c.inputSourceChanged.connect(lambda src: self._status("XP-Pen" if src == "tablet" else "fare"))
 
-        flow.questionLeaving.connect(self._on_question_leaving)
+        flow.before_question_change = self._on_question_leaving
         flow.questionChanged.connect(self._on_question_changed)
         flow.statusChanged.connect(self._on_status_changed)
         flow.progressChanged.connect(lambda _d, _t: self._refresh_progress())
@@ -304,18 +338,55 @@ class MainWindow(QMainWindow):
             tool = f"Şekil ({SHAPE_META[self.canvas.shape][0]})"
         self.work_area.set_status(f"Araç: {tool} · Kalınlık: {self.canvas.base_width} px · Basınç: {pressure_text}")
 
-    def _on_question_leaving(self, i: int) -> None:
-        if not self.canvas.is_empty():
+    def _save_board(self, i: int, *, automatic: bool = False) -> bool:
+        if self.canvas.has_snapshot_content():
             qid = self.flow.questions[i].id
             try:
-                self.session_store.save_snapshot(qid, self.canvas.snapshot_image())
-            except OSError as err:
-                # Yuvadan kaçan hata uygulamayı (süren kayıtla) düşürüyordu; ders sürer, yalnız bu PNG eksik kalır.
-                error_notice.post("Tahta görüntüsü kaydedilemedi",
-                                  f"{qid} sorusunun tahta resmi kaydedilemedi: {error_notice.describe_os_error(err)}."
+                image = self.canvas.snapshot_image()
+                if self._last_snapshot is not None and self._last_snapshot[0] == qid and self._last_snapshot[1] == image:
+                    try:
+                        valid = self._snapshot_matches(self._last_snapshot[2], image)
+                    except OSError:
+                        valid = False
+                    if valid:
+                        self._autosave_failed = False
+                        return True
+                path = self.session_store.save_snapshot(qid, image)
+                if not self._snapshot_matches(path, image):
+                    raise OSError(f"Kaydedilen PNG doğrulanamadı: {path}")
+                self._last_snapshot = (qid, image, path)
+                self._autosave_failed = False
+            except Exception as err:  # Görüntü oluşturma da kayıt gibi başarısız olabilir.
+                # Kayıt sürerken uyarı sahne dışında kalır; çağıran tahtayı korur.
+                detail = error_notice.describe_os_error(err) if isinstance(err, OSError) else str(err)
+                if not automatic or not self._autosave_failed:
+                    error_notice.post("Tahta görüntüsü kaydedilemedi",
+                                  f"{qid} sorusunun tahta resmi kaydedilemedi: {detail}."
                                   f"\nKlasör: {self.session_store.session_dir}\nDers ve süren kayıt devam ediyor.",
-                                  key="tahta-goruntusu")
+                                  key="tahta-goruntusu", repeat=True)
+                self._autosave_failed = True
+                return False
+        return True
+
+    @staticmethod
+    def _snapshot_matches(path: Path, image: QImage) -> bool:
+        saved = QImage.fromData(path.read_bytes(), "PNG")
+        if saved.isNull():
+            return False
+        fmt = QImage.Format.Format_ARGB32
+        return saved.convertToFormat(fmt) == image.convertToFormat(fmt)
+
+    def _autosave_board(self) -> None:
+        if self.settings.pen().autosave and self.flow.questions:
+            self._save_board(self.flow.index, automatic=True)
+
+    def _on_question_leaving(self, i: int) -> bool:
+        if not self._save_board(i):
+            return False
+        self.canvas.cancel_text()
         self.canvas.clear()
+        self._last_snapshot = None
+        return True
 
     def _save_layout(self, layout) -> None:
         """Düzen değişince duzen.json'a yazar; yazılamazsa uygulama düşmez, uyarı verilir."""
@@ -383,6 +454,8 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._check_record_geometry)
 
     def _observe_record_geometry(self):
+        if getattr(self, "_preview", None) is not None and not self._preview_valid():
+            self._disable_preview("Ekran veya pencere konumu değişti; önizleme kapatıldı.", interrupt=True)
         # Yalnız tespit: Qt geometri olayının içinde modal pencere açmak yeniden girişe yol açar.
         if (getattr(self, "_record_rect", None) is not None
                 and (self._record_starting or self.recorder.state is RecorderState.RECORDING)
@@ -391,7 +464,113 @@ class MainWindow(QMainWindow):
             self._geometry_interrupted = True
             self.toolbar.set_alert("geometry", "Çekim alanı değişti; kayıt durduruluyor")
 
+    def _screen_topology_changed(self, *_args):
+        if self._preview is not None:
+            self._disable_preview("Ekran düzeni değişti; kamera önizlemesi kapatıldı.", interrupt=True)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._screen_preferences_restored:
+            self._screen_preferences_restored = True
+            QTimer.singleShot(0, self._restore_screen_preferences)
+
+    def _restore_screen_preferences(self):
+        screens = QApplication.screens()
+        board_key, preview_key = self.settings.board_screen_key, self.settings.preview_screen_key
+        board = resolve_screen_key(screens, board_key)
+        target = resolve_screen_key(screens, preview_key)
+        if board_key and board is None:
+            target = None
+        self._configure_screens(board, target)
+
+    def _preview_closed(self):
+        self.settings.preview_screen_key = None
+        self._disable_preview("Kamera önizlemesi kapatıldı.", interrupt=True)
+
+    def _disable_preview(self, message="", *, interrupt=False):
+        preview, self._preview = self._preview, None
+        self._preview_board = self._preview_screen = None
+        if preview is not None:
+            try:
+                self.webcam_panel.frameReady.disconnect(preview.set_frame)
+                self.webcam_panel.placeholderChanged.disconnect(preview.set_placeholder)
+            except (TypeError, RuntimeError):
+                pass
+            preview.hide()
+            preview.deleteLater()
+            if not self.settings.visible("webcam"):
+                self.webcam_panel.shutdown(WEBCAM_HIDE_TIMEOUT_MS)
+        if message:
+            self.toolbar.set_alert("preview", message)
+        if interrupt and (self._record_starting or self.recorder.state is RecorderState.RECORDING):
+            self._geometry_interrupted = True
+            self.toolbar.set_alert("geometry", "Ekran düzeni değişti; kayıt durduruluyor")
+            QTimer.singleShot(0, self._check_record_geometry)
+        if self.recorder.state is not RecorderState.RECORDING and not self._record_starting:
+            self._geometry_timer.stop()
+
+    def _preview_valid(self):
+        if self._preview is None:
+            return True
+        try:
+            screens = QApplication.screens()
+            board, target = self._preview_board, self._preview_screen
+            area = QRect(self.work_area.mapToGlobal(QPoint(0, 0)), self.work_area.size())
+            return (layout_supported(screens, board, target)
+                    and self.screen() is board and board.geometry().contains(area)
+                    and target.geometry().contains(self._preview.frameGeometry())
+                    and not self._preview.frameGeometry().intersects(area)
+                    and not self.isMinimized() and self._preview.isVisible())
+        except RuntimeError:
+            return False
+
+    def _configure_screens(self, board, target):
+        if self.recorder.state is RecorderState.RECORDING or self._record_saving():
+            self.toolbar.set_alert("preview", "Kayıt sırasında ekran seçimi değiştirilemez.")
+            return
+        self._disable_preview()
+        screens = QApplication.screens()
+        if board is not None:
+            if board not in screens:
+                self.toolbar.set_alert("preview", "Seçilen tahta ekranı bulunamadı.")
+                return
+            if self.windowHandle():
+                self.windowHandle().setScreen(board)
+            self.move(board.availableGeometry().topLeft())
+            self.showFullScreen()
+        board = board or self.screen()
+        if target is None:
+            self.toolbar.set_alert("preview", None)
+            return
+        if not layout_supported(screens, board, target):
+            self.toolbar.set_alert("preview", "Önizleme açılamadı: ekranlar ayrı ve aynı ölçekte olmalı; karma DPI desteklenmez.")
+            return
+        preview = _Preview(None)
+        preview.setWindowTitle("Kamera önizleme")
+        preview.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
+        preview.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self._preview, self._preview_board, self._preview_screen = preview, board, target
+        preview.closed.connect(self._preview_closed)
+        self.webcam_panel.frameReady.connect(preview.set_frame)
+        self.webcam_panel.placeholderChanged.connect(preview.set_placeholder)
+        if self.webcam_panel.view._frame is not None:
+            preview.set_frame(self.webcam_panel.view._frame)
+        else:
+            preview.set_placeholder(self.webcam_panel.view.placeholder_text)
+        g = target.availableGeometry()
+        preview.setGeometry(g.x() + g.width() // 4, g.y() + g.height() // 4, g.width() // 2, g.height() // 2)
+        preview.show()
+        if not self._preview_valid():
+            self._disable_preview("Önizleme konumu doğrulanamadı; kapatıldı.")
+            return
+        if self.camera_source_factory is not None:
+            self.webcam_panel.start()
+        self.toolbar.set_alert("preview", "Kamera önizlemesi açık. Kaydı kontrol edin; kayıt dışı kalacağı garanti edilmez.")
+        self._geometry_timer.start()
+
     def _check_record_geometry(self):
+        if self._preview is not None and not self._preview_valid():
+            self._disable_preview("Ekran veya önizleme konumu değişti; önizleme kapatıldı.", interrupt=True)
         self._observe_record_geometry()
         if (self._geometry_interrupted and not self._record_starting
                 and self.recorder.state is RecorderState.RECORDING
@@ -424,22 +603,95 @@ class MainWindow(QMainWindow):
         self.work_area.repaint(before.united(status.geometry()))
         self.recordingAboutToStart.emit()
 
+    def _validate_record_start(self) -> None:
+        """Modal döngüleri ve ilk kare hazırlığı sırasında alan değişmiş olabilir."""
+        self._observe_record_geometry()
+        if (self._geometry_interrupted or self.isMinimized() or not self.isVisible()
+                or (self._preview is not None and not self._preview_valid())):
+            raise RecorderError("Pencere veya çekim alanı değişti; kayıt başlatılmadı.")
+
+    def _settle_record_confirmation(self) -> None:
+        # Modal kapandıktan sonra ekranın yeniden çizilmesini işle; bu turda gelen
+        # geometri/kapanış olayları kaydedici ilk kareyi almadan denetlenir.
+        from PyQt6.QtCore import QEventLoop
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        self._validate_record_start()
+
     def toggle_recording(self, on: bool) -> None:
+        if self._record_starting:
+            return
         if self._record_saving():               # düğme kilitli; R de kapanan kaydın yollarına karışmasın (#2)
             self._show_saving_alert()
             return
         fps = self.settings.record_fps
         state = self.recorder.state
         if on and state is RecorderState.IDLE:
-            self._prepare_first_frame()
+            silent_reason = None
+            if isinstance(self.recorder, MssFfmpegRecorder) and not self.settings.audio_device:
+                silent_reason = "Mikrofon seçilmedi."
+            if self.settings.audio_device:
+                from matematigin_mantigi.core.audio_capture import resolve_input_device
+                if resolve_input_device(self.settings.audio_device) is None:
+                    silent_reason = "Seçilen mikrofon bulunamadı veya kimliği belirsiz."
+            if self._preview is not None and not self._preview_valid():
+                self._disable_preview("Önizleme konumu doğrulanamadı; kayıt başlamadı.")
+                self._record_start_failed(RecorderError("Ekran düzeni doğrulanamadı."))
+                return
             if self.isMinimized():
                 self._record_start_failed(RecorderError("Pencere simge durumundayken kayıt başlatılamaz."))
                 return
             rect = record_rect_for(self.work_area.recording_rect())
             self._record_rect = rect
+            self._geometry_interrupted = False
             self._record_starting = True
             try:
-                self.recorder.start(rect, fps=fps)
+                def confirm_silent(reason):
+                    return QMessageBox.question(self, "Mikrofon", f"{reason}\nSes olmadan kayıt başlatılsın mı?",
+                                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                                QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes
+
+                if silent_reason and not confirm_silent(silent_reason):
+                    self._record_rect = None
+                    self._geometry_interrupted = False
+                    self.toolbar.set_alert("geometry", None)
+                    self.toolbar.set_recording(False)
+                    return
+                if silent_reason:
+                    self._settle_record_confirmation()
+                self._validate_record_start()
+                self._prepare_first_frame()
+                self._validate_record_start()
+                self.toolbar.set_alert("geometry", None)
+                if silent_reason:
+                    device = self.recorder.audio_device
+                    try:
+                        self.recorder.audio_device = None
+                        self.recorder.start(rect, fps=fps)
+                    finally:
+                        self.recorder.audio_device = device
+                else:
+                    try:
+                        if isinstance(self.recorder, MssFfmpegRecorder):
+                            self.recorder.start(rect, fps=fps, require_audio=True)
+                        else:
+                            self.recorder.start(rect, fps=fps)
+                    except MicrophoneStartError as err:
+                        if not confirm_silent(str(err)):
+                            self._record_rect = None
+                            self._geometry_interrupted = False
+                            self.toolbar.set_alert("geometry", None)
+                            self.toolbar.set_recording(False)
+                            return
+                        self._settle_record_confirmation()
+                        self._prepare_first_frame()
+                        self._validate_record_start()
+                        self.toolbar.set_alert("geometry", None)
+                        device = self.recorder.audio_device
+                        try:
+                            self.recorder.audio_device = None
+                            self.recorder.start(rect, fps=fps)
+                        finally:
+                            self.recorder.audio_device = device
             except Exception as err:  # noqa: BLE001 - hiçbir başlatma hatası yuvadan kaçıp düğmeyi 'kayıtta' bırakmasın
                 self._record_rect = None
                 self._geometry_interrupted = False
@@ -503,7 +755,8 @@ class MainWindow(QMainWindow):
         self.toolbar.record_button.setEnabled(True)
         self.toolbar.set_recording(False)
         self._record_rect = None
-        self._geometry_timer.stop()
+        if self._preview is None:
+            self._geometry_timer.stop()
         self.toolbar.set_alert("window-lock", None)
         self.toolbar.set_alert("geometry", None)
         self.work_area.set_aspect_lock(self.settings.aspect_lock)
@@ -639,6 +892,7 @@ class MainWindow(QMainWindow):
 
     def _apply_pen_settings(self, p: PenSettings) -> None:
         self.settings.set_pen(p)
+        self.canvas.set_pen_settings(p)
         self.question_zone.set_reading_ms(p.reading_ms)
 
     def open_settings(self) -> None:
@@ -655,15 +909,26 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Soru editörü", "Soru dosyası tanımlı değil.")
             return
         dlg = QuestionEditorDialog(self.flow.questions, self.questions_path, self.fam, self,
-                                   from_file=self.questions_from_file)
-        dlg.saved.connect(self.reload_questions)
+                                   from_file=self.questions_from_file,
+                                   before_save=lambda: not self.flow.questions or self._save_board(self.flow.index))
+        dlg.saved.connect(lambda questions: self.reload_questions(questions, board_saved=True))
         # Kaydet dosyaya yazdı: tahtadaki sorular artık dosyanınkiler (pencere örnek sorularla açılmış olsa da).
         dlg.saved.connect(lambda _questions: setattr(self, "questions_from_file", True))
         dlg.exec()
 
-    def reload_questions(self, questions) -> None:
+    def reload_questions(self, questions, *, board_saved=False) -> None:
         """Editörden gelen yeni listeyi uygular; akış başa döner, arayüz yeniden restart olmadan tazelenir."""
-        self.canvas.clear()
+        if self.flow.questions and not board_saved:
+            if not self._on_question_leaving(self.flow.index):
+                error_notice.post("Sorular yenilenemedi", "Tahta kaydedilemediği için yeni soru listesi tahtaya uygulanmadı. "
+                                  "Mevcut tahta korunuyor; disk sorununu giderip soruları yeniden yükleyin.",
+                                  key="soru-yenileme")
+                return
+
+        else:
+            self.canvas.cancel_text()
+            self.canvas.clear()
+            self._last_snapshot = None
         self.flow.set_questions(list(questions))
         if self.flow.questions:
             self._on_question_changed(self.flow.index)
@@ -679,6 +944,7 @@ class MainWindow(QMainWindow):
         s.logo_file = v.logo_file
         s.logo_size = v.logo_size
         s.record_fps, s.record_height, s.audio_device = v.record_fps, v.record_height, v.audio_device
+        s.record_folder = v.record_folder
         s.aspect_lock = v.aspect_lock
         s.frame_style = v.frame_style
         if v.camera_index != s.camera_index:
@@ -689,6 +955,13 @@ class MainWindow(QMainWindow):
         for key, on in v.visible.items():
             s.set_visible(key, on)
         self.apply_ui_settings()
+        board_missing = isinstance(v.board_screen, (tuple, list))
+        preview_missing = isinstance(v.preview_screen, (tuple, list))
+        if self.recorder.state is not RecorderState.RECORDING and not self._record_saving():
+            s.board_screen_key = v.board_screen if board_missing else screen_key(v.board_screen)
+            s.preview_screen_key = v.preview_screen if preview_missing else screen_key(v.preview_screen)
+        self._configure_screens(None if board_missing else v.board_screen,
+                                None if board_missing or preview_missing else v.preview_screen)
 
     def apply_ui_settings(self) -> None:
         """Ayarlardaki yazı tipi, yazma hızı, otomatik perde tonu ve görünürlükleri arayüze uygular."""
@@ -766,7 +1039,7 @@ class MainWindow(QMainWindow):
         webcam_on = s.visible("webcam")
         self.webcam_panel.setVisible(webcam_on)
         self.work_area.set_item_visible("webcam", webcam_on)
-        if webcam_on:
+        if webcam_on or self._preview is not None:
             if self.camera_source_factory is not None:
                 self.webcam_panel.start()
         else:
@@ -785,7 +1058,9 @@ class MainWindow(QMainWindow):
         Çalışan _StopWorker hiçbir koşulda yok edilmez: Qt süreci 'QThread: Destroyed while thread is still running'
         ile düşürür, kayıt birleşmeden kalırdı. Gerçek kapanışta kamera ve ayarlar, kaydı durdurmak patlasa da her
         koşulda kapanır; ardından `closed` yayılır (app.main süreci bitirir)."""
-        if self._reporting_record_result:
+        if self._reporting_record_result or self._record_starting:
+            if self._record_starting:
+                self._geometry_interrupted = True
             e.ignore()  # Modal olay döngüsünde sonuç tamamlanmadan pencere kapanamaz.
             return
         if self.recorder.state is RecorderState.RECORDING and not self._record_saving():
@@ -803,6 +1078,10 @@ class MainWindow(QMainWindow):
             self._show_saving_alert()
             e.ignore()
             return
+        if self.flow.questions and not self._save_board(self.flow.index):
+            e.ignore()
+            return
+        self._disable_preview()
         try:
             # Varsayılan (2000ms) üst sınır: pencere zaten kapanıyor, birkaç saniyelik gecikme kabul edilebilir
             # (apply_ui_settings'in görünürlük yolu bunun yerine kısa WEBCAM_HIDE_TIMEOUT_MS'yi kullanır).

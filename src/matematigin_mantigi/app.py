@@ -12,7 +12,7 @@ from matematigin_mantigi import paths
 from matematigin_mantigi.core import crash_log
 from matematigin_mantigi.core.models import SAMPLE_QUESTIONS, Question
 from matematigin_mantigi.core.question_loader import backup_path, ensure_template, load_questions
-from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState
+from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState, RecorderError
 from matematigin_mantigi.core.session_store import SessionStore
 from matematigin_mantigi.core.settings import AppSettings
 from matematigin_mantigi.ui import error_notice, theme
@@ -83,7 +83,16 @@ def build_window(args: argparse.Namespace, fam: theme.FontFamilies, settings: Ap
     factory = None if args.kamera_yok else (lambda index: OpenCvSource(index))
     layout_path = Path(args.duzen) if args.duzen else paths.default_layout_path()
     store = SessionStore()
-    recorder = MssFfmpegRecorder(lambda: store.session_dir, fps=settings.record_fps,
+    def recording_folder() -> Path:
+        configured = settings.record_folder
+        if not configured:
+            store.session_dir.mkdir(parents=True, exist_ok=True)
+            return store.session_dir
+        folder = Path(configured)
+        if not folder.is_absolute() or not folder.is_dir():
+            raise RecorderError(f"Kayıt klasörü bulunamadı veya geçersiz: {configured}\nAyarlar'dan erişilebilir bir klasör seçin.")
+        return folder
+    recorder = MssFfmpegRecorder(recording_folder, create_output_dir=False, fps=settings.record_fps,
                                  audio_device=settings.audio_device or None, out_height=settings.record_height)
     win = MainWindow(fam, questions, settings, recorder, store, factory, layout_path, questions_path=template,
                      questions_from_file=from_file)

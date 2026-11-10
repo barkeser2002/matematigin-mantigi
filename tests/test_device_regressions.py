@@ -39,7 +39,8 @@ def test_camera_never_opens_another_index(monkeypatch):
         def release(self): pass
     monkeypatch.setattr(cv2, 'VideoCapture', Capture)
     assert not OpenCvSource(5).open()
-    assert opened == [5]
+    # Windows'ta aynı indeks iki backend ile denenir (DSHOW, MSMF); önemli olan yalnız 5 indeksinin denenmesi.
+    assert opened and set(opened) == {5}
 
 
 def test_removed_microphone_does_not_match_substring(monkeypatch):

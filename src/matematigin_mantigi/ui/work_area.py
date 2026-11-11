@@ -90,6 +90,8 @@ class _EditOverlay(QWidget):
             p.drawText(geo.adjusted(10, 6, -10, -6), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft,
                        zone.key.upper())
         for key, widget in area._items.items():   # öğeler: tutamaksız (yalnız taşınır) ince kesikli çerçeve
+            if not area._item_editable(key):
+                continue
             geo = widget.geometry()                # + anahtar etiketi -- yoksa düzen modunda görünmez hedef olurlar
             if not area._visible.get(key, True):
                 _paint_ghost(p, geo, key.upper())
@@ -311,6 +313,12 @@ class WorkArea(QWidget):
         brand'e boş dize mi gerçek metin mi geçeceği için TEK yerden hesaplanır -- ikisi ayrışırsa (bkz.
         Görev 8 brief'i) HUD bandı yazı çizerken eski widget görünür kalır gibi bir tutarsızlık olmasın."""
         return FRAME_SPECS[self.frame_style], self.frame_visible and self._visible.get("frame_titles", True)
+
+    def _item_editable(self, key: str) -> bool:
+        """Bandın çizdiği başlıkların eski widget'ları düzen hedefi değildir; gözleri korunur."""
+        spec, titles_on = self._chrome_state()
+        return not (titles_on and ((key == "brand" and spec.draws_brand)
+                                   or (key == "presenter" and spec.draws_presenter)))
 
     def _apply_chrome(self) -> None:
         """Etkin çerçeve stili sunucu adını/markayı KENDİSİ çiziyorsa (FrameSpec.draws_presenter/
@@ -696,8 +704,8 @@ class WorkArea(QWidget):
         # sırasını elle senkron tutmaya dayanmaz, ileride biri değişip diğeri değişmezse bile görüneni
         # yansıtmaya devam eder.
         for key in sorted(self._items, key=lambda k: stacking.index(self._items[k]), reverse=True):
-            if not self._visible.get(key, True):
-                continue                                    # gizli öğe yokmuş gibi davranılır, sürüklenmez
+            if not self._item_editable(key) or not self._visible.get(key, True):
+                continue                                    # gizli/banda taşınmış öğe sürüklenmez
             if self._items[key].geometry().contains(pos):
                 return key, "move"
         return zone_fallback

@@ -8,6 +8,7 @@ from PyQt6.QtGui import QMouseEvent
 from PyQt6.QtWidgets import QApplication, QLabel, QPushButton
 
 from matematigin_mantigi.core import layout_model as lm
+from matematigin_mantigi.core.models import FrameStyle
 from matematigin_mantigi.ui import theme
 from test_work_area import make
 
@@ -136,3 +137,67 @@ def test_move_still_translates_whole_zone_against_board_boundary(qtbot, size, di
             else after.bottomRight() == inner.bottomRight())
     qtbot.mouseRelease(wa, Qt.MouseButton.LeftButton, pos=end)
     assert zone.geometry() == after
+
+
+def hud_item_over_question(qtbot, size, key, visible=True):
+    wa, zones = make(qtbot)
+    wa.resize(*size)
+    wa.set_layout(dict(wa.layout(), soru=lm.PanelGeom(0, 0, 12, 10)))
+    for hidden in ("hint_zone", "webcam", *lm.ITEM_KEYS):
+        wa.set_item_visible(hidden, False)
+    wa.set_item_visible(key, visible)
+    wa.set_frame_style(FrameStyle.HUD)
+    wa.set_edit_mode(True)
+    return wa, zones["soru"], wa._items[key]
+
+
+@pytest.mark.parametrize("size", SIZES)
+@pytest.mark.parametrize("key", ("brand", "presenter"))
+def test_frame_owned_title_cannot_steal_question_drag(qtbot, size, key):
+    wa, question, item = hud_item_over_question(qtbot, size, key)
+    item.move(question.geometry().center() - QPoint(item.width() // 2, item.height() // 2))
+    assert item.isHidden() and wa._visible[key]
+    start = item.geometry().center()
+    assert wa._hit(start) == ("soru", "move")
+    qtbot.mousePress(wa, Qt.MouseButton.LeftButton, pos=start)
+    assert wa._drag[0:2] == ("soru", "move")
+    qtbot.mouseRelease(wa, Qt.MouseButton.LeftButton, pos=start)
+
+
+@pytest.mark.parametrize("size", SIZES)
+@pytest.mark.parametrize("key", ("brand", "presenter"))
+@pytest.mark.parametrize("visible", (True, False))
+def test_frame_owned_title_has_neither_outline_nor_hidden_ghost(qtbot, size, key, visible):
+    wa, question, item = hud_item_over_question(qtbot, size, key, visible)
+    before = wa.overlay.grab().toImage()
+    item.move(question.geometry().center() - QPoint(item.width() // 2, item.height() // 2))
+    assert item.isHidden()
+    assert wa.overlay.grab().toImage() == before
+
+
+@pytest.mark.parametrize("size", SIZES)
+@pytest.mark.parametrize("key", ("brand", "presenter"))
+def test_frame_owned_title_keeps_reachable_functional_eye_button(qtbot, size, key):
+    wa, _, _ = hud_item_over_question(qtbot, size, key)
+    eye = wa._eye_buttons[key]
+    assert eye.isVisible() and wa.childAt(eye.geometry().center()) is eye
+    with qtbot.waitSignal(wa.visibilityToggled) as signal:
+        qtbot.mouseClick(eye, Qt.MouseButton.LeftButton)
+    assert signal.args == [key, False]
+    assert not wa._visible[key] and not eye.isChecked()
+
+
+@pytest.mark.parametrize("size", SIZES)
+@pytest.mark.parametrize("key", ("brand", "presenter"))
+@pytest.mark.parametrize("fallback", ("titles_off", "frame_off", "classic"))
+def test_title_is_draggable_again_when_frame_stops_drawing_it(qtbot, size, key, fallback):
+    wa, question, item = hud_item_over_question(qtbot, size, key)
+    if fallback == "titles_off":
+        wa.set_item_visible("frame_titles", False)
+    elif fallback == "frame_off":
+        wa.set_frame_visible(False)
+    else:
+        wa.set_frame_style(FrameStyle.CLASSIC)
+    item.move(question.geometry().center() - QPoint(item.width() // 2, item.height() // 2))
+    assert not item.isHidden()
+    assert wa._hit(item.geometry().center()) == (key, "move")

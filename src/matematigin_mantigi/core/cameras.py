@@ -23,7 +23,7 @@ class CameraInfo:
     @property
     def label(self) -> str:
         base = f"{self.index}: {self.name}" if self.name else f"Kamera {self.index}"
-        return f"{base} ({self.width}×{self.height})"
+        return f"{base} ({self.width}×{self.height})" if self.width > 0 and self.height > 0 else base
 
 
 def _backends() -> list[int]:
@@ -77,13 +77,28 @@ def list_camera_names(exe: str | None = None, platform: str | None = None, runne
     return names
 
 
+def _avfoundation_names() -> list[str]:
+    """OpenCV cap_avfoundation_mac.mm sırası; ffmpeg'in aygıt sırası kullanılmaz."""
+    try:
+        from AVFoundation import AVCaptureDevice, AVMediaTypeMuxed, AVMediaTypeVideo
+
+        # https://github.com/opencv/opencv/blob/5.0.0/modules/videoio/src/cap_avfoundation_mac.mm
+        # OpenCV video ve ses+video (muxed) cihazlarını birlikte uniqueID'ye göre sıralar.
+        devices = (list(AVCaptureDevice.devicesWithMediaType_(AVMediaTypeVideo))
+                   + list(AVCaptureDevice.devicesWithMediaType_(AVMediaTypeMuxed)))
+        return [str(device.localizedName()) for device in sorted(devices, key=lambda d: str(d.uniqueID()))]
+    except Exception:  # noqa: BLE001 - PyObjC yoksa/izin sorgusu başarısızsa yalnız indeks gösterilir
+        return []
+
+
 def list_cameras(max_index: int = 6, names: list[str] | None = None, skip: set[int] | frozenset[int] = frozenset()) -> list[CameraInfo]:
     """0..max_index-1 indekslerini dener; açılıp kare verenleri döndürür (her biri ~0,1-0,5 sn).
-    names geriye uyumluluk için kabul edilir; indeks eşleşmesi doğrulanamadığından kullanılmaz."""
+    names geriye uyumluluk için kabul edilir ama kullanılmaz; macOS adları yalnız AVFoundation sırasından alınır."""
     log = cv2.utils.logging
     prev = log.getLogLevel()
     log.setLogLevel(log.LOG_LEVEL_SILENT)
     found: list[CameraInfo] = []
+    verified_names = _avfoundation_names() if sys.platform == "darwin" else []
     try:
         for index in range(max_index):
             if index in skip:
@@ -96,7 +111,8 @@ def list_cameras(max_index: int = 6, names: list[str] | None = None, skip: set[i
                     ok, frame = cap.read()
                 cap.release()
                 if ok and frame is not None:
-                    name = ""  # ffmpeg sırası OpenCV indeksiyle doğrulanamaz
+                    name = (verified_names[index] if backend == cv2.CAP_AVFOUNDATION
+                            and index < len(verified_names) else "")
                     found.append(CameraInfo(index, int(frame.shape[1]), int(frame.shape[0]), name))
                     break
     finally:

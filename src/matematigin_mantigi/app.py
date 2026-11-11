@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import tempfile
 from pathlib import Path
 
 from PyQt6.QtCore import QPoint, QRect, QSize, Qt, QTimer, qInstallMessageHandler
@@ -72,22 +73,69 @@ def _samples_for_missing_file(template: Path) -> tuple[list[Question], bool]:
 
 def build_window(args: argparse.Namespace, fam: theme.FontFamilies, settings: AppSettings | None = None) -> MainWindow:
     settings = settings or AppSettings()
+    fallback_data = None
+    user_data_denied = False
     if paths.is_frozen():
-        # .app: ~/Documents/Matematiğin Mantığı (şablon + görseller kopyalanır; şablon yalnız soru dosyasının yedeği ya
-        # da iCloud yer tutucusu da yokken)
-        paths.ensure_user_data()
-    template = Path(args.sorular) if args.sorular else paths.default_template_path()
-    questions, from_file = load_questions_or_samples(template)
+        # .app: şablon + görseller yalnız gerçek soru dosyası/yedeği yokken kopyalanır.
+        try:
+            paths.ensure_user_data()
+            if sys.platform == "darwin" and not settings.record_folder:
+                with tempfile.TemporaryFile(dir=paths.data_dir()):
+                    pass
+        except PermissionError:
+            if sys.platform != "darwin":
+                raise
+            if settings.record_folder:
+                user_data_denied = True
+                detail = ("Seçtiğiniz kayıt klasörü değiştirilmedi. Soru dosyası ve tahta görüntüleri için "
+                          "Belgeler erişimi gerekir; varsayılan soru dosyası yerine örnek sorular açılacak.")
+            else:
+                fallback_data = Path.home() / "Movies" / paths.APP_FOLDER_NAME
+                try:
+                    paths.ensure_user_data(fallback_data)
+                    with tempfile.TemporaryFile(dir=fallback_data):
+                        pass
+                    detail = f"Bu oturumda kayıtlar ve uygulama verileri şu yedek klasöre yazılacak:\n{fallback_data}"
+                except PermissionError:
+                    user_data_denied = True
+                    detail = (f"Yedek klasöre de yazılamıyor:\n{fallback_data}\n"
+                              "Örnek sorularla devam ediliyor; kayıt için Ayarlar'dan erişilebilir bir klasör seçin. "
+                              "Tahta görüntülerini kaydetmek için klasör erişim iznini düzeltin.")
+            QMessageBox.warning(None, "Belgeler klasörüne erişilemiyor",
+                                "Belgeler (Documents) klasörüne erişim izni verilmedi.\n" + detail + "\n\n"
+                                "İzni Sistem Ayarları › Gizlilik ve Güvenlik › Dosyalar ve Klasörler'den değiştirebilirsiniz.")
+    template = (Path(args.sorular) if args.sorular else
+                fallback_data / paths.TEMPLATE_NAME if fallback_data else paths.default_template_path())
+    questions, from_file = ((list(SAMPLE_QUESTIONS), False) if user_data_denied and not args.sorular
+                            else load_questions_or_samples(template))
     if args.kamera is not None:
         settings.camera_index = args.kamera
     factory = None if args.kamera_yok else (lambda index: OpenCvSource(index))
-    layout_path = Path(args.duzen) if args.duzen else paths.default_layout_path()
-    store = SessionStore()
+    layout_path = (Path(args.duzen) if args.duzen else
+                   fallback_data / "duzen.json" if fallback_data else paths.default_layout_path())
+    store = SessionStore(fallback_data / "oturum") if fallback_data else SessionStore()
+    default_record_folder = store.session_dir
     def recording_folder() -> Path:
+        nonlocal default_record_folder
         configured = settings.record_folder
         if not configured:
-            store.session_dir.mkdir(parents=True, exist_ok=True)
-            return store.session_dir
+            try:
+                default_record_folder.mkdir(parents=True, exist_ok=True)
+                if sys.platform == "darwin" and paths.is_frozen():
+                    with tempfile.TemporaryFile(dir=default_record_folder):
+                        pass
+            except PermissionError:
+                if sys.platform != "darwin" or not paths.is_frozen():
+                    raise
+                fallback = Path.home() / "Movies" / paths.APP_FOLDER_NAME / "oturum" / store.session_dir.name
+                fallback.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryFile(dir=fallback):
+                    pass
+                default_record_folder = fallback
+                QMessageBox.warning(None, "Kayıt klasörüne erişilemiyor",
+                                    "Belgeler (Documents) klasörüne erişim izni verilmedi.\n"
+                                    f"Varsayılan kayıt klasörü yerine şu yedek klasör kullanılacak:\n{fallback}")
+            return default_record_folder
         folder = Path(configured)
         if not folder.is_absolute() or not folder.is_dir():
             raise RecorderError(f"Kayıt klasörü bulunamadı veya geçersiz: {configured}\nAyarlar'dan erişilebilir bir klasör seçin.")

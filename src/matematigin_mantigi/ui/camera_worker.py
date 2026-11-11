@@ -140,6 +140,8 @@ class CameraWorker(QThread):
     def _open_with_retries(self) -> bool:
         """İlk açılış başarısızsa (ör. macOS izin penceresi henüz onaylanmadı) belirli aralıkla yeniden dener."""
         for attempt in range(self._open_retries + 1):
+            if self._abort:
+                return False
             if self._source.open():
                 return True
             if attempt == self._open_retries:
@@ -174,12 +176,16 @@ class CameraWorker(QThread):
         # run()'dan kaçan istisna PyQt6'da qFatal ile uygulamayı (süren kayıtla) düşürür, kanca kuruluyken de
         # iş parçacığı sessizce ölüp panel son karede donar. Her hata burada yakalanır: tek bozuk kare atlanır,
         # kalıcı hata panele anlaşılır cameraError olarak gider; ayrıntı (traceback) hatalar.log'a.
-        self._abort = False
+        if self._abort:
+            return
         try:
             opened = self._open_with_retries()
         except Exception as err:  # noqa: BLE001
             crash_log.log_handled(err, "kamera açılışı")
             self.cameraError.emit("Kamera açılamadı")
+            self._release()
+            return
+        if self._abort:
             self._release()
             return
         if not opened:

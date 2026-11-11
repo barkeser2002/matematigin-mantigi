@@ -185,6 +185,7 @@ class DrawingCanvas(QWidget):
         if not self._undo:
             return
         self._strokes, self._stroke_count = self._undo.pop()
+        self._ensure_layers(self.size())
         self.update()
         self.historyChanged.emit(self.can_undo(), self.is_empty())
 

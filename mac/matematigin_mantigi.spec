@@ -50,6 +50,7 @@ app = BUNDLE(
         "NSHighResolutionCapable": True,
         "LSMinimumSystemVersion": "14.0",
         # İzin metinleri: bunlar olmadan macOS kamera/mikrofonu sessizce reddeder.
+        "NSDocumentsFolderUsageDescription": "Ders kayıtlarını, tahta görüntülerini ve soru dosyalarını Belgeler klasörüne kaydetmek için erişim gerekir.",
         "NSCameraUsageDescription": "Ders kaydında öğretmen görüntüsü ve yeşil perde için kamera gerekir.",
         "NSMicrophoneUsageDescription": "Ders kaydında ses için mikrofon gerekir.",
         "NSScreenCaptureUsageDescription": "Tahtanın video kaydı için ekran yakalama gerekir.",

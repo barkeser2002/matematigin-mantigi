@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from threading import Event
 from typing import Protocol
 
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")   # eklenti günlükleri de (FFmpeg vb.) bu seviyeye uyar
@@ -94,11 +95,12 @@ class CameraWorker(QThread):
     opened = pyqtSignal(int, int)
     keyHueDetected = pyqtSignal(int)          # kenarlardan ölçülen perde tonu (OpenCV birimi)
     AUTO_KEY_EVERY = 90                       # kare; ~3 sn'de bir yeniden ölç
+    FRAME_TIMEOUT_MS = 2000                   # kare gelmezse donuk görüntü yerine yeniden bağlantı
     MAX_FRAME_ERRORS = 30                     # art arda bu kadar kare alınamaz/işlenemezse akış hata verip durur
 
     def __init__(self, source: FrameSource, params: ChromaParams, chroma_enabled: bool = True,
                  out_width: int = 640, target_fps: int = 30, auto_key: bool = True, parent=None,
-                 open_retries: int = 0, retry_ms: int = 2000):
+                 open_retries: int = 0, retry_ms: int = 2000, reconnect: bool = False):
         super().__init__(parent)
         self._source = source
         self._params = params
@@ -108,6 +110,10 @@ class CameraWorker(QThread):
         self._period = 1.0 / max(1, target_fps)
         self._open_retries, self._retry_ms, self._abort = max(0, int(open_retries)), max(100, int(retry_ms)), False
         self._running = False
+        self._stopped = Event()
+        self.launched = Event()
+        # Sonlu FrameSource tüketicileri eski bitiş davranışını korur; canlı panel yeniden bağlanır.
+        self._reconnect = reconnect
         self._frames = 0
 
     def set_chroma_enabled(self, on: bool) -> None:
@@ -136,6 +142,7 @@ class CameraWorker(QThread):
     def stop(self) -> None:
         self._running = False
         self._abort = True
+        self._stopped.set()
 
     def _open_with_retries(self) -> bool:
         """İlk açılış başarısızsa (ör. macOS izin penceresi henüz onaylanmadı) belirli aralıkla yeniden dener."""
@@ -152,6 +159,19 @@ class CameraWorker(QThread):
                 waited += 100
             if self._abort:
                 return False
+        return False
+
+    def _reopen(self) -> bool:
+        """Aynı kaynağı bırakıp tekrar aç; stop bekleme aralığını anında keser."""
+        self.cameraError.emit("Kamera bekleniyor…")
+        self._release()
+        while not self._stopped.wait(self._retry_ms / 1000):
+            try:
+                if self._source.open():
+                    return not self._abort
+            except Exception as err:  # noqa: BLE001
+                crash_log.log_handled(err, "kamera yeniden bağlantısı")
+            self._release()
         return False
 
     def _deliver(self, frame: np.ndarray) -> None:
@@ -176,6 +196,7 @@ class CameraWorker(QThread):
         # run()'dan kaçan istisna PyQt6'da qFatal ile uygulamayı (süren kayıtla) düşürür, kanca kuruluyken de
         # iş parçacığı sessizce ölüp panel son karede donar. Her hata burada yakalanır: tek bozuk kare atlanır,
         # kalıcı hata panele anlaşılır cameraError olarak gider; ayrıntı (traceback) hatalar.log'a.
+        self.launched.set()
         if self._abort:
             return
         try:
@@ -193,31 +214,47 @@ class CameraWorker(QThread):
             return
         self._running = True
         misses, failures, announced = 0, 0, False
+        last_frame = time.monotonic()
         try:
-            while self._running:
+            while self._running and not self._abort:
                 t0 = time.monotonic()
                 try:
                     frame = self._source.read()
                     if frame is None:
                         misses += 1
-                        if misses > 30:
+                        if self._reconnect and self._frames:
+                            if (time.monotonic() - last_frame) * 1000 >= self.FRAME_TIMEOUT_MS:
+                                if not self._reopen():
+                                    break
+                                misses, failures, announced = 0, 0, False
+                                last_frame = time.monotonic()
+                        elif misses > 30:
                             self.cameraError.emit("Kamera akışı kesildi")
                             break
                         self.msleep(5)
                         continue
+                    if self._abort:
+                        break
                     misses = 0
                     if not announced:
                         self.opened.emit(int(frame.shape[1]), int(frame.shape[0]))
                         announced = True
                     self._deliver(frame)
+                    last_frame = time.monotonic()
                     failures = 0
                 except Exception as err:  # noqa: BLE001 - sürücü/OpenCV hatası: kare atlanır
                     failures += 1
                     if failures == 1:                  # aynı arıza dizisi günlüğe bir kez
                         crash_log.log_handled(err, "kamera karesi")
                     if failures > self.MAX_FRAME_ERRORS:
-                        self.cameraError.emit("Kamera görüntüsü alınamadı")
-                        break
+                        if self._reconnect and self._frames:
+                            if not self._reopen():
+                                break
+                            misses, failures, announced = 0, 0, False
+                            last_frame = time.monotonic()
+                        else:
+                            self.cameraError.emit("Kamera görüntüsü alınamadı")
+                            break
                     self.msleep(5)
                     continue
                 rest = self._period - (time.monotonic() - t0)

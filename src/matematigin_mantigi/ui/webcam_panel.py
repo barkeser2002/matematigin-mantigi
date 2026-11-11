@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PyQt6.QtCore import QRect, Qt, pyqtSignal
+from PyQt6.QtCore import QRect, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QMouseEvent, QPainter
 from PyQt6.QtWidgets import QLabel, QWidget
 
@@ -96,17 +96,29 @@ class WebcamPanel(Zone):
         # onu sildiğinde start()/shutdown()/set_source_factory() "wrapped C/C++ object ... has been deleted"
         # ile patlardı (kapanışta MainWindow.closeEvent dahil; review'da 3/3 üretildi).
         self.worker = self._make_worker(source_factory)
+        # GUI zamanlayıcısı read() sürücü içinde bloke olsa da eski kareyi kayıttan kaldırır.
+        self._frame_watchdog = QTimer(self)
+        self._frame_watchdog.setSingleShot(True)
+        self._frame_watchdog.timeout.connect(self._on_stale_frame)
         self._refresh_overlay()
 
     def _make_worker(self, source_factory: Callable[[], FrameSource]) -> CameraWorker:
         w = CameraWorker(source_factory(), self._params, self.chroma_enabled, auto_key=self._auto_key, parent=self,
-                         open_retries=self.open_retries)
+                         open_retries=self.open_retries, reconnect=True)
         w.frameReady.connect(self._on_frame)
         w.opened.connect(self._on_opened)
         w.cameraError.connect(self._on_error)
         return w
 
+    def _on_stale_frame(self) -> None:
+        if self.worker.isRunning() and not self._stop_requested:
+            self._on_error("Kamera bekleniyor…")
+
     def _on_frame(self, img: QImage) -> None:
+        self._frame_watchdog.start(CameraWorker.FRAME_TIMEOUT_MS)
+        self.has_camera = True
+        if self.view.placeholder_text:
+            self._set_placeholder("")
         self.view.set_frame(img)
         self.frameReady.emit(img)
 
@@ -209,6 +221,9 @@ class WebcamPanel(Zone):
             self._set_placeholder("Kamera yanıt vermiyor")
             return                                  # iş parçacığı açılmaz; self.worker yine de geçerli
         self.worker.start()
+        # Yalnız Python run() girişini bekler; kamera open/read çağrısını ASLA beklemez.
+        # Hızlı gizle/göster döngüsünde henüz başlamamış işçiyi takılı sürücü sanmayalım.
+        self.worker.launched.wait(0.1)
 
     def shutdown(self, timeout_ms: int = 2000) -> None:
         """timeout_ms: iş parçacığının durmasını bekleme üst sınırı. İş parçacığı normalde bir kare
@@ -217,6 +232,7 @@ class WebcamPanel(Zone):
         edilebilir); görünürlük yolunda (apply_ui_settings, göz düğmesiyle her tetiklenebilen rutin bir
         düzenleme eylemi) çok daha kısa bir değer geçilir ki takılı bir sürücü arayüzü iki saniye
         dondurmasın (bkz. main_window.py). Süre dolduğunda worker hâlâ çalışıyor olabilir -- bkz. start()."""
+        self._frame_watchdog.stop()
         if self.worker.isRunning():
             self.worker.stop()
             self._stop_requested = True
@@ -248,5 +264,7 @@ class WebcamPanel(Zone):
         self.has_camera = True
 
     def _on_error(self, msg: str) -> None:
+        self._frame_watchdog.stop()
         self.has_camera = False
-        self._set_placeholder(f"{msg} · Kamera izni / bağlantı kontrol edin")
+        self._set_placeholder(msg if msg == "Kamera bekleniyor…" else
+                              f"{msg} · Kamera izni / bağlantı kontrol edin")

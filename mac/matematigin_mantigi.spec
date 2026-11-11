@@ -48,7 +48,7 @@ app = BUNDLE(
         "CFBundleName": "Matematiğin Mantığı",
         "CFBundleShortVersionString": "0.1.0",
         "NSHighResolutionCapable": True,
-        "LSMinimumSystemVersion": "12.0",
+        "LSMinimumSystemVersion": "14.0",
         # İzin metinleri: bunlar olmadan macOS kamera/mikrofonu sessizce reddeder.
         "NSCameraUsageDescription": "Ders kaydında öğretmen görüntüsü ve yeşil perde için kamera gerekir.",
         "NSMicrophoneUsageDescription": "Ders kaydında ses için mikrofon gerekir.",

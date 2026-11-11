@@ -9,6 +9,8 @@ import secrets
 import shutil
 import stat
 import time
+from datetime import date, time as datetime_time, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -218,15 +220,41 @@ def _text(v) -> str:
     return "" if v is None else str(v).strip()
 
 
+_VALUE_COLUMNS = frozenset(("soru", "ipucu1", "ipucu2", "ipucu3", "ipucu4", "cevap", "a", "b", "c", "d"))
+
+
+def _display_value(cell, row_no: int, column: str):
+    value = cell.value
+    if isinstance(value, (date, datetime_time, timedelta)):
+        raise QuestionTemplateError(
+            f"Satır {row_no}, '{column}' sütunu ({cell.coordinate}): tarih/saat değeri; hücreyi Metin yapın")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        # Tırnak içindeki ve kaçırılmış yüzde işaretleri sayı ölçeğini değiştirmez.
+        number_format = re.sub(r'"[^"]*"|\\.|_.|\*.', "", cell.number_format)
+        percent = "%" in number_format
+        number = Decimal(str(value)) * (100 if percent else 1)
+        text = format(number, "f")
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
+        return ("%" if percent else "") + text.replace(".", ",")
+    return value
+
+
 def _read_rows(source) -> list[tuple]:
-    """Etkin sayfanın satırları (yalnız değerler). source bir yol ya da ikili kipte açık dosya: openpyxl yolu uzantısına
+    """Etkin sayfanın satırları; değer sütunlarında hücre biçimiyle Türkçe gösterim.
+    source bir yol ya da ikili kipte açık dosya: openpyxl yolu uzantısına
     bakıp .bak/.tmp adlı dosyayı reddeder, dosya nesnesinde bakmaz."""
     wb = openpyxl.load_workbook(source, read_only=True, data_only=True)
     try:
         # Satırlar önce belleğe alınır, kitap hemen kapanır: read_only kitap dosyayı açık tutar ve doğrulama hatası
         # wb.close()'dan önce fırlayınca tutamak çöp toplayıcıya dek kalıyordu. Windows'ta açık tutamak dosyayı
         # kilitler: öğretmen Excel'den kaydedemez, editörün atomik yazımı (os.replace) da düşer.
-        return list(wb.active.iter_rows(values_only=True))
+        rows = list(wb.active.iter_rows())
+        header = [_text(c.value).lower() for c in rows[0]] if rows else []
+        return [tuple(_display_value(c, row_no, header[i])
+                      if row_no > 1 and header[i] in _VALUE_COLUMNS else c.value
+                      for i, c in enumerate(row))
+                for row_no, row in enumerate(rows, start=1)]
     finally:
         wb.close()
 
@@ -256,7 +284,10 @@ def _questions_from_rows(all_rows: list[tuple], folder: Path) -> list[Question]:
     idx = {c: header.index(c) for c in ALL_COLUMNS if c in header}
 
     def cell(cells, key) -> str:
-        return _text(cells[idx[key]]) if key in idx else ""
+        value = cells[idx[key]] if key in idx else None
+        if key in _VALUE_COLUMNS and isinstance(value, str) and value.strip():
+            return value
+        return _text(value)
 
     questions: list[Question] = []
     for row_no, row in enumerate(rows, start=2):

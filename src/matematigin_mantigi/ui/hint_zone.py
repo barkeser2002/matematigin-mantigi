@@ -55,6 +55,8 @@ class HintCard(QWidget):
 
     def apply(self, mode: HintMaskMode, revealed: bool, focused: bool, anim_ms: int = 0) -> None:
         self.revealed = revealed
+        if not revealed:
+            self._fade_timer.stop()
         border = theme.HINT_CARD_BORDER_FOCUS if focused else theme.HINT_CARD_BORDER
         self.setStyleSheet(f"#hintCard {{ background: {theme.HINT_CARD_BG}; border: {3 if focused else 2}px solid {border};"
                            f" border-radius: 10px; }}")
@@ -77,6 +79,9 @@ class HintCard(QWidget):
             self.text_label.setStyleSheet(f"background: {theme.INK}; color: {theme.INK}; border-radius: 3px;")
 
     def _fade_step(self) -> None:
+        if not self.revealed:
+            self._fade_timer.stop()
+            return
         self._fade_elapsed += self._fade_timer.interval()
         eff = self.text_label.graphicsEffect()
         if not isinstance(eff, QGraphicsBlurEffect):
@@ -96,6 +101,10 @@ class HintCard(QWidget):
         if e.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
         e.accept()                          # kart tıklaması tahtaya çizim olarak gitmez
+
+    def mouseDoubleClickEvent(self, e: QMouseEvent) -> None:
+        # İlk basış geçişi yaptı; QWidget'in varsayılanı ikinci basış üretmesin.
+        e.accept()
 
 
 class HintZone(Zone):

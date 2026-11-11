@@ -87,6 +87,10 @@ class DrawingCanvas(QWidget):
 
     # --- public state --------------------------------------------------------
     def set_tool(self, t: Tool) -> None:
+        if t != self.tool:
+            self._tablet_down = self._mouse_down = False
+            if self._last is not None:
+                self.end_stroke()
         if t != Tool.TEXT and self.text_edit.isVisible():
             self.commit_text()
         self.tool = t
@@ -185,6 +189,7 @@ class DrawingCanvas(QWidget):
         if not self._undo:
             return
         self._strokes, self._stroke_count = self._undo.pop()
+        self._ensure_layers(self.size())
         self.update()
         self.historyChanged.emit(self.can_undo(), self.is_empty())
 
@@ -197,6 +202,20 @@ class DrawingCanvas(QWidget):
         self.update()
         self.historyChanged.emit(self.can_undo(), True)
 
+    def reset_board(self) -> None:
+        """Yeni soru için mürekkebi, geçici araçları ve soru içi geçmişi sıfırla."""
+        self.cancel_text()
+        self._tablet_down = self._mouse_down = False
+        self._last = self._raw_last = self._shape_start = None
+        self._laser_timer.stop()
+        self._laser_alpha = 1.0
+        self._strokes.fill(Qt.GlobalColor.transparent)
+        self._overlay.fill(Qt.GlobalColor.transparent)
+        self._stroke_count = 0
+        self._undo.clear()
+        self.update()
+        self.historyChanged.emit(False, True)
+
     def _push_undo(self) -> None:
         self._undo.append((self._strokes.copy(), self._stroke_count))
 
@@ -206,6 +225,10 @@ class DrawingCanvas(QWidget):
         if self.text_edit.isVisible():
             self.commit_text()
         self._text_pos = pos
+        # Tuval altta kalır; editör kartlar ve kamera ile aynı yığında olmalı.
+        host = self.parentWidget() if self.mirror is not None else self
+        if self.text_edit.parentWidget() is not host:
+            self.text_edit.setParent(host)
         px = text_pixel_size(self.base_width)
         f = QFont(self.font()); f.setPixelSize(px); f.setWeight(QFont.Weight(600))
         self.text_edit.setFont(f)
@@ -214,8 +237,15 @@ class DrawingCanvas(QWidget):
         self.text_edit.clear()
         self.text_edit.setMinimumWidth(min(480, max(220, self.width() - int(pos.x()) - 8)))
         self.text_edit.adjustSize()
-        self.text_edit.move(int(pos.x()), int(pos.y()) - self.text_edit.height() // 2)
+        self._position_text_editor()
         self.text_edit.show(); self.text_edit.raise_(); self.text_edit.setFocus()
+
+    def _position_text_editor(self) -> None:
+        if self._text_pos is None:
+            return
+        anchor = self.mapTo(self.text_edit.parentWidget(), self._text_pos.toPoint())
+        self.text_edit.move(anchor.x(), anchor.y() - self.text_edit.height() // 2)
+        self.text_edit.raise_()
 
     def commit_text(self) -> None:
         text = self.text_edit.text().strip()
@@ -344,7 +374,29 @@ class DrawingCanvas(QWidget):
             self._tile = _dot_tile(dpr)
 
     def resizeEvent(self, e: QResizeEvent) -> None:
+        dpr = self.devicePixelRatioF()
+        need = QSize(max(1, int(e.size().width() * dpr)), max(1, int(e.size().height() * dpr)))
+        if self._strokes.size() != need or self._strokes.devicePixelRatio() != dpr:
+            old_size = self._strokes.deviceIndependentSize()
+            for name in ("_last", "_raw_last", "_shape_start", "_text_pos"):
+                point = getattr(self, name)
+                if point is not None:
+                    setattr(self, name, QPointF(point.x() * e.size().width() / old_size.width(),
+                                               point.y() * e.size().height() / old_size.height()))
+
+            def scaled(image: QImage) -> QImage:
+                out = image.scaled(need, Qt.AspectRatioMode.IgnoreAspectRatio,
+                                   Qt.TransformationMode.SmoothTransformation)
+                out.setDevicePixelRatio(dpr)
+                return out
+
+            self._strokes = scaled(self._strokes)
+            self._overlay = scaled(self._overlay)
+            self._undo = deque(((scaled(image), count) for image, count in self._undo), maxlen=self.MAX_UNDO)
         self._ensure_layers(e.size())
+        if self._text_pos is not None:
+            # Ebeveyn yerleşimi kardeş katmanları bundan sonra yükseltebilir.
+            QTimer.singleShot(0, self._position_text_editor)
         super().resizeEvent(e)
 
     def paint_ink(self, p: QPainter) -> None:
@@ -387,9 +439,13 @@ class DrawingCanvas(QWidget):
         elif t == QEvent.Type.TabletMove:
             self.pressureChanged.emit(e.pressure())
             if self._tablet_down:
-                self.extend_stroke(e.position(), e.pressure())
+                if e.buttons() & Qt.MouseButton.LeftButton:
+                    self.extend_stroke(e.position(), e.pressure())
+                else:
+                    self._tablet_down = False
+                    self.end_stroke()
         elif t == QEvent.Type.TabletRelease:
-            if self._tablet_down:
+            if self._tablet_down and not (e.buttons() & Qt.MouseButton.LeftButton):
                 self._tablet_down = False
                 self.end_stroke()
         else:

@@ -607,7 +607,9 @@ class WorkArea(QWidget):
 
         Son adım (`placed` verilmişse): aynı turda konmuş bir düğmeyle çakışma varsa sola kaydır --
         bkz. _free_eye_x ve _sync_eye_buttons."""
-        btn = self._eye_buttons.setdefault(key, self._make_eye_button(key))
+        if key not in self._eye_buttons:
+            self._eye_buttons[key] = self._make_eye_button(key)
+        btn = self._eye_buttons[key]
         x = geo.right() - EYE_SIZE
         y = geo.top() - EYE_SIZE
         if y < 0:

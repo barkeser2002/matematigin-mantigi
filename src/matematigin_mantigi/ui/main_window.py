@@ -897,12 +897,14 @@ class MainWindow(QMainWindow):
     def _confirm_recorded_dialog(self) -> bool:
         if self.recorder.state is not RecorderState.RECORDING:
             return True
-        return QMessageBox.question(
+        allowed = QMessageBox.question(
             self, "Kayıt sürüyor",
             "Bu pencere kayda girer (editör cevapları gösterir). Yine de açılsın mı?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         ) == QMessageBox.StandardButton.Yes
+        # Sorunun modal olay döngüsünde kapanış başlatılmış olabilir.
+        return allowed and not self._close_after_save
 
     def open_settings(self) -> None:
         if self._refuse_while_closing(self.toolbar.settings_button) or not self._confirm_recorded_dialog():

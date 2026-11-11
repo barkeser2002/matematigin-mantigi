@@ -197,6 +197,34 @@ def test_record_warning_keeps_full_path_off_scene(window, monkeypatch, tmp_path)
     assert "ozel_kullanici" not in window.work_area.status_label.text()
 
 
+@pytest.mark.parametrize("kind", ["settings", "editor"])
+def test_record_permission_cannot_bypass_close_started_in_modal(window, monkeypatch, tmp_path, kind):
+    from types import SimpleNamespace
+    from matematigin_mantigi.ui import main_window
+    window.questions_path = tmp_path / "questions.xlsx"
+    opened = []
+
+    def create(*args, **kwargs):
+        opened.append(True)
+        signal = SimpleNamespace(connect=lambda callback: None)
+        return SimpleNamespace(applied=signal, saved=signal, exec=lambda: None)
+
+    monkeypatch.setattr(main_window, "SettingsDialog" if kind == "settings" else "QuestionEditorDialog", create)
+    window.toggle_recording(True)
+
+    def answer(*args, **kwargs):
+        # Modal olay döngüsünde Durdur ve çık istenmiş olabilir.
+        window._close_after_save = True
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(QMessageBox, "question", answer)
+    try:
+        getattr(window, "open_" + kind)()
+        assert opened == []
+    finally:
+        window._close_after_save = False
+
+
 @pytest.mark.xfail(strict=True, reason="#51: gerçek çıktı boyutu arayüze açılmıyor; recorder.py değişikliği gerekir",
                    raises=AssertionError)
 def test_badge_resolution_matches_real_encoded_frame(window, monkeypatch, tmp_path, qtbot):

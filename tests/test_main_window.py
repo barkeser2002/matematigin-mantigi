@@ -442,7 +442,7 @@ def test_microphone_cut_warning_reaches_the_notice_box_not_the_board(window, qtb
     from matematigin_mantigi.core import audio_capture as ac
     from matematigin_mantigi.core.recorder import MssFfmpegRecorder, find_ffmpeg
     from tests.test_audio_capture import FakeSoundDevice
-    from tests.test_recorder import stepping_clock, synthetic_grabber, wait_until
+    from tests.test_recorder import small_synthetic_grabber as synthetic_grabber, stepping_clock, wait_until
     if find_ffmpeg() is None:
         pytest.skip("ffmpeg yok")
     shown = _capture_modals(monkeypatch)
@@ -779,7 +779,8 @@ def test_r_while_previous_recording_is_saving_starts_nothing_and_warns_in_toolba
     import pytest
     from PyQt6.QtWidgets import QMessageBox
     from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState, find_ffmpeg
-    from tests.test_recorder import FakeAudioCapture, SlowMux, stepping_clock, synthetic_grabber, wait_until
+    from tests.test_recorder import (FakeAudioCapture, SlowMux, small_synthetic_grabber as synthetic_grabber,
+                                     stepping_clock, wait_until)
     if find_ffmpeg() is None:
         pytest.skip("ffmpeg yok")
     shown = []
@@ -826,7 +827,8 @@ def test_stopping_shows_the_saving_strip_until_the_recording_is_saved(window, qt
     from PyQt6.QtWidgets import QMessageBox
     from matematigin_mantigi.core.recorder import MssFfmpegRecorder, find_ffmpeg
     from matematigin_mantigi.ui.main_window import SAVING_ALERT
-    from tests.test_recorder import FakeAudioCapture, SlowMux, stepping_clock, synthetic_grabber, wait_until
+    from tests.test_recorder import (FakeAudioCapture, SlowMux, small_synthetic_grabber as synthetic_grabber,
+                                     stepping_clock, wait_until)
     if find_ffmpeg() is None:
         pytest.skip("ffmpeg yok")
     shown = []
@@ -1643,7 +1645,8 @@ def test_closing_while_recording_saves_in_background_then_the_window_closes_itse
     import pytest
     from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState, find_ffmpeg
     from matematigin_mantigi.ui.main_window import CLOSING_ALERT
-    from tests.test_recorder import FakeAudioCapture, SlowMux, stepping_clock, synthetic_grabber, wait_until
+    from tests.test_recorder import (FakeAudioCapture, SlowMux, small_synthetic_grabber as synthetic_grabber,
+                                     stepping_clock, wait_until)
     if find_ffmpeg() is None:
         pytest.skip("ffmpeg yok")
     shown = []                                                        # (metin, pencere açık mı, kamera kapandı mı)
@@ -1686,7 +1689,8 @@ def test_closing_while_saving_waits_without_asking_and_closes_when_saved(window,
     import pytest
     from matematigin_mantigi.core.recorder import MssFfmpegRecorder, find_ffmpeg
     from matematigin_mantigi.ui.main_window import CLOSING_ALERT
-    from tests.test_recorder import FakeAudioCapture, SlowMux, stepping_clock, synthetic_grabber, wait_until
+    from tests.test_recorder import (FakeAudioCapture, SlowMux, small_synthetic_grabber as synthetic_grabber,
+                                     stepping_clock, wait_until)
     if find_ffmpeg() is None:
         pytest.skip("ffmpeg yok")
     asked, shown = _answer_with_summary(monkeypatch)
@@ -1918,7 +1922,8 @@ from matematigin_mantigi.core.session_store import SessionStore
 from matematigin_mantigi.core.settings import AppSettings
 from matematigin_mantigi.ui.main_window import MainWindow
 from matematigin_mantigi.ui.theme import FontFamilies
-from tests.test_recorder import FakeAudioCapture, stepping_clock, synthetic_grabber
+from tests.test_recorder import (FakeAudioCapture, is_audio_mux, small_synthetic_grabber as synthetic_grabber,
+                                 stepping_clock)
 
 tmp, scenario = Path(sys.argv[1]), sys.argv[2]
 watchdog = threading.Timer(60, lambda: (print("ZAMAN_ASIMI", flush=True), os._exit(3)))
@@ -1960,7 +1965,7 @@ real_run = subprocess.run
 
 
 def gated_run(args, *a, **k):                         # ses birleştirme, senaryo bırakana dek bekler
-    if "-shortest" in args:
+    if is_audio_mux(args):
         gate_in.set()
         gate_go.wait(20)
     return real_run(args, *a, **k)
@@ -1980,6 +1985,7 @@ def main() -> int:
     settings = AppSettings(QSettings(str(tmp / "ayarlar.ini"), QSettings.Format.IniFormat))
     settings.set_pen(PenSettings(reading_ms=0))
     settings.audio_device = "Sahte"
+    settings.record_height = 0                       # küçük sentetik kareyi varsayılan 1440p'ye büyütme
     from matematigin_mantigi.core import audio_capture
     audio_capture.resolve_input_device = lambda name: 0 if name == "Sahte" else None
     if scenario == "kapanis-hatasi":

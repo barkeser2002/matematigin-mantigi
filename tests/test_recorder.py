@@ -210,6 +210,15 @@ def synthetic_grabber(rect: RecordRect) -> np.ndarray:
     return frame
 
 
+def small_synthetic_grabber(rect: RecordRect) -> np.ndarray:
+    """Pencerenin kayıt yaşam döngüsü testleri için sınırlı yük; geometri ve hız başarımı ayrı sınanır.
+
+    Gerçek ffmpeg korunur; FHD/60 ham BGRA aktarımı bu testleri makinenin anlık hızına bağlamasın.
+    Kaydedicinin oturum rect'i değişmez, yalnız sahte yakalayıcının ürettiği görüntü küçüktür.
+    """
+    return synthetic_grabber(RecordRect(0, 0, 160, 90))
+
+
 @pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")
 def test_mss_ffmpeg_recorder_writes_playable_mp4(tmp_path):
     import cv2
@@ -379,9 +388,14 @@ def wait_until(cond, timeout: float = 15.0) -> None:
         time.sleep(0.01)
 
 
+def is_audio_mux(args) -> bool:
+    """Süre okuması değil, video kopyası ile AAC sesi birleştiren komut (-shortest veya -t)."""
+    return "-c:v" in args and args[args.index("-c:v") + 1] == "copy" and "-c:a" in args
+
+
 class SlowMux:
-    """Uzun dersin ses birleştirmesini taklit eder: kaydedicinin birleştirme komutu (subprocess.run, -shortest'lı
-    ffmpeg mux) test release() diyene dek bekler. entered: kapanış birleştirmeye vardı. Duvar saatine değil olaya
+    """Uzun dersin ses birleştirmesini taklit eder: kaydedicinin birleştirme komutu (subprocess.run, video kopyası
+    + AAC ses) test release() diyene dek bekler. entered: kapanış birleştirmeye vardı. Duvar saatine değil olaya
     bağlı. Diğer ffmpeg çağrıları (süre ölçümü) beklemeden geçer, calls'a sayılmaz."""
 
     def __init__(self, monkeypatch):
@@ -390,7 +404,7 @@ class SlowMux:
         real_run = subprocess.run
 
         def run(args, *a, **k):
-            if "-shortest" not in args:
+            if not is_audio_mux(args):
                 return real_run(args, *a, **k)
             self.calls += 1
             self.entered.set()
@@ -400,6 +414,31 @@ class SlowMux:
 
     def release(self) -> None:
         self._go.set()
+
+
+@pytest.mark.parametrize("end_s", [None, 4.0])
+def test_slow_mux_waits_for_audio_mux_with_or_without_video_tail(tmp_path, monkeypatch, end_s):
+    """Kodlayıcı geride kaldığında -shortest yerine -t kullanılır; kapı iki birleştirmeyi de bekletmeli."""
+    calls, results = [], []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    mux = SlowMux(monkeypatch)
+    args = mux_args("ffmpeg", tmp_path / "video.mp4", tmp_path / "ses.wav", tmp_path / "son.mp4",
+                    0.0, video_s=2.0, end_s=end_s)
+    worker = threading.Thread(target=lambda: results.append(subprocess.run(args)), daemon=True)
+    worker.start()
+    try:
+        wait_until(lambda: mux.entered.is_set() or bool(results))
+        assert mux.entered.is_set(), "ses birleştirmesi bekletilmeden geçti"
+        assert mux.calls == 1 and calls == [] and results == []
+    finally:
+        mux.release()
+        worker.join(15)
+    assert not worker.is_alive() and calls == [args] and results[0].returncode == 0
 
 
 @pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg yok")

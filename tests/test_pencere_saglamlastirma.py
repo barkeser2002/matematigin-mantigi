@@ -195,3 +195,36 @@ def test_record_warning_keeps_full_path_off_scene(window, monkeypatch, tmp_path)
     window._report_record_result(path, None)
     assert len(posted) == 1 and str(path) in posted[0][0][1]
     assert "ozel_kullanici" not in window.work_area.status_label.text()
+
+
+@pytest.mark.xfail(strict=True, reason="#51: gerçek çıktı boyutu arayüze açılmıyor; recorder.py değişikliği gerekir",
+                   raises=AssertionError)
+def test_badge_resolution_matches_real_encoded_frame(window, monkeypatch, tmp_path, qtbot):
+    """Kaydedicinin gerçek ilk karesi nominal ekran dikdörtgeniyle aynı olmayabilir."""
+    import cv2
+    import numpy as np
+    from matematigin_mantigi.core.recorder import MssFfmpegRecorder, find_ffmpeg
+    if not find_ffmpeg():
+        pytest.skip("ffmpeg yok")
+    window.settings.record_height = 0
+    recorder = MssFfmpegRecorder(lambda: tmp_path / "rec", out_height=0,
+                                 grabber=lambda rect: np.zeros((122, 218, 4), dtype=np.uint8))
+    window.recorder = recorder
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    try:
+        window.toggle_recording(True)
+        qtbot.waitUntil(lambda: recorder.frames_written >= 2)
+        badge_text = window.badge.text()
+        window.toggle_recording(False)
+        qtbot.waitUntil(lambda: window._stop_worker is None, timeout=20000)
+        video = cv2.VideoCapture(str(recorder.last_path))
+        try:
+            assert video.isOpened()
+            width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        finally:
+            video.release()
+        assert f"{width}×{height}" in badge_text
+    finally:
+        from tests.test_main_window import _release_windows_left_open
+        _release_windows_left_open()

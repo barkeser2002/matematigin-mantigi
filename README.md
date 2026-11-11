@@ -38,6 +38,21 @@ kamerayı değiştirmek veya düğmelere basmak için Tıkla aracına geçilir (
 İmleç araca göre ikon: renkli kurşun kalem (ucunda çizgi kalınlığı), silme alanı kadar silgi bloğu, kırmızı lazer
 noktası; tahtanın ve bölgelerin her yerinde geçerli.
 
+**Kalem ayarları** (araç çubuğundaki "Kalem" düğmesi, "Kalem, silgi & imleç" penceresi): basınç eğrisi, yumuşatma,
+min./maks. kalınlık ve **kalem ucu**. Uçlar yalnız kalem aracını etkiler: Yuvarlak (varsayılan, düz renk), Keçeli (düz
+uçlu, %85 opaklıkta, basınç etkisi yarıya iner), Tebeşir (dokulu çizgi). "Otomatik kaydet" anahtarı da buradadır.
+"Tanıma özellikleri · Yakında" kartındaki Matematik tanıma, Şekil düzeltme ve Ön tanımlı soru tanıma henüz yoktur:
+kutuları kilitlidir ve hiçbir tanıma yapılmaz. Pencerenin alttaki "Sabit örnek gösterim" bölümü canlı tanıma değil,
+sabit bir örnek resimdir.
+
+Çift ekran: ⚙ Ayarlar > Ekranlar'da **Tahta ekranı** (tahta o ekranda tam ekran açılır; XP-Pen'li ekran) ve **Kamera
+önizleme ekranı** (varsayılan: Kapalı) seçilir. Önizleme, ikinci ekranda ayrı küçük bir pencerede aynı kamera
+görüntüsünü gösterir; kamera kesilince iki yerdeki eski kare de kalkar. Yalnız ayrı, aynı ölçekli (devicePixelRatio)
+ekranlarda açılır; karma ölçekli ekranlar desteklenmez ve ekran düzeni ya da pencere konumu değişirse önizleme kapanır.
+Önizlemenin kayıt alanına girmeyeceği gerçek cihazda doğrulanmadı, garanti edilmez: araç çubuğundaki şerit bunu
+hatırlatır, ilk kayıtta sonucu kontrol edin. Kayıt sürerken ekran seçimi değiştirilemez. Ekranlar adı, üreticisi,
+modeli ve seri numarasıyla hatırlanır; bulunamayan ekranın seçimi silinmez, "bulunamadı veya belirsiz" diye görünür.
+
 Webcam: perde pikselleri saydam olur, kişi tahtanın ve çizimlerin üstüne biner. Perdeyi kaldırma ⚙ Ayarlar'dan
 açılıp kapanır (kameraya tıklamak değiştirmez). Yeşil perde kamera karesinin
 kenarlarından otomatik ölçülür (yeşilimsi ve doygunsa), böylece #00ff3c olmayan
@@ -109,8 +124,8 @@ Mac'te proje kökünde:
 
     bash mac/build_mac.sh
 
-Betik `.venv` kurar, tüm kütüphaneleri (`PyQt6, opencv-python, numpy, openpyxl, pymupdf, pytest, pyinstaller`)
-yükler, testleri koşar ve `dist/Matematiğin Mantığı.app` üretir. Kamera, mikrofon ve ekran kaydı izin metinleri
+Betik `.venv` kurar, kütüphaneleri `constraints.txt`'teki sabit sürümlerle (uygulama, PDF aktarımı, test,
+PyInstaller) yükler, testleri koşar ve `dist/Matematiğin Mantığı.app` üretir. Kamera, mikrofon ve ekran kaydı izin metinleri
 (`NSCameraUsageDescription` vb.) `mac/matematigin_mantigi.spec` içinde gömülüdür; ilk açılışta macOS izin sorar.
 Uygulama Apple tarafından onaylı değil (ad-hoc imzalı). Tarayıcıdan inen zip karantina işareti alır; açılmazsa ya da
 "hasarlı" derse `.app`'i Uygulamalar'a taşıyıp Terminal'de çalıştırın:
@@ -150,6 +165,9 @@ Yerelde: `powershell -ExecutionPolicy Bypass -File windows\build_win.ps1` — `.
 `main`'e her push'ta `.github/workflows/release.yml` **Windows `.exe`** ve **macOS `.app`** derler, ikisini bir
 GitHub Release'e (`build-<numara>`) ekler. Elle: Actions > **Release** > Run workflow (ya da `gh workflow run release.yml`).
 Bir daldan elle çalıştırılırsa yalnız derler, Release yayınlamaz (dalı main'e almadan önce iki platformu denemek için).
+Yalnız belge ya da görsel dosyaları (`*.md`, `docs/`, `graphify-out/`, `uploads/`, kök dizindeki resimler ve tasarım
+prototipleri) değişen push release üretmez; aynı push'ta tek bir kod ya da yapı dosyası (`src/`, `tests/`,
+`constraints.txt`, `sorular_gorsel/`, workflow...) varsa üretir.
 Yalnız Mac için `.github/workflows/mac.yml` de var. İndirdikten sonra Windows: klasörü kopyala, `.exe` çalıştır;
 macOS: zipi aç, `.app`'i Uygulamalar'a taşı; açılmazsa yukarıdaki `xattr -dr com.apple.quarantine` komutunu çalıştır
 (ya da Sistem Ayarları > Gizlilik ve Güvenlik > "Yine de Aç").
@@ -162,9 +180,10 @@ dosyayı değiştir, testleri koş, dalda iki platformu derle, sonra main'e al.
 
 - arm64 Python kullanın (`python3 -c "import platform; print(platform.machine())"` → arm64). PyQt6 universal2 wheel, macOS 14+.
 - Kamera izni terminal uygulamasına (Terminal/iTerm/VS Code) verilir: Sistem Ayarları > Gizlilik ve Güvenlik > Kamera.
-- Ekran kaydı izni (sonraki sürümdeki mss kaydedici için) aynı yerde "Ekran Kaydı".
+- Ekran kaydı izni (kayıt `mss` ile ekranı yakalar) aynı yerde "Ekran Kaydı"; verilmezse kare siyah gelir.
 - XP-Pen sürücüsünü kurun, Erişilebilirlik ve Giriş İzleme izinlerini verin; sürücü yoksa sadece fare olayları gelir.
-- Paketlenince (py2app/PyInstaller) Info.plist'e `NSCameraUsageDescription` eklenmeli.
+- Paketli `.app`'te kamera, mikrofon, ekran yakalama ve otomasyon izin metinleri `mac/matematigin_mantigi.spec`
+  içinde Info.plist'e gömülüdür.
 
 ## Windows (geliştirme makinesi)
 
@@ -289,6 +308,7 @@ başlangıç farkını ölçüp telafi eder; el ile birleştirmede bu fark yoktu
 mikrofon saati de kayabilir). Fark duyuluyorsa WAV girişinin önüne `-itsoffset <sn>` (sesi geciktirir) ya da `-ss <sn>`
 (sesin başını atar) ekleyin. Çıktı süresi iki girişten uzun olanıdır; sesin görüntüden kısa kalması videoyu kısaltmaz.
 
-## Bu sürümde taslak olan kısımlar
+## Bu sürümde olmayanlar
 
-Keras tanıma.
+El yazısı matematik tanıma, şekil düzeltme ve ön tanımlı soru tanıma yok; Kalem ayarlarında "Yakında" diye kilitlidir.
+Pencerede gördüğünüz örnek dönüşümler sabit gösterimdir, canlı tanıma değildir.

@@ -5,6 +5,7 @@ Düzen sınırları ve ızgara sadece düzen modunda görünür.
 from __future__ import annotations
 
 from fractions import Fraction
+import sys
 
 from PyQt6.QtCore import QPoint, QRect, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPen, QPixmap
@@ -89,6 +90,8 @@ class _EditOverlay(QWidget):
             p.drawText(geo.adjusted(10, 6, -10, -6), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft,
                        zone.key.upper())
         for key, widget in area._items.items():   # öğeler: tutamaksız (yalnız taşınır) ince kesikli çerçeve
+            if not area._item_editable(key):
+                continue
             geo = widget.geometry()                # + anahtar etiketi -- yoksa düzen modunda görünmez hedef olurlar
             if not area._visible.get(key, True):
                 _paint_ghost(p, geo, key.upper())
@@ -188,7 +191,8 @@ class WorkArea(QWidget):
         self.edit_bar.setStyleSheet(f"#editBar {{ background: {theme.INK}; border-radius: 8px; }}")
         self.edit_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         bar = QHBoxLayout(self.edit_bar); bar.setContentsMargins(14, 6, 10, 6); bar.setSpacing(10)
-        info = QLabel("DÜZEN MODU · bölgeyi sürükle, kenarlardan serbestçe boyutlandır · Ctrl: ızgaraya yapıştır")
+        snap_key = "⌘/Ctrl" if sys.platform == "darwin" else "Ctrl"
+        info = QLabel(f"DÜZEN MODU · bölgeyi sürükle, kenarlardan serbestçe boyutlandır · {snap_key}: ızgaraya yapıştır")
         info.setFont(theme.font(fam, 10, 600, spacing_pct=108)); info.setStyleSheet(f"color: {theme.TOOLBAR_MUTED};")
         # Yazı boyutu kaydırıcısı (Görev 7): WorkArea AppSettings görmediği için kalıcı değeri kendi
         # BAŞINA bilmez -- yalnız fontScaleChanged yayar, MainWindow ayara yazıp apply_ui_settings ->
@@ -309,6 +313,12 @@ class WorkArea(QWidget):
         brand'e boş dize mi gerçek metin mi geçeceği için TEK yerden hesaplanır -- ikisi ayrışırsa (bkz.
         Görev 8 brief'i) HUD bandı yazı çizerken eski widget görünür kalır gibi bir tutarsızlık olmasın."""
         return FRAME_SPECS[self.frame_style], self.frame_visible and self._visible.get("frame_titles", True)
+
+    def _item_editable(self, key: str) -> bool:
+        """Bandın çizdiği başlıkların eski widget'ları düzen hedefi değildir; gözleri korunur."""
+        spec, titles_on = self._chrome_state()
+        return not (titles_on and ((key == "brand" and spec.draws_brand)
+                                   or (key == "presenter" and spec.draws_presenter)))
 
     def _apply_chrome(self) -> None:
         """Etkin çerçeve stili sunucu adını/markayı KENDİSİ çiziyorsa (FrameSpec.draws_presenter/
@@ -607,7 +617,9 @@ class WorkArea(QWidget):
 
         Son adım (`placed` verilmişse): aynı turda konmuş bir düğmeyle çakışma varsa sola kaydır --
         bkz. _free_eye_x ve _sync_eye_buttons."""
-        btn = self._eye_buttons.setdefault(key, self._make_eye_button(key))
+        if key not in self._eye_buttons:
+            self._eye_buttons[key] = self._make_eye_button(key)
+        btn = self._eye_buttons[key]
         x = geo.right() - EYE_SIZE
         y = geo.top() - EYE_SIZE
         if y < 0:
@@ -692,8 +704,8 @@ class WorkArea(QWidget):
         # sırasını elle senkron tutmaya dayanmaz, ileride biri değişip diğeri değişmezse bile görüneni
         # yansıtmaya devam eder.
         for key in sorted(self._items, key=lambda k: stacking.index(self._items[k]), reverse=True):
-            if not self._visible.get(key, True):
-                continue                                    # gizli öğe yokmuş gibi davranılır, sürüklenmez
+            if not self._item_editable(key) or not self._visible.get(key, True):
+                continue                                    # gizli/banda taşınmış öğe sürüklenmez
             if self._items[key].geometry().contains(pos):
                 return key, "move"
         return zone_fallback
@@ -721,7 +733,7 @@ class WorkArea(QWidget):
             super().mouseMoveEvent(e); return
         key, mode, start, geo = self._drag
         d = pos - start
-        self._snap_active = bool(e.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        self._snap_active = bool(e.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier))
         x, y, w, h = geo.x(), geo.y(), geo.width(), geo.height()
         if mode == "move":
             x += d.x(); y += d.y()
@@ -744,10 +756,14 @@ class WorkArea(QWidget):
                 h = lm.MIN_FREE_H
         if key in self._zones:                                # canlı kırpma: tahtadan dışarı sürüklenemez
             inner = self.inner_rect()
-            w = min(w, inner.width())
-            h = min(h, inner.height())
-            x = max(inner.x(), min(x, inner.x() + inner.width() - w))
-            y = max(inner.y(), min(y, inner.y() + inner.height() - h))
+            if mode == "move":
+                w = min(w, inner.width())
+                h = min(h, inner.height())
+                x = max(inner.x(), min(x, inner.x() + inner.width() - w))
+                y = max(inner.y(), min(y, inner.y() + inner.height() - h))
+            else:
+                # Boyutlandırmada taşanı kes; tüm kutuyu kaydırmak karşı kenarı da oynatır.
+                x, y, w, h = QRect(x, y, w, h).intersected(inner).getRect()
         else:                                                  # öğeler sahneye göre kırpılır (inner_rect
             stage = self.stage_rect()                          # DEĞİL: marka/logo bandın üstünde durur)
             w = min(w, stage.width())
@@ -767,7 +783,7 @@ class WorkArea(QWidget):
         if key in self._zones:
             inner = self.inner_rect()
             g = self._zones[key].geometry()
-            ctrl = bool(e.modifiers() & Qt.KeyboardModifier.ControlModifier)
+            ctrl = bool(e.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier))
             to_geom = lm.snap_rect if ctrl else lm.free_rect
             self._layout[key] = to_geom(g.x() - inner.x(), g.y() - inner.y(), g.width(), g.height(),
                                         inner.width(), inner.height(), theme.GRID_GAP)

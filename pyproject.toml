@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Grafik tablet ile ders anlatım ve kayıt uygulaması (görünüş demosu)"
 requires-python = ">=3.11"
 dependencies = [
-  "PyQt6>=6.6",
+  "PyQt6>=6.8",
   "opencv-python>=4.8",
   "numpy>=1.26",
   "openpyxl>=3.1",

@@ -168,3 +168,30 @@ def test_pending_close_refuses_dialog_without_recording_permission(window, monke
     getattr(window, "open_" + kind)()
     assert asked == []
     window._close_after_save = False
+
+
+def test_record_result_status_shows_filename_without_user_directory(window, tmp_path):
+    path = tmp_path / "ozel_kullanici" / "ders_01.mp4"
+    window.recorder.capture_fps = 29.6
+    window._report_record_result(path, None)
+    text = window.work_area.status_label.text()
+    assert text == "Kayıt kaydedildi: ders_01.mp4 · yakalama ~30 kare/sn"
+    assert str(path.parent) not in text
+
+
+def test_closing_summary_keeps_full_record_path(window, monkeypatch, tmp_path):
+    path = tmp_path / "ozel_kullanici" / "ders_01.mp4"
+    shown = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda box: shown.append(box.text()))
+    window._show_closing_summary(path, None)
+    assert len(shown) == 1 and str(path) in shown[0]
+
+
+def test_record_warning_keeps_full_path_off_scene(window, monkeypatch, tmp_path):
+    path = tmp_path / "ozel_kullanici" / "ders_01.mp4"
+    posted = []
+    window.recorder.audio_error = "Mikrofon kesildi"
+    monkeypatch.setattr(error_notice, "post", lambda *a, **k: posted.append((a, k)))
+    window._report_record_result(path, None)
+    assert len(posted) == 1 and str(path) in posted[0][0][1]
+    assert "ozel_kullanici" not in window.work_area.status_label.text()

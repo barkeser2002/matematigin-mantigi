@@ -867,7 +867,7 @@ class MainWindow(QMainWindow):
             return
         if path is not None:
             details = self._record_details()
-            self.work_area.set_status(f"Kayıt kaydedildi: {path}" + (" · " + " · ".join(details) if details else ""))
+            self.work_area.set_status(f"Kayıt kaydedildi: {Path(path).name}" + (" · " + " · ".join(details) if details else ""))
         # Her kaydın uyarısı kendi anahtarıyla: aynı anahtar oturumda bir kez gösterilir.
         where = f"Kayıt kaydedildi: {path}\n" if path is not None else ""
         if audio_err:

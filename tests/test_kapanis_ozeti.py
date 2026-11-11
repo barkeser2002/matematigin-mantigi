@@ -11,7 +11,6 @@ import pytest
 CHILD = r'''
 import errno, json, os, sys, threading
 from pathlib import Path
-from PyQt6 import sip
 from PyQt6.QtCore import QPoint, QRect, QSettings, QTimer
 from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox
 from matematigin_mantigi import app as app_mod
@@ -31,7 +30,6 @@ watchdog = threading.Timer(30, lambda: (print("ZAMAN_ASIMI", flush=True), os._ex
 watchdog.daemon = True
 watchdog.start()
 real_build = app_mod.build_window
-answered = set()
 stray = []
 
 
@@ -59,8 +57,9 @@ def answer_modals():
     özetle silinir; kapanan pencerenin altında yeniden açılmamalı). Özetin metni ayrıntı bölümüyle birlikte basılır;
     'agir' senaryosunda özetin ekrana sığıp sığmadığı ayrıntı kapalıyken ve açıkken ölçülür."""
     m = QApplication.activeModalWidget()
-    if isinstance(m, QMessageBox) and m.isVisible() and sip.unwrapinstance(m) not in answered:
-        answered.add(sip.unwrapinstance(m))
+    if isinstance(m, QMessageBox) and m.isVisible() and not m.property("_test_answered"):
+        # Silinen kutunun C++ adresi yeni özete verilebilir; işaret kutunun ömrüyle sınırlı kalmalı.
+        m.setProperty("_test_answered", True)
         out("MODAL " + json.dumps(m.text() + ("\n" + m.detailedText() if m.detailedText() else "")))
         stop = [b for b in m.buttons() if b.text() == STOP_AND_QUIT]
         if stop:

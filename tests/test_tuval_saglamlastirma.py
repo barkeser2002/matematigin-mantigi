@@ -13,6 +13,7 @@ def safe_window(window, monkeypatch):
     yield window
     window.webcam_panel.shutdown()
 
+from matematigin_mantigi.core.models import Tool
 from matematigin_mantigi.ui.canvas import DrawingCanvas
 
 
@@ -113,3 +114,65 @@ def test_hint_double_click_is_one_toggle_in_both_directions(safe_window, qtbot):
     assert not card._fade_timer.isActive()
     effect = card.text_label.graphicsEffect()
     assert isinstance(effect, QGraphicsBlurEffect) and effect.blurRadius() == 9
+
+
+def tablet_event(canvas, kind, x, y, button, buttons, pressure=0.8):
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtGui import QInputDevice, QPointingDevice, QTabletEvent
+    from PyQt6.QtWidgets import QApplication
+    stylus = QPointingDevice("test-stylus", 1, QInputDevice.DeviceType.Stylus,
+                            QPointingDevice.PointerType.Pen,
+                            QInputDevice.Capability.Position | QInputDevice.Capability.Pressure, 1, 1)
+    pos = QPointF(x, y)
+    event = QTabletEvent(getattr(QEvent.Type, kind), stylus, pos,
+                         QPointF(canvas.mapToGlobal(pos.toPoint())), pressure,
+                         0., 0., 0., 0., 0., Qt.KeyboardModifier.NoModifier, button, buttons)
+    QApplication.sendEvent(canvas, event)
+
+
+@pytest.mark.parametrize("buttons", [Qt.MouseButton.NoButton, Qt.MouseButton.RightButton])
+def test_tablet_hover_ends_stroke_when_release_is_missed(qtbot, buttons):
+    canvas = make_canvas(qtbot)
+    tablet_event(canvas, "TabletPress", 40, 40, Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton)
+    finished = []
+    canvas.strokeFinished.connect(lambda: finished.append(True))
+    tablet_event(canvas, "TabletMove", 200, 200, Qt.MouseButton.NoButton, buttons)
+    assert finished == [True]
+    assert not canvas._tablet_down
+    assert canvas._last is None
+    assert canvas.strokes_image().pixelColor(100, 100).alpha() == 0
+    # Artık tablet sahipliği yok; fare geri dönüşü yeniden çizim yapabilir.
+    from PyQt6.QtCore import QPoint
+    qtbot.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=QPoint(250, 100))
+    assert canvas.strokes_image().pixelColor(250, 100).alpha() > 0
+
+
+@pytest.mark.parametrize("target_tool", [Tool.ERASER, Tool.CLICK, Tool.TEXT])
+@pytest.mark.parametrize("source", ["tablet", "mouse", "api"])
+def test_tool_change_closes_open_stroke(qtbot, target_tool, source):
+    from PyQt6.QtCore import QPoint
+    canvas = make_canvas(qtbot)
+    if source == "tablet":
+        tablet_event(canvas, "TabletPress", 40, 40, Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton)
+    elif source == "mouse":
+        qtbot.mousePress(canvas, Qt.MouseButton.LeftButton, pos=QPoint(40, 40))
+    else:
+        canvas.begin_stroke(QPointF(40, 40), .8)
+    finished = []
+    canvas.strokeFinished.connect(lambda: finished.append(True))
+    canvas.set_tool(target_tool)
+    assert finished == [True]
+    assert not canvas._tablet_down and not canvas._mouse_down
+    canvas.extend_stroke(QPointF(200, 200), .8)
+    assert canvas.strokes_image().pixelColor(100, 100).alpha() == 0
+
+
+def test_tablet_side_button_release_does_not_cut_tip_stroke(qtbot):
+    canvas = make_canvas(qtbot)
+    tablet_event(canvas, "TabletPress", 40, 40, Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton)
+    tablet_event(canvas, "TabletRelease", 40, 40, Qt.MouseButton.RightButton, Qt.MouseButton.LeftButton)
+    assert canvas._tablet_down
+    tablet_event(canvas, "TabletMove", 160, 160, Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton)
+    tablet_event(canvas, "TabletRelease", 160, 160, Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton, pressure=0.)
+    assert canvas.strokes_image().pixelColor(100, 100).alpha() > 0
+    assert not canvas._tablet_down

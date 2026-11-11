@@ -87,6 +87,10 @@ class DrawingCanvas(QWidget):
 
     # --- public state --------------------------------------------------------
     def set_tool(self, t: Tool) -> None:
+        if t != self.tool:
+            self._tablet_down = self._mouse_down = False
+            if self._last is not None:
+                self.end_stroke()
         if t != Tool.TEXT and self.text_edit.isVisible():
             self.commit_text()
         self.tool = t
@@ -402,9 +406,13 @@ class DrawingCanvas(QWidget):
         elif t == QEvent.Type.TabletMove:
             self.pressureChanged.emit(e.pressure())
             if self._tablet_down:
-                self.extend_stroke(e.position(), e.pressure())
+                if e.buttons() & Qt.MouseButton.LeftButton:
+                    self.extend_stroke(e.position(), e.pressure())
+                else:
+                    self._tablet_down = False
+                    self.end_stroke()
         elif t == QEvent.Type.TabletRelease:
-            if self._tablet_down:
+            if self._tablet_down and not (e.buttons() & Qt.MouseButton.LeftButton):
                 self._tablet_down = False
                 self.end_stroke()
         else:

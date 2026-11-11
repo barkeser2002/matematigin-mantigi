@@ -198,6 +198,20 @@ class DrawingCanvas(QWidget):
         self.update()
         self.historyChanged.emit(self.can_undo(), True)
 
+    def reset_board(self) -> None:
+        """Yeni soru için mürekkebi, geçici araçları ve soru içi geçmişi sıfırla."""
+        self.cancel_text()
+        self._tablet_down = self._mouse_down = False
+        self._last = self._raw_last = self._shape_start = None
+        self._laser_timer.stop()
+        self._laser_alpha = 1.0
+        self._strokes.fill(Qt.GlobalColor.transparent)
+        self._overlay.fill(Qt.GlobalColor.transparent)
+        self._stroke_count = 0
+        self._undo.clear()
+        self.update()
+        self.historyChanged.emit(False, True)
+
     def _push_undo(self) -> None:
         self._undo.append((self._strokes.copy(), self._stroke_count))
 

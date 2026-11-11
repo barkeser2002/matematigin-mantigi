@@ -383,8 +383,7 @@ class MainWindow(QMainWindow):
     def _on_question_leaving(self, i: int) -> bool:
         if not self._save_board(i):
             return False
-        self.canvas.cancel_text()
-        self.canvas.clear()
+        self.canvas.reset_board()
         self._last_snapshot = None
         return True
 
@@ -926,8 +925,7 @@ class MainWindow(QMainWindow):
                 return
 
         else:
-            self.canvas.cancel_text()
-            self.canvas.clear()
+            self.canvas.reset_board()
             self._last_snapshot = None
         self.flow.set_questions(list(questions))
         if self.flow.questions:

@@ -176,3 +176,29 @@ def test_tablet_side_button_release_does_not_cut_tip_stroke(qtbot):
     tablet_event(canvas, "TabletRelease", 160, 160, Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton, pressure=0.)
     assert canvas.strokes_image().pixelColor(100, 100).alpha() > 0
     assert not canvas._tablet_down
+
+
+@pytest.mark.parametrize("size", [(1920, 1080), (1366, 768)])
+@pytest.mark.parametrize("cover", ["hint", "camera"])
+def test_text_editor_is_above_cards_and_camera_without_moving_ink(safe_window, qtbot, size, cover):
+    from PyQt6.QtCore import QPoint
+    window = safe_window
+    window.resize(*size)
+    qtbot.waitUntil(lambda: window.size() == QSize(*size))
+    canvas = window.canvas
+    covered = window.hint_zone.cards[0] if cover == "hint" else window.webcam_panel
+    pos = QPointF(canvas.mapFromGlobal(covered.mapToGlobal(covered.rect().center())))
+    canvas.begin_text(pos)
+    editor = canvas.text_edit
+    editor.setText("x = 42")
+    hit = editor.mapTo(window.work_area, QPoint(12, editor.height() // 2))
+    assert window.work_area.childAt(hit) is editor
+    # Kutu kardeş katmana taşınsa da giriş ve mürekkep tuval koordinatındadır.
+    assert canvas.mapFromGlobal(editor.mapToGlobal(QPoint(0, editor.height() // 2))) == pos.toPoint()
+    reference = make_canvas(qtbot)
+    reference.resize(canvas.strokes_image().deviceIndependentSize().toSize())
+    qtbot.waitUntil(lambda: reference.strokes_image().size() == canvas.strokes_image().size())
+    reference.draw_text(pos, "x = 42")
+    qtbot.keyClick(editor, Qt.Key.Key_Return)
+    assert not editor.isVisible()
+    assert canvas.strokes_image() == reference.strokes_image()

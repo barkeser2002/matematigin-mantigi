@@ -225,6 +225,10 @@ class DrawingCanvas(QWidget):
         if self.text_edit.isVisible():
             self.commit_text()
         self._text_pos = pos
+        # Tuval altta kalır; editör kartlar ve kamera ile aynı yığında olmalı.
+        host = self.parentWidget() if self.mirror is not None else self
+        if self.text_edit.parentWidget() is not host:
+            self.text_edit.setParent(host)
         px = text_pixel_size(self.base_width)
         f = QFont(self.font()); f.setPixelSize(px); f.setWeight(QFont.Weight(600))
         self.text_edit.setFont(f)
@@ -233,7 +237,8 @@ class DrawingCanvas(QWidget):
         self.text_edit.clear()
         self.text_edit.setMinimumWidth(min(480, max(220, self.width() - int(pos.x()) - 8)))
         self.text_edit.adjustSize()
-        self.text_edit.move(int(pos.x()), int(pos.y()) - self.text_edit.height() // 2)
+        anchor = self.mapTo(host, pos.toPoint())
+        self.text_edit.move(anchor.x(), anchor.y() - self.text_edit.height() // 2)
         self.text_edit.show(); self.text_edit.raise_(); self.text_edit.setFocus()
 
     def commit_text(self) -> None:

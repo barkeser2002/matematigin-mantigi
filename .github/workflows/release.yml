@@ -3,9 +3,28 @@ name: Release (Windows + macOS)
 # main'e her push'ta Windows .exe ve macOS .app üretir, ikisini bir GitHub Release'e ekler.
 # Elle de çalıştırılabilir (Actions > Release > Run workflow). Daldan elle çalıştırılırsa yalnız derler
 # (artifact'ler run sayfasında); Release yalnız main'den yayınlanır. Sürümler constraints.txt'ten gelir.
+#
+# Yalnız belge/grafik dosyaları değişen push release üretmez (paths-ignore). Push'taki değişikliklerden
+# BİRİ bile bu listenin dışındaysa (src/, tests/, constraints.txt, workflow, spec...) release yine çıkar:
+# README ile kod aynı push'ta gelirse derleme çalışır. workflow_dispatch bundan etkilenmez.
+# Görsel uzantıları bilerek yalnız kök dizinde ve docs/ altında yok sayılır: sorular_gorsel/*.png pakete girer.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "graphify-out/**"
+      - "uploads/**"
+      - "*.dc.html"
+      - "image-slot.js"
+      - "support.js"
+      - "*.png"
+      - "*.jpg"
+      - "*.jpeg"
+      - "*.gif"
+      - "*.svg"
+      - "*.webp"
   workflow_dispatch:
 
 permissions:

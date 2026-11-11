@@ -867,7 +867,7 @@ class MainWindow(QMainWindow):
             return
         if path is not None:
             details = self._record_details()
-            self.work_area.set_status(f"Kayıt kaydedildi: {path}" + (" · " + " · ".join(details) if details else ""))
+            self.work_area.set_status(f"Kayıt kaydedildi: {Path(path).name}" + (" · " + " · ".join(details) if details else ""))
         # Her kaydın uyarısı kendi anahtarıyla: aynı anahtar oturumda bir kez gösterilir.
         where = f"Kayıt kaydedildi: {path}\n" if path is not None else ""
         if audio_err:
@@ -894,8 +894,20 @@ class MainWindow(QMainWindow):
         self.canvas.set_pen_settings(p)
         self.question_zone.set_reading_ms(p.reading_ms)
 
+    def _confirm_recorded_dialog(self) -> bool:
+        if self.recorder.state is not RecorderState.RECORDING:
+            return True
+        allowed = QMessageBox.question(
+            self, "Kayıt sürüyor",
+            "Bu pencere kayda girer (editör cevapları gösterir). Yine de açılsın mı?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        ) == QMessageBox.StandardButton.Yes
+        # Sorunun modal olay döngüsünde kapanış başlatılmış olabilir.
+        return allowed and not self._close_after_save
+
     def open_settings(self) -> None:
-        if self._refuse_while_closing(self.toolbar.settings_button):
+        if self._refuse_while_closing(self.toolbar.settings_button) or not self._confirm_recorded_dialog():
             return
         dlg = SettingsDialog(self.settings, self.fam, self)
         dlg.applied.connect(self.apply_settings_values)
@@ -906,6 +918,8 @@ class MainWindow(QMainWindow):
             return
         if self.questions_path is None:
             QMessageBox.information(self, "Soru editörü", "Soru dosyası tanımlı değil.")
+            return
+        if not self._confirm_recorded_dialog():
             return
         dlg = QuestionEditorDialog(self.flow.questions, self.questions_path, self.fam, self,
                                    from_file=self.questions_from_file,

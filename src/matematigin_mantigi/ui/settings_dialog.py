@@ -238,7 +238,22 @@ class SettingsDialog(QDialog):
         self.cancel_button.clicked.connect(self.reject); self.apply_button.clicked.connect(self._apply)
         buttons.addWidget(self.cancel_button); buttons.addWidget(self.apply_button)
         root.addLayout(buttons)
+        # Yardımcı düğmeler odak alınca Enter'ın hedefini değiştirmesin.
+        for button in self.findChildren(QPushButton):
+            button.setAutoDefault(False)
+        self.apply_button.setDefault(True)
         self._fit_to_screen()
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            widget = self.focusWidget()
+            while widget is not None and widget is not self:
+                # Metin düzenleme / seçim onayı, pencereyi uygulayıp kapatma değildir.
+                if isinstance(widget, (QLineEdit, QComboBox)):
+                    event.accept()
+                    return
+                widget = widget.parentWidget()
+        super().keyPressEvent(event)
 
     def _fit_to_screen(self) -> None:
         """Yükseklik: içerik kadar, ama ekranın kullanılabilir alanını aşmaz."""

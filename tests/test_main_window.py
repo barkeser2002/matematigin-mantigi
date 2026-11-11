@@ -460,7 +460,8 @@ def test_microphone_cut_warning_reaches_the_notice_box_not_the_board(window, qtb
     qtbot.waitUntil(lambda: tb.record_button.isEnabled(), timeout=20000)
     assert rec.audio_error and "Mikrofon kayıt sırasında kesildi" in rec.audio_error, rec.audio_error
     text = window.work_area.status_label.text()
-    assert text.startswith(f"Kayıt kaydedildi: {rec.last_path}") and rec.audio_error not in text, text
+    assert text.startswith(f"Kayıt kaydedildi: {rec.last_path.name}") and str(rec.last_path.parent) not in text
+    assert rec.audio_error not in text, text
     sound = [p for p in posted if rec.audio_error in p[1]]
     assert len(sound) == 1 and str(rec.last_path) in sound[0][1], posted
     # Kodlayıcı yine de geri kaldıysa görüntü uyarısı kendi kutusunda gelir (ses uyarısına karışmaz).

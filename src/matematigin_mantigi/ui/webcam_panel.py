@@ -198,9 +198,9 @@ class WebcamPanel(Zone):
         açılmaz (yoksa her göz düğmesi tıklaması bir OS iş parçacığı + kamera kaynağı daha biriktirirdi)
         ve kullanıcıya durum gösterilir. Worker NESNESİ yine de tazedir -- self.worker asla emekli
         (silinmek üzere olan) bir nesneyi göstermez, bkz. __init__'teki DEĞİŞMEZ."""
-        if self.worker.isRunning():
-            if not self._stop_requested:
-                return                              # gerçekten sağlıklı çalışıyor: dokunma
+        if self.worker.isRunning() and not self._stop_requested:
+            return                                  # gerçekten sağlıklı çalışıyor: dokunma
+        if self._stop_requested:
             self._retire_worker(self.worker)
             self.worker = self._make_worker(self._source_factory)
         self._stop_requested = False                # buradan sonra self.worker ya taze ya da durmuş

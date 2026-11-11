@@ -77,3 +77,20 @@ def test_stop_during_open_does_not_resume_frame_delivery(qtbot):
     finally:
         proceed.set()
         stop(worker)
+
+
+def test_panel_restarts_after_clean_shutdown(qtbot):
+    panel = panel_for(qtbot, Camera())
+    frames = []
+    panel.frameReady.connect(frames.append)
+    try:
+        panel.start()
+        qtbot.waitUntil(lambda: len(frames) > 0)
+        panel.shutdown()
+        count = len(frames)
+        panel.start()
+        qtbot.waitUntil(lambda: len(frames) > count, timeout=1000)
+        assert panel.worker.isRunning()
+    finally:
+        panel.shutdown()
+        stop(panel.worker)

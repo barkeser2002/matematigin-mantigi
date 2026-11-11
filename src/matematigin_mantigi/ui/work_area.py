@@ -748,10 +748,14 @@ class WorkArea(QWidget):
                 h = lm.MIN_FREE_H
         if key in self._zones:                                # canlı kırpma: tahtadan dışarı sürüklenemez
             inner = self.inner_rect()
-            w = min(w, inner.width())
-            h = min(h, inner.height())
-            x = max(inner.x(), min(x, inner.x() + inner.width() - w))
-            y = max(inner.y(), min(y, inner.y() + inner.height() - h))
+            if mode == "move":
+                w = min(w, inner.width())
+                h = min(h, inner.height())
+                x = max(inner.x(), min(x, inner.x() + inner.width() - w))
+                y = max(inner.y(), min(y, inner.y() + inner.height() - h))
+            else:
+                # Boyutlandırmada taşanı kes; tüm kutuyu kaydırmak karşı kenarı da oynatır.
+                x, y, w, h = QRect(x, y, w, h).intersected(inner).getRect()
         else:                                                  # öğeler sahneye göre kırpılır (inner_rect
             stage = self.stage_rect()                          # DEĞİL: marka/logo bandın üstünde durur)
             w = min(w, stage.width())

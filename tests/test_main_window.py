@@ -411,7 +411,7 @@ def test_real_recorder_with_audio_muxes_and_cleans_up(window, qtbot, tmp_path):
     import numpy as np
     import pytest
     from matematigin_mantigi.core.recorder import MssFfmpegRecorder, find_ffmpeg
-    from tests.test_recorder import FakeAudioCapture, synthetic_grabber
+    from tests.test_recorder import FakeAudioCapture, small_synthetic_grabber as synthetic_grabber
     if find_ffmpeg() is None:
         pytest.skip("ffmpeg yok")
     window.settings.audio_device = "Sahte Mikrofon"          # apply_ui_settings bunu kaydediciye taşır
@@ -664,7 +664,7 @@ def test_notice_box_open_when_recording_starts_is_not_in_the_first_frame(window,
     import pytest
     from matematigin_mantigi.core.recorder import MssFfmpegRecorder, find_ffmpeg
     from matematigin_mantigi.ui import error_notice
-    from tests.test_recorder import stepping_clock, synthetic_grabber
+    from tests.test_recorder import stepping_clock, small_synthetic_grabber as synthetic_grabber
     if find_ffmpeg() is None:
         pytest.skip("ffmpeg yok")
     shown = _capture_modals(monkeypatch)
@@ -860,7 +860,7 @@ def test_r_before_the_stop_result_reaches_the_window_starts_nothing(window, qtbo
     import threading
     import pytest
     from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState, find_ffmpeg
-    from tests.test_recorder import stepping_clock, synthetic_grabber, wait_until
+    from tests.test_recorder import stepping_clock, small_synthetic_grabber as synthetic_grabber, wait_until
     if find_ffmpeg() is None:
         pytest.skip("ffmpeg yok")
     rec = window.recorder = MssFfmpegRecorder(lambda: tmp_path / "rec", fps=10, grabber=synthetic_grabber,
@@ -898,7 +898,7 @@ def test_exception_while_saving_is_shown_and_window_does_not_stay_locked(window,
     import pytest
     from PyQt6.QtWidgets import QMessageBox
     from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState, find_ffmpeg
-    from tests.test_recorder import capture_logged, stepping_clock, synthetic_grabber, wait_until
+    from tests.test_recorder import capture_logged, stepping_clock, small_synthetic_grabber as synthetic_grabber, wait_until
     if find_ffmpeg() is None:
         pytest.skip("ffmpeg yok")
     shown = []
@@ -2133,7 +2133,7 @@ def test_capture_area_change_without_window_resize_stops_recording(window, qtbot
 def test_geometry_interrupt_waits_for_real_recorder_finalization(window, qtbot, monkeypatch, tmp_path, confirm_silent_recording):
     from PyQt6.QtWidgets import QMessageBox
     from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState, find_ffmpeg
-    from tests.test_recorder import synthetic_grabber
+    from tests.test_recorder import small_synthetic_grabber as synthetic_grabber
     if not find_ffmpeg():
         pytest.skip("ffmpeg bulunamadı")
     messages = []

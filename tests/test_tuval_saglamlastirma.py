@@ -67,3 +67,49 @@ def test_question_transition_discards_only_old_question_history(safe_window, qtb
     canvas.clear()
     canvas.undo()
     assert canvas.strokes_image().pixelColor(100, 100).alpha() > 0
+
+
+@pytest.mark.parametrize("mode_name", ["BLUR", "REDACT"])
+def test_hiding_hint_cancels_pending_reveal_animation(qtbot, mode_name):
+    from PyQt6.QtWidgets import QGraphicsBlurEffect
+    from matematigin_mantigi.core.models import HintMaskMode
+    from matematigin_mantigi.ui.hint_zone import HintCard
+    from matematigin_mantigi.ui.theme import FontFamilies
+
+    card = HintCard("Gizli cevap", FontFamilies("Arial", "Arial", False))
+    qtbot.addWidget(card)
+    card.apply(HintMaskMode.BLUR, False, False)
+    card.apply(HintMaskMode.BLUR, True, False, anim_ms=300)
+    assert card._fade_timer.isActive()
+    mode = getattr(HintMaskMode, mode_name)
+    card.apply(mode, False, False)
+    assert not card._fade_timer.isActive()
+    # Durdurmadan hemen önce kuyruğa girmiş bir timeout da maskeyi açamaz.
+    card._fade_timer.timeout.emit()
+    assert not card.revealed
+    effect = card.text_label.graphicsEffect()
+    if mode == HintMaskMode.BLUR:
+        assert isinstance(effect, QGraphicsBlurEffect) and effect.blurRadius() == 9
+    else:
+        assert effect is None and "color:" in card.text_label.styleSheet()
+
+
+def test_hint_double_click_is_one_toggle_in_both_directions(safe_window, qtbot):
+    from PyQt6.QtWidgets import QGraphicsBlurEffect
+    window = safe_window
+    card = window.hint_zone.cards[0]
+    clicks = []
+    card.clicked.connect(lambda: clicks.append(True))
+    for expected in (True, False):
+        before = len(clicks)
+        # Qt dizisi: press/release, double-click/release. QWidget varsayılanı
+        # double-click'i ikinci mousePressEvent'e yönlendirir.
+        qtbot.mouseClick(card, Qt.MouseButton.LeftButton)
+        qtbot.mouseDClick(card, Qt.MouseButton.LeftButton)
+        qtbot.mouseRelease(card, Qt.MouseButton.LeftButton)
+        assert len(clicks) == before + 1
+        assert card.revealed is expected
+        assert window.flow.is_revealed(0) is expected
+    assert not card._fade_timer.isActive()
+    effect = card.text_label.graphicsEffect()
+    assert isinstance(effect, QGraphicsBlurEffect) and effect.blurRadius() == 9

@@ -44,6 +44,12 @@ class OpenCvSource:
                 for backend in backends:              # DSHOW hızlı açılır; olmazsa varsayılan (MSMF/AVFoundation)
                     cap = cv2.VideoCapture(index, backend)
                     if cap.isOpened():
+                        # İstek niteliğinde: desteklemeyen sürücünün kendi çözünürlüğüyle devam et.
+                        for prop, value in ((cv2.CAP_PROP_FRAME_WIDTH, 1280), (cv2.CAP_PROP_FRAME_HEIGHT, 720)):
+                            try:
+                                cap.set(prop, value)
+                            except cv2.error:
+                                pass
                         ok, frame = cap.read()        # açılan ama kare vermeyen sürücüleri ele
                         if ok and frame is not None:
                             self._cap = cap
@@ -175,7 +181,7 @@ class CameraWorker(QThread):
         return False
 
     def _deliver(self, frame: np.ndarray) -> None:
-        frame = resize_to_width(frame, self._out_width)
+        frame = resize_to_width(frame, min(self._out_width, int(frame.shape[1])))
         try:
             self._maybe_calibrate(frame)
         except Exception as err:  # noqa: BLE001 - ton ölçülemezse eski ton kalır; kare yine gösterilir

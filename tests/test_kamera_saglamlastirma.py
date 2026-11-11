@@ -1,6 +1,9 @@
 """Kamera sağlamlaştırması: donanımsız, açıkça durdurulan iş parçacıkları."""
 from threading import Event
 
+import cv2
+import pytest
+
 import numpy as np
 from PyQt6.QtGui import QImage
 
@@ -91,7 +94,8 @@ def test_panel_start_acknowledges_launch_without_waiting_for_driver(qtbot):
     panel = panel_for(qtbot, Opening())
     try:
         panel.start()
-        assert entered.is_set(), "start döndüğünde işçi açılış aşamasına ulaşmalı"
+        assert panel.worker.launched.is_set(), "start döndüğünde işçi run aşamasına ulaşmalı"
+        qtbot.waitUntil(entered.is_set)
         assert not proceed.is_set(), "start sürücünün açılmasını beklememeli"
     finally:
         proceed.set()
@@ -116,7 +120,8 @@ def test_panel_restarts_after_clean_shutdown(qtbot):
         stop(panel.worker)
 
 
-def test_dropout_reconnects_same_source_and_clears_both_views(qtbot, monkeypatch):
+@pytest.mark.parametrize("failure", ["missing", "exception"])
+def test_dropout_reconnects_same_source_and_clears_both_views(qtbot, monkeypatch, failure):
     monkeypatch.setattr(CameraWorker, "FRAME_TIMEOUT_MS", 60, raising=False)
 
     class Dropping(Camera):
@@ -133,6 +138,8 @@ def test_dropout_reconnects_same_source_and_clears_both_views(qtbot, monkeypatch
 
         def read(self):
             if self.lost.is_set() and self.opens == 1:
+                if failure == "exception":
+                    raise cv2.error("Kamera bağlantısı koptu")
                 return None
             return super().read()
 
@@ -212,6 +219,107 @@ def test_stop_interrupts_reconnect_backoff(qtbot, monkeypatch):
         qtbot.waitUntil(lambda: panel.view._frame is None)
         panel.worker.stop()
         assert panel.worker.wait(300), "stop yeniden deneme aralığını beklememeli"
+    finally:
+        panel.shutdown()
+        stop(panel.worker)
+
+
+@pytest.mark.parametrize("unsupported", [False, True])
+def test_capture_requests_hd_before_first_read_but_accepts_driver_fallback(monkeypatch, unsupported):
+    from matematigin_mantigi.ui.camera_worker import OpenCvSource
+
+    calls = []
+
+    class Capture:
+        def __init__(self, index, backend):
+            calls.append(("open", index))
+
+        def isOpened(self):
+            return True
+
+        def set(self, key, value):
+            calls.append((key, value))
+            if unsupported:
+                raise cv2.error("Çözünürlük desteklenmiyor")
+            return True
+
+        def read(self):
+            calls.append(("read",))
+            return True, np.zeros((240, 320, 3), np.uint8)
+
+        def release(self):
+            calls.append(("release",))
+
+    monkeypatch.setattr(cv2, "VideoCapture", Capture)
+    source = OpenCvSource(9)
+    try:
+        assert source.open()
+        assert calls[:4] == [("open", 9), (cv2.CAP_PROP_FRAME_WIDTH, 1280),
+                             (cv2.CAP_PROP_FRAME_HEIGHT, 720), ("read",)]
+        assert source.read().shape == (240, 320, 3)
+    finally:
+        source.release()
+
+
+def test_driver_fallback_frame_is_not_artificially_upscaled(qtbot):
+    camera = Camera()
+    worker = CameraWorker(camera, ChromaParams(), chroma_enabled=False, out_width=1200)
+    frames = []
+    worker.frameReady.connect(frames.append)
+    try:
+        worker.start()
+        qtbot.waitUntil(lambda: bool(frames))
+        assert frames[-1].width() == 160
+    finally:
+        stop(worker)
+
+
+def test_output_tracks_panel_physical_width_without_640_ceiling(qtbot, monkeypatch):
+    camera = Camera()
+    camera.frame = np.zeros((1080, 1920, 3), np.uint8)
+    panel = panel_for(qtbot, camera)
+    monkeypatch.setattr(panel, "devicePixelRatioF", lambda: 2.0)
+    panel.resize(600, 400)
+    panel.show()
+    try:
+        panel.start()
+        qtbot.waitUntil(lambda: panel.view._frame is not None and panel.view._frame.width() == 1200)
+        assert panel.view._frame.height() == 675
+        panel.resize(300, 300)
+        qtbot.waitUntil(lambda: panel.view._frame.width() == 600)
+    finally:
+        panel.shutdown()
+        stop(panel.worker)
+
+
+def test_larger_external_preview_controls_shared_frame_resolution(qtbot, monkeypatch):
+    from matematigin_mantigi.ui.main_window import _Preview
+
+    camera = Camera()
+    camera.frame = np.zeros((1080, 1920, 3), np.uint8)
+    panel = panel_for(qtbot, camera)
+    panel.resize(300, 300)
+    monkeypatch.setattr(panel, "devicePixelRatioF", lambda: 2.0)
+    preview = _Preview()
+    qtbot.addWidget(preview)
+    monkeypatch.setattr(preview, "devicePixelRatioF", lambda: 1.5)
+    preview.resize(900, 600)
+    panel.frameReady.connect(preview.set_frame)
+    panel.placeholderChanged.connect(preview.set_placeholder)
+    panel.show()
+    preview.show()
+    try:
+        panel.start()
+        qtbot.waitUntil(lambda: preview._frame is not None and preview._frame.width() == 1350)
+        assert panel.view._frame.width() == 1350
+        preview.resize(1000, 600)
+        qtbot.waitUntil(lambda: preview._frame.width() == 1500)
+        preview.hide()
+        qtbot.waitUntil(lambda: panel.view._frame.width() == 600)
+        preview.show()
+        qtbot.waitUntil(lambda: preview._frame.width() == 1500)
+        preview.close()
+        qtbot.waitUntil(lambda: panel.view._frame.width() == 600)
     finally:
         panel.shutdown()
         stop(panel.worker)

@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from typing import Callable
+from weakref import WeakSet, ref
 
-from PyQt6.QtCore import QRect, Qt, QTimer, pyqtSignal
+from PyQt6 import sip
+from PyQt6.QtCore import QEvent, QRect, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QMouseEvent, QPainter
 from PyQt6.QtWidgets import QLabel, QWidget
 
@@ -20,15 +22,36 @@ class CameraView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._frame: QImage | None = None
+        self._panel_ref = None
         self.placeholder_text = "Kamera bekleniyor…"
         self.raw_mode = False
         self.setToolTip("Yeşil perde ayarı: ⚙ Ayarlar")
 
+    def _observe_sender(self) -> None:
+        # Var olan frame/durum bağlantısı yeterli: harici görünüm de çözünürlük tüketicisidir.
+        panel = self.sender()
+        if isinstance(panel, WebcamPanel) and self is not panel.view:
+            self._panel_ref = ref(panel)
+            panel._consumers.add(self)
+            panel._update_output_width()
+
+    def event(self, event) -> bool:
+        result = super().event(event)
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.Show, QEvent.Type.Hide,
+                            QEvent.Type.DevicePixelRatioChange):
+            panel_ref = getattr(self, "_panel_ref", None)
+            panel = panel_ref() if panel_ref is not None else None
+            if panel is not None and not sip.isdeleted(panel):
+                panel._update_output_width()
+        return result
+
     def set_frame(self, img: QImage) -> None:
+        self._observe_sender()
         self._frame = img
         self.update()
 
     def set_placeholder(self, text: str) -> None:
+        self._observe_sender()
         self._frame = None
         self.placeholder_text = text
         self.update()
@@ -95,6 +118,7 @@ class WebcamPanel(Zone):
         # kalmaz (emeklilik hemen ardından taze bir worker kurar) -- aksi hâlde emeklinin finished sinyali
         # onu sildiğinde start()/shutdown()/set_source_factory() "wrapped C/C++ object ... has been deleted"
         # ile patlardı (kapanışta MainWindow.closeEvent dahil; review'da 3/3 üretildi).
+        self._consumers: WeakSet[CameraView] = WeakSet()
         self.worker = self._make_worker(source_factory)
         # GUI zamanlayıcısı read() sürücü içinde bloke olsa da eski kareyi kayıttan kaldırır.
         self._frame_watchdog = QTimer(self)
@@ -104,11 +128,29 @@ class WebcamPanel(Zone):
 
     def _make_worker(self, source_factory: Callable[[], FrameSource]) -> CameraWorker:
         w = CameraWorker(source_factory(), self._params, self.chroma_enabled, auto_key=self._auto_key, parent=self,
-                         open_retries=self.open_retries, reconnect=True)
+                         open_retries=self.open_retries, reconnect=True,
+                         out_width=self._output_width())
         w.frameReady.connect(self._on_frame)
         w.opened.connect(self._on_opened)
         w.cameraError.connect(self._on_error)
         return w
+
+    def _output_width(self) -> int:
+        widths = [64, round(self.width() * self.devicePixelRatioF())]
+        for view in self._consumers:
+            if not sip.isdeleted(view) and view.isVisible():
+                widths.append(round(view.width() * view.devicePixelRatioF()))
+        return max(widths)
+
+    def _update_output_width(self) -> None:
+        if hasattr(self, "worker"):
+            self.worker.set_out_width(self._output_width())
+
+    def event(self, event) -> bool:
+        result = super().event(event)
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.Show, QEvent.Type.DevicePixelRatioChange):
+            self._update_output_width()
+        return result
 
     def _on_stale_frame(self) -> None:
         if self.worker.isRunning() and not self._stop_requested:

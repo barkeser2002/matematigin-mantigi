@@ -30,13 +30,28 @@ ortalanır, artan yer koyu bant olur ve kayıt tam 16:9 çıkar; kapalıyken tü
 "AKILLI İPUÇLARI" başlığı, durum satırı, kamera etiketi, marka plakası, "gizle" bağlantısı, soru numarası, ekran
 çerçevesi, çerçeve sunucu/marka bantları, sunucu adı, logo, kayıt rozeti, soru/ipucu/webcam panelleri.
 
-Araçlar: kalem (5 kalınlık: 1/2/4/8/12 px), silgi, lazer (izi 1,5 sn'de sönerek kaybolur), yazı (tıkla, yaz,
+Araçlar (kısayol 1–6): kalem (5 kalınlık: 1/2/4/8/12 px), silgi, yazı (tıkla, yaz,
 Enter ile tahtaya işle, Esc iptal; punto kalınlık kademesine göre), şekil (sürükle; Şekil düğmesine tekrar basınca
-dikdörtgen → elips → üçgen → çizgi), Tıkla (6). Çizim araçlarında her basış tahtaya gider; mürekkep soru ve ipucu kartlarının üstünde, sadece webcam'in
+dikdörtgen → elips → üçgen → çizgi), lazer (izi 1,5 sn'de sönerek kaybolur), Tıkla. Çizim araçlarında her basış tahtaya gider; mürekkep soru ve ipucu kartlarının üstünde, sadece webcam'in
 altında görünür; kartı açmak,
 kamerayı değiştirmek veya düğmelere basmak için Tıkla aracına geçilir (ya da klavye: Enter, H, ←/→).
 İmleç araca göre ikon: renkli kurşun kalem (ucunda çizgi kalınlığı), silme alanı kadar silgi bloğu, kırmızı lazer
 noktası; tahtanın ve bölgelerin her yerinde geçerli.
+
+**Kalem ayarları** (araç çubuğundaki "Kalem" düğmesi, "Kalem, silgi & imleç" penceresi): basınç eğrisi, yumuşatma,
+min./maks. kalınlık ve **kalem ucu**. Uçlar yalnız kalem aracını etkiler: Yuvarlak (varsayılan, düz renk), Keçeli (düz
+uçlu, %85 opaklıkta, basınç etkisi yarıya iner), Tebeşir (dokulu çizgi). "Otomatik kaydet" anahtarı da buradadır.
+"Tanıma özellikleri · Yakında" kartındaki Matematik tanıma, Şekil düzeltme ve Ön tanımlı soru tanıma henüz yoktur:
+kutuları kilitlidir ve hiçbir tanıma yapılmaz. Pencerenin alttaki "Sabit örnek gösterim" bölümü canlı tanıma değil,
+sabit bir örnek resimdir.
+
+Çift ekran: ⚙ Ayarlar > Ekranlar'da **Tahta ekranı** (tahta o ekranda tam ekran açılır; XP-Pen'li ekran) ve **Kamera
+önizleme ekranı** (varsayılan: Kapalı) seçilir. Önizleme, ikinci ekranda ayrı küçük bir pencerede aynı kamera
+görüntüsünü gösterir; kamera kesilince iki yerdeki eski kare de kalkar. Yalnız ayrı, aynı ölçekli (devicePixelRatio)
+ekranlarda açılır; karma ölçekli ekranlar desteklenmez ve ekran düzeni ya da pencere konumu değişirse önizleme kapanır.
+Önizlemenin kayıt alanına girmeyeceği gerçek cihazda doğrulanmadı, garanti edilmez: araç çubuğundaki şerit bunu
+hatırlatır, ilk kayıtta sonucu kontrol edin. Kayıt sürerken ekran seçimi değiştirilemez. Ekranlar adı, üreticisi,
+modeli ve seri numarasıyla hatırlanır; bulunamayan ekranın seçimi silinmez, "bulunamadı veya belirsiz" diye görünür.
 
 Webcam: perde pikselleri saydam olur, kişi tahtanın ve çizimlerin üstüne biner. Perdeyi kaldırma ⚙ Ayarlar'dan
 açılıp kapanır (kameraya tıklamak değiştirmez). Yeşil perde kamera karesinin
@@ -109,8 +124,8 @@ Mac'te proje kökünde:
 
     bash mac/build_mac.sh
 
-Betik `.venv` kurar, tüm kütüphaneleri (`PyQt6, opencv-python, numpy, openpyxl, pymupdf, pytest, pyinstaller`)
-yükler, testleri koşar ve `dist/Matematiğin Mantığı.app` üretir. Kamera, mikrofon ve ekran kaydı izin metinleri
+Betik `.venv` kurar, kütüphaneleri `constraints.txt`'teki sabit sürümlerle (uygulama, PDF aktarımı, test,
+PyInstaller) yükler, testleri koşar ve `dist/Matematiğin Mantığı.app` üretir. Kamera, mikrofon ve ekran kaydı izin metinleri
 (`NSCameraUsageDescription` vb.) `mac/matematigin_mantigi.spec` içinde gömülüdür; ilk açılışta macOS izin sorar.
 Uygulama Apple tarafından onaylı değil (ad-hoc imzalı). Tarayıcıdan inen zip karantina işareti alır; açılmazsa ya da
 "hasarlı" derse `.app`'i Uygulamalar'a taşıyıp Terminal'de çalıştırın:
@@ -150,6 +165,9 @@ Yerelde: `powershell -ExecutionPolicy Bypass -File windows\build_win.ps1` — `.
 `main`'e her push'ta `.github/workflows/release.yml` **Windows `.exe`** ve **macOS `.app`** derler, ikisini bir
 GitHub Release'e (`build-<numara>`) ekler. Elle: Actions > **Release** > Run workflow (ya da `gh workflow run release.yml`).
 Bir daldan elle çalıştırılırsa yalnız derler, Release yayınlamaz (dalı main'e almadan önce iki platformu denemek için).
+Yalnız belge ya da görsel dosyaları (`*.md`, `docs/`, `graphify-out/`, `uploads/`, kök dizindeki resimler ve tasarım
+prototipleri) değişen push release üretmez; aynı push'ta tek bir kod ya da yapı dosyası (`src/`, `tests/`,
+`constraints.txt`, `sorular_gorsel/`, workflow...) varsa üretir.
 Yalnız Mac için `.github/workflows/mac.yml` de var. İndirdikten sonra Windows: klasörü kopyala, `.exe` çalıştır;
 macOS: zipi aç, `.app`'i Uygulamalar'a taşı; açılmazsa yukarıdaki `xattr -dr com.apple.quarantine` komutunu çalıştır
 (ya da Sistem Ayarları > Gizlilik ve Güvenlik > "Yine de Aç").
@@ -162,9 +180,10 @@ dosyayı değiştir, testleri koş, dalda iki platformu derle, sonra main'e al.
 
 - arm64 Python kullanın (`python3 -c "import platform; print(platform.machine())"` → arm64). PyQt6 universal2 wheel, macOS 14+.
 - Kamera izni terminal uygulamasına (Terminal/iTerm/VS Code) verilir: Sistem Ayarları > Gizlilik ve Güvenlik > Kamera.
-- Ekran kaydı izni (sonraki sürümdeki mss kaydedici için) aynı yerde "Ekran Kaydı".
+- Ekran kaydı izni (kayıt `mss` ile ekranı yakalar) aynı yerde "Ekran Kaydı"; verilmezse kare siyah gelir.
 - XP-Pen sürücüsünü kurun, Erişilebilirlik ve Giriş İzleme izinlerini verin; sürücü yoksa sadece fare olayları gelir.
-- Paketlenince (py2app/PyInstaller) Info.plist'e `NSCameraUsageDescription` eklenmeli.
+- Paketli `.app`'te kamera, mikrofon, ekran yakalama ve otomasyon izin metinleri `mac/matematigin_mantigi.spec`
+  içinde Info.plist'e gömülüdür.
 
 ## Windows (geliştirme makinesi)
 
@@ -183,7 +202,9 @@ KAYIT düğmesi (R) tahtayı (araç çubuğu hariç) `mss` ile yakalar, `ffmpeg`
 kurulum gerekmez) H.264 MP4 yazar: `oturum/<tarih-saat>/kayit_<saat>.mp4`. Kayda giren dikdörtgen 16:9 **sahnenin
 tamamı**dır: oran kilidi açıkken kenarlardaki koyu bantlar kayda GİRMEZ — bu yüzden tahtada görünür bırakılırlar,
 bandın üstüne düşen bir çizgi ya da öğe videoda olmaz. Varsayılan 60 fps ve 2K (1440p'ye
-ölçeklenir); ⚙ Ayarlar > Kayıt'tan 30/60 fps, Doğal/1080p/2K/4K ve mikrofon ("Ses aygıtlarını listele": PortAudio
+ölçeklenir). Görüntü bit hızı hedefi 1080p ve 30 fps'e kadar 5 Mbps, 60 fps'te 7 Mbps'tir (1,4 kat; arası doğrusal);
+başka çözünürlükte piksel alanıyla ölçeklenir (2K: yaklaşık 8,9 / 12,4 Mbps, 4K: 20 / 28 Mbps). Bu bir hedef ortalamadır,
+kodlayıcı içeriğe göre sapabilir. ⚙ Ayarlar > Kayıt'tan 30/60 fps, Doğal/1080p/2K/4K ve mikrofon ("Ses aygıtlarını listele": PortAudio
 aygıtları — Windows'ta en iyi host API, macOS'ta CoreAudio) seçilir. Süre araç çubuğundaki DURDUR düğmesinin altında sayar; tahtadaki
 "KAYIT · 00:00" rozeti varsayılan kapalıdır (kayda girer), Görünürlük'ten açılabilir.
 Kodlayıcı otomatik seçilir: macOS'ta VideoToolbox, Windows'ta NVENC/QSV/AMF, yoksa libx264 (ultrafast). Yakalama ayrı iş
@@ -191,15 +212,16 @@ parçacığında koşar; yakalama fps'nin altında kalırsa kareler çoğaltıl�
 Mikrofon ffmpeg'e değil, uygulama içinde PortAudio (sounddevice) ile alınır: ffmpeg'in avfoundation girişi tek
 tampon tutar ve video karesi geciktiğinde onu düşürür (cızırtı, birikince kayma). PortAudio geri çağrısı örnekleri
 dakikalarca yer olan bir kuyruğa koyar, ayrı iş parçacığı WAV yazar; ilk örneğin zamanı ölçülür. Durdurunca ffmpeg
-videoyu kopyalayıp sesi ölçülen farkla hizalar (48 kHz AAC 160 kb/s); ara `.video.mp4`/`.wav` dosyaları yalnız
-birleşik dosyanın süresi videonunkiyle aynı ölçülünce silinir (süre ffmpeg'in dosya başlığından okunur, 60 dakikalık
-derste de saniyenin altında). 10 dakikadan uzun kayıtlarda mikrofon saati kayması da (en çok 1000 ppm; ilk ile son
+videoyu kopyalayıp sesi ölçülen farkla hizalar (48 kHz AAC 192 kb/s). Birleşik dosyanın süresi ffmpeg'in dosya
+başlığından ölçülür (60 dakikalık derste saniyenin altında) ama ara `.video.mp4` ve `.wav` dosyaları başarılı kayıtta
+da silinmez; kayıt klasöründe kalır (bkz. "Kayıt dosyaları ve kurtarma"). 10 dakikadan uzun kayıtlarda mikrofon saati kayması da (en çok 1000 ppm; ilk ile son
 örnek arasında ölçülür) `asetrate` ile düzeltilir; mikrofon durdurmadan önce sustuysa düzeltme yapılmaz, eksik ses
 kayma sanılıp derse yayılmaz. Birleştirme videoyu asla kısaltmaz: mikrofon kayıt sırasında kesilirse (kablo çekildi,
 Bluetooth/AirPods koptu) ya da ses dosyası yazılamazsa (disk dolu) eksik ses sessizlikle doldurulur, video tam
 uzunlukta kalır ve kayıt bitince uyarı kutusu söyler ("Mikrofon kayıt sırasında kesildi (20:15. dakikadan sonra ses
-yok)", "Ses dosyası yazılamadı: …"). Birleşik dosya yine de videodan kısa çıkarsa, süresi ölçülemezse ya da
-birleştirme düşerse (yarım birleşik dosya silinir) ham video ve ses silinmez, son ada taşınmaz; "Kayıt hatası" penceresi
+yok)", "Ses dosyası yazılamadı: …"). Birleşik dosya videodan kısa çıkarsa, süresi ölçülemezse ya da
+birleştirme düşerse ham video ve ses yerinde kalır (yarım kalmış birleşik dosyayı uygulama silmez, ona güvenmeyin);
+"Kayıt hatası" penceresi
 ne olduğunu ve dosyaların yerini durumlarıyla yazar ("… (video 42:10)", "… (ses sağlam, 42:11)"). ffmpeg kayıt
 sırasında durursa (kodlayıcı çöktü, bellek ya da disk bitti) kayıt hemen kapanır, pencere ffmpeg'in hangi dakikada
 durduğunu, videonun açılıp açılmadığını ve sağlam sesin yerini yazar; ham dosyalar silinmez (video açılıyorsa ses yine
@@ -237,6 +259,56 @@ penceresi açmaz.
 Durdurunca durum satırı gerçek yakalama hızını yazar (Windows'ta GDI ~30 kare/sn ile sınırlar; macOS CoreGraphics daha hızlıdır).
 macOS'ta ilk kayıtta "Ekran Kaydı" izni istenir (Sistem Ayarları > Gizlilik ve Güvenlik); izin verilmezse kare siyah gelir.
 
-## Bu sürümde taslak olan kısımlar
+### Kayıt klasörü
 
-Keras tanıma.
+Varsayılan kayıt klasörü o açılışın ders oturumu klasörüdür (`oturum/<tarih-saat>/`, tahta PNG'leriyle aynı yer).
+⚙ Ayarlar > Kayıt > **Klasör seç…** başka bir klasör seçer, **Varsayılan** oturum klasörüne döner. Seçim yalnız sonraki
+kayıtları etkiler; süren kaydın dosyaları taşınmaz. Seçilen klasör yoksa ya da mutlak yol değilse (USB çıkarılmış,
+ağ sürücüsü kopmuş) uygulama kaydı başlatmaz ve nedenini yazar; dosyaları sessizce başka yere yazmaz.
+
+### Kayıt dosyaları ve kurtarma
+
+Her kayıt kendi adıyla (`kayit_<yyyymmdd-hhmmss>.*`; aynı saniyede ikinci kayıt `-2` alır, mevcut dosya asla ezilmez)
+şu dosyaları bırakır:
+
+| Dosya | Ne zaman | Ne |
+| --- | --- | --- |
+| `kayit_X.mp4` | normalde | Kullanılacak dosya. Mikrofon yoksa görüntünün kendisidir (moov sonda; faststart değil). |
+| `kayit_X.video.mp4` | mikrofon varsa | Ham görüntü (ses yok). Silinmez. |
+| `kayit_X.wav` | mikrofon varsa | Ham ses. Silinmez. |
+| `kayit_X.log` | her zaman | ffmpeg çıktısı. |
+
+Uygulama ham `.video.mp4` ve `.wav` dosyalarını başarılı birleştirmeden sonra da silmez, kendiliğinden de
+kurtarmaz: açılışta kayıt klasörünü tarayıp yarım kalmış kayıt aramaz. Disk yer kaplıyor (60 dakikalık 2K/60 derste
+görüntü yaklaşık 7 GB; birleşik dosya da görüntüyü kopyalar). `kayit_X.mp4` açılıp sesiyle birlikte sağlam
+olduğunu kendiniz doğruladıktan sonra `.video.mp4` ve `.wav` dosyalarını elle silebilirsiniz.
+
+Kayıt bitince bir sorun varsa "Kayıt hatası" penceresi neyin nerede kaldığını yazar (ör. `… (video 42:10)`,
+`… (ses sağlam, 42:11)`); aynı metin `hatalar.log`'a da düşer. Duruma göre kalanlar:
+
+- **Birleştirme düştü ya da birleşik dosya videodan kısa çıktı / süresi ölçülemedi:** `kayit_X.video.mp4` ve
+  `kayit_X.wav` sağlam kalır; `kayit_X.mp4` hiç olmayabilir ya da yarım olabilir (uygulama silmez, yarımsa kullanmayın).
+- **Mikrofon kapanmadı / kapatılamadı:** `kayit_X.mp4` sessiz videodur, ses `kayit_X.wav` dosyasında kalır.
+- **ffmpeg kayıt sırasında durdu ya da yanıt vermediği için öldürüldü:** `kayit_X.video.mp4` ve `kayit_X.wav` silinmez.
+  Öldürülen ffmpeg dosyayı bitiremediğinden görüntü büyük olasılıkla hiç açılmaz (moov sonda yazılır); bu durumda
+  görüntüyü ffmpeg ile kurtaramazsınız, ama `.wav` genelde sağlamdır. ffmpeg kendiliğinden durduysa ve görüntü
+  açılıyorsa uygulama sesi o ana dek birleştirir.
+- **Uygulama kayıt sırasında çöktü ya da kapatıldı:** kapanış işlemi hiç çalışmadığı için `.wav` düzgün
+  kapanmamış, `.video.mp4` bitmemiş olabilir; ikisini de olduğu gibi saklayın, aşağıdaki komutu deneyin (bu durum
+  kodda ayrıca ele alınmıyor; açılması garanti değil).
+
+El ile birleştirme (ffmpeg gerekir; uygulamanın kullandığı ikili için `.venv` içinde
+`python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())"` yolu yazar). Kayıt klasöründe:
+
+    ffmpeg -i kayit_X.video.mp4 -f wav -i kayit_X.wav -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 192k -ar 48000 -movflags +faststart kayit_X_kurtarilan.mp4
+
+Yalnız sesi almak için: `ffmpeg -f wav -i kayit_X.wav -c:a aac -b:a 192k kayit_X_ses.m4a`. `-f wav` bazı ffmpeg
+sürümlerinin düz WAV'ı tanımamasına karşıdır (uygulama da böyle açar). Uygulama birleştirirken ses ile görüntünün
+başlangıç farkını ölçüp telafi eder; el ile birleştirmede bu fark yoktur, ses birkaç on ms kayabilir (uzun kayıtlarda
+mikrofon saati de kayabilir). Fark duyuluyorsa WAV girişinin önüne `-itsoffset <sn>` (sesi geciktirir) ya da `-ss <sn>`
+(sesin başını atar) ekleyin. Çıktı süresi iki girişten uzun olanıdır; sesin görüntüden kısa kalması videoyu kısaltmaz.
+
+## Bu sürümde olmayanlar
+
+El yazısı matematik tanıma, şekil düzeltme ve ön tanımlı soru tanıma yok; Kalem ayarlarında "Yakında" diye kilitlidir.
+Pencerede gördüğünüz örnek dönüşümler sabit gösterimdir, canlı tanıma değildir.

@@ -5,6 +5,7 @@ Düzen sınırları ve ızgara sadece düzen modunda görünür.
 from __future__ import annotations
 
 from fractions import Fraction
+import sys
 
 from PyQt6.QtCore import QPoint, QRect, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPen, QPixmap
@@ -188,7 +189,8 @@ class WorkArea(QWidget):
         self.edit_bar.setStyleSheet(f"#editBar {{ background: {theme.INK}; border-radius: 8px; }}")
         self.edit_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         bar = QHBoxLayout(self.edit_bar); bar.setContentsMargins(14, 6, 10, 6); bar.setSpacing(10)
-        info = QLabel("DÜZEN MODU · bölgeyi sürükle, kenarlardan serbestçe boyutlandır · Ctrl: ızgaraya yapıştır")
+        snap_key = "⌘/Ctrl" if sys.platform == "darwin" else "Ctrl"
+        info = QLabel(f"DÜZEN MODU · bölgeyi sürükle, kenarlardan serbestçe boyutlandır · {snap_key}: ızgaraya yapıştır")
         info.setFont(theme.font(fam, 10, 600, spacing_pct=108)); info.setStyleSheet(f"color: {theme.TOOLBAR_MUTED};")
         # Yazı boyutu kaydırıcısı (Görev 7): WorkArea AppSettings görmediği için kalıcı değeri kendi
         # BAŞINA bilmez -- yalnız fontScaleChanged yayar, MainWindow ayara yazıp apply_ui_settings ->
@@ -723,7 +725,7 @@ class WorkArea(QWidget):
             super().mouseMoveEvent(e); return
         key, mode, start, geo = self._drag
         d = pos - start
-        self._snap_active = bool(e.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        self._snap_active = bool(e.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier))
         x, y, w, h = geo.x(), geo.y(), geo.width(), geo.height()
         if mode == "move":
             x += d.x(); y += d.y()
@@ -769,7 +771,7 @@ class WorkArea(QWidget):
         if key in self._zones:
             inner = self.inner_rect()
             g = self._zones[key].geometry()
-            ctrl = bool(e.modifiers() & Qt.KeyboardModifier.ControlModifier)
+            ctrl = bool(e.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier))
             to_geom = lm.snap_rect if ctrl else lm.free_rect
             self._layout[key] = to_geom(g.x() - inner.x(), g.y() - inner.y(), g.width(), g.height(),
                                         inner.width(), inner.height(), theme.GRID_GAP)

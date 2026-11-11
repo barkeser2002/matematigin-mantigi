@@ -125,3 +125,46 @@ def test_settings_apply_is_the_only_default_button(window, qtbot):
     assert dialog.apply_button.isDefault()
     assert all(not button.autoDefault() for button in dialog.findChildren(QPushButton)
                if button is not dialog.apply_button)
+
+
+@pytest.mark.parametrize("kind", ["settings", "editor"])
+@pytest.mark.parametrize("recording,allow", [(True, False), (True, True), (False, False)])
+def test_recorded_dialog_requires_explicit_permission(window, monkeypatch, tmp_path, kind, recording, allow):
+    from types import SimpleNamespace
+    from matematigin_mantigi.ui import main_window
+    window.questions_path = tmp_path / "questions.xlsx"
+    opened, asked = [], []
+
+    def create(*args, **kwargs):
+        opened.append("created")
+        signal = SimpleNamespace(connect=lambda callback: None)
+        return SimpleNamespace(applied=signal, saved=signal, exec=lambda: opened.append("executed"))
+
+    monkeypatch.setattr(main_window, "SettingsDialog" if kind == "settings" else "QuestionEditorDialog", create)
+
+    def answer(parent, title, text, buttons, default):
+        asked.append(text)
+        assert text == "Bu pencere kayda girer (editör cevapları gösterir). Yine de açılsın mı?"
+        assert buttons == QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        assert default == QMessageBox.StandardButton.No
+        return QMessageBox.StandardButton.Yes if allow else QMessageBox.StandardButton.No
+
+    monkeypatch.setattr(QMessageBox, "question", answer)
+    if recording:
+        window.toggle_recording(True)
+    getattr(window, "open_" + kind)()
+    assert len(asked) == int(recording)
+    assert bool(opened) == (not recording or allow)
+    if opened:
+        assert opened == ["created", "executed"]
+    assert window.recorder.state is (RecorderState.RECORDING if recording else RecorderState.IDLE)
+
+
+@pytest.mark.parametrize("kind", ["settings", "editor"])
+def test_pending_close_refuses_dialog_without_recording_permission(window, monkeypatch, kind):
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a))
+    window._close_after_save = True
+    getattr(window, "open_" + kind)()
+    assert asked == []
+    window._close_after_save = False

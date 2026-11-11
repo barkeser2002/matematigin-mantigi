@@ -3,6 +3,9 @@ import pytest
 from PyQt6.QtCore import QPointF, QSize, Qt
 from PyQt6.QtWidgets import QMessageBox
 
+from matematigin_mantigi.core.models import Tool
+from matematigin_mantigi.ui.canvas import DrawingCanvas
+
 
 @pytest.fixture
 def safe_window(window, monkeypatch):
@@ -12,9 +15,6 @@ def safe_window(window, monkeypatch):
         monkeypatch.setattr(QMessageBox, name, lambda *a, **k: QMessageBox.StandardButton.Ok)
     yield window
     window.webcam_panel.shutdown()
-
-from matematigin_mantigi.core.models import Tool
-from matematigin_mantigi.ui.canvas import DrawingCanvas
 
 
 def make_canvas(qtbot):
@@ -202,3 +202,71 @@ def test_text_editor_is_above_cards_and_camera_without_moving_ink(safe_window, q
     qtbot.keyClick(editor, Qt.Key.Key_Return)
     assert not editor.isVisible()
     assert canvas.strokes_image() == reference.strokes_image()
+
+
+@pytest.mark.parametrize("target", [(640, 480), (160, 120), (640, 120)])
+@pytest.mark.parametrize("dpr", [1., 2.])
+def test_resize_scales_ink_and_all_undo_states(qtbot, monkeypatch, target, dpr):
+    from PyQt6.QtGui import QColor
+    monkeypatch.setattr(DrawingCanvas, "devicePixelRatioF", lambda self: dpr)
+    canvas = make_canvas(qtbot)
+    canvas.set_base_width(10)
+    canvas.set_color(QColor("red"))
+    dot(canvas, 80, 60)
+    canvas.set_color(QColor("blue"))
+    dot(canvas, 240, 180)
+    canvas.resize(*target)
+    expected = QSize(int(target[0] * dpr), int(target[1] * dpr))
+    qtbot.waitUntil(lambda: canvas.size() == QSize(*target))
+    assert canvas.strokes_image().size() == expected
+    assert canvas.strokes_image().devicePixelRatio() == dpr
+    red = (int(target[0] / 4 * dpr), int(target[1] / 4 * dpr))
+    blue = (int(target[0] * .75 * dpr), int(target[1] * .75 * dpr))
+    assert canvas.strokes_image().pixelColor(*red) == QColor("red")
+    assert canvas.strokes_image().pixelColor(*blue) == QColor("blue")
+    canvas.undo()
+    assert canvas.strokes_image().size() == expected
+    assert canvas.strokes_image().pixelColor(*red) == QColor("red")
+    assert canvas.strokes_image().pixelColor(*blue).alpha() == 0
+    canvas.undo()
+    assert canvas.is_empty()
+    assert canvas.strokes_image().size() == expected
+    assert canvas.strokes_image().pixelColor(*red).alpha() == 0
+
+
+@pytest.mark.parametrize("tool", [Tool.PEN, Tool.SHAPE, Tool.LASER])
+def test_resize_keeps_inflight_stroke_in_scaled_coordinates(qtbot, tool):
+    canvas = make_canvas(qtbot)
+    canvas.set_tool(tool)
+    canvas.begin_stroke(QPointF(40, 40), .8)
+    canvas.extend_stroke(QPointF(120, 80), .8)
+    canvas.resize(640, 480)
+    assert canvas._last == QPointF(240, 160)
+    if tool == Tool.SHAPE:
+        assert canvas._shape_start == QPointF(80, 80)
+        canvas.end_stroke()
+        assert canvas.strokes_image().pixelColor(160, 80).alpha() > 0
+        assert canvas.strokes_image().pixelColor(80, 40).alpha() == 0
+    else:
+        canvas.end_stroke()
+
+
+def test_resize_moves_pending_text_and_keeps_editor_above_scene(safe_window, qtbot):
+    from PyQt6.QtCore import QPoint
+    window = safe_window
+    canvas = window.canvas
+    canvas.begin_text(QPointF(200, 150))
+    canvas.text_edit.setText("Ölçek")
+    old_size = canvas.size()
+    window.resize(1366, 768)
+    qtbot.waitUntil(lambda: canvas.size() != old_size)
+    expected = QPointF(200 * canvas.width() / old_size.width(), 150 * canvas.height() / old_size.height())
+    assert canvas._text_pos == expected
+    qtbot.waitUntil(lambda: canvas.mapFromGlobal(canvas.text_edit.mapToGlobal(
+        QPoint(0, canvas.text_edit.height() // 2))) == expected.toPoint())
+    hit = canvas.text_edit.mapTo(window.work_area, QPoint(12, canvas.text_edit.height() // 2))
+    assert window.work_area.childAt(hit) is canvas.text_edit
+    # Otomatik kayıt ve Enter aynı tuval konumunu kullanır.
+    before = canvas.snapshot_image()
+    canvas.commit_text()
+    assert canvas.snapshot_image() == before

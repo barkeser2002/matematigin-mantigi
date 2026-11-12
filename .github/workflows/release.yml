@@ -48,14 +48,6 @@ jobs:
         run: echo 'BUILD = "${{ github.run_number }}"' > src/matematigin_mantigi/_build.py
       - name: Paketle (.venv + testler + PyInstaller + Inno Setup kurulum programı)
         run: powershell -ExecutionPolicy Bypass -File windows\build_win.ps1
-      - name: Geçici açılış tanısı
-        if: failure()
-        env:
-          MM_CI_TRACE: "1"
-          PYTHONFAULTHANDLER: "1"
-          PYTHONUTF8: "1"
-          QT_QPA_PLATFORM: offscreen
-        run: .\.venv\Scripts\python.exe -m pytest -x -vv --tb=long tests/test_acilis_ekran_son_durum.py
       - name: Zip
         run: Compress-Archive -Path "dist\Matematigin Mantigi\*" -DestinationPath "Matematigin-Mantigi-Windows.zip"
       - uses: actions/upload-artifact@v4

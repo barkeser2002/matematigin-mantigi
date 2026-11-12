@@ -12,16 +12,7 @@ import json
 from pathlib import Path
 import sys
 import time
-import os
-if os.environ.get("MM_CI_TRACE"):
-    def trace(frame, event, arg):
-        if event == "line" and (frame.f_code.co_filename == "<string>" or "matematigin_mantigi" in frame.f_code.co_filename):
-            print("[DEBUG-cifix]", frame.f_code.co_filename, frame.f_lineno, flush=True, file=sys.stderr)
-        return trace
-    sys.settrace(trace)
-from PyQt6.QtCore import QSettings, qInstallMessageHandler
-if os.environ.get("MM_CI_TRACE"):
-    qInstallMessageHandler(lambda kind, context, text: print("[DEBUG-cifix-qt]", kind, text, file=sys.stderr, flush=True))
+from PyQt6.QtCore import QSettings
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from matematigin_mantigi import app as app_mod
 from matematigin_mantigi.core.autostart import Autostart
@@ -113,7 +104,10 @@ def _run_launch(tmp_path, startup, board_size, mode, geometry_case):
         {"name": "monitor", "x": 0, "y": 0, "width": 1920, "height": 1080, "dpr": 1},
         {"name": "tablet", "x": 1920, "y": 0, "width": w, "height": h, "dpr": 1},
     ]}), encoding="utf-8")
-    env = {**os.environ, "QT_QPA_PLATFORM": f"offscreen:configfile={config}",
+    # QPA seçenekleri ':' ile ayrılır: Windows'un C:\\... mutlak yolu
+    # configfile=C diye kesilir ve QApplication kurucusu qFatal ile çıkar.
+    # Alt sürecin cwd'si tmp_path; göreli ad aynı gerçek iki ekranı her OS'de kurar.
+    env = {**os.environ, "QT_QPA_PLATFORM": f"offscreen:configfile={config.name}",
            "XDG_CONFIG_HOME": str(tmp_path / "config")}
     child = subprocess.run([sys.executable, "-X", "faulthandler", "-c", CHILD, startup, mode, geometry_case], cwd=tmp_path,
                            env=env, capture_output=True, text=True, timeout=60)

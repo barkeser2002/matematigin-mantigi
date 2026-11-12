@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import numpy as np
 from pathlib import Path
 from typing import Callable, Sequence
 
-from PyQt6.QtCore import QEvent, QPoint, QRect, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QKeySequence, QShortcut
 from PyQt6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QMessageBox, QPushButton, QToolTip, QWidget
 
+from matematigin_mantigi import paths
 from matematigin_mantigi.core import crash_log
+from matematigin_mantigi.core.autostart import Autostart, AutostartError
 from matematigin_mantigi.core import layout_model as lm
 from matematigin_mantigi.core.models import (SHAPE_META, TOOL_META, PenSettings, Question, QuestionStatus, Tool,
                                              next_shape)
@@ -17,7 +20,7 @@ from matematigin_mantigi.core.question_flow import QuestionFlow
 from matematigin_mantigi.core.recorder import (DISK_HINT, Recorder, RecorderError, RecorderState, MicrophoneStartError, MssFfmpegRecorder, exception_text,
                                                record_rect_for)
 from matematigin_mantigi.core.session_store import SessionStore
-from matematigin_mantigi.core.settings import AppSettings
+from matematigin_mantigi.core.settings import AppSettings, SessionState
 from matematigin_mantigi.ui.camera_worker import FrameSource
 from matematigin_mantigi.ui.cursors import cursor_for
 from matematigin_mantigi.ui.hint_zone import HintZone
@@ -106,6 +109,32 @@ def _turkish_details_button(box: QMessageBox) -> None:
                                    button.fontMetrics().horizontalAdvance(DETAILS_HIDE) + 32))
 
 
+STARTUP_SCREEN_WAIT_MS = 10000     # --baslangic: ekran sürücüleri geç hazır olabilir; kayıtlı ekran bu süre aranır
+STARTUP_SCREEN_POLL_MS = 500
+SESSION_NOTICE_MS = 10000          # oturum geri yükleme uyarısı araç çubuğunda bu kadar kalır (sahneye girmez)
+SESSION_NOTICE_KEY = "oturum"
+BOARD_RESTORE_MAX_ASPECT_DIFF = 0.12    # kayıtlı tahta görüntüsü ile pencere oranı bundan fazla ayrışırsa yüklenmez
+BOARD_RESTORE_MAX_BYTES = 64 * 1024 * 1024
+
+
+def ink_from_snapshot(image: QImage, size: QSize, dpr: float = 1.0) -> QImage:
+    """Beyaz zeminli tahta PNG'sinden şeffaf mürekkep katmanı (ARGB32 premultiplied) üretir: 'renkten alfaya'.
+    Alfa = 255 - min(R,G,B); premultiplied renk = kanal + alfa - 255. Beyaz üstüne tek kat mürekkep için kayıpsızdır
+    (kalem, silgi sonrası beyaz, tebeşir kenarları); yarı saydam üst üste katmanlar tek kata iner."""
+    rgb = image.convertToFormat(QImage.Format.Format_RGB32).scaled(
+        size, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    w, h = rgb.width(), rgb.height()
+    raw = np.frombuffer(rgb.constBits().asstring(rgb.sizeInBytes()), np.uint8)
+    pixels = raw.reshape(h, rgb.bytesPerLine())[:, :w * 4].reshape(h, w, 4).astype(np.int16)   # B G R x
+    alpha = 255 - pixels[:, :, :3].min(axis=2)
+    out = np.empty((h, w, 4), np.uint8)
+    out[:, :, :3] = np.clip(pixels[:, :, :3] + alpha[:, :, None] - 255, 0, 255)
+    out[:, :, 3] = alpha
+    result = QImage(out.tobytes(), w, h, w * 4, QImage.Format.Format_ARGB32_Premultiplied).copy()
+    result.setDevicePixelRatio(dpr)
+    return result
+
+
 class _Preview(CameraView):
     closed = pyqtSignal()
     fullscreenKey = pyqtSignal()        # F11 / Esc ana pencereye iletilir: önizleme etkinken ana pencerenin
@@ -133,12 +162,26 @@ class MainWindow(QMainWindow):
     def __init__(self, fam: FontFamilies, questions: Sequence[Question], settings: AppSettings,
                  recorder: Recorder, session_store: SessionStore,
                  camera_source_factory: Callable[[int], FrameSource] | None, layout_path: Path, parent=None,
-                 *, questions_path: "Path | None" = None, questions_from_file: bool = True):
+                 *, questions_path: "Path | None" = None, questions_from_file: bool = True,
+                 session_state: "SessionState | None" = None, startup: bool = False,
+                 autostart: "Autostart | None" = None):
         """camera_source_factory: kamera indeksinden kaynak üretir; None ise kamera açılmaz.
         questions_path: soru dosyası (xlsx); verilmezse soru editörü açılmaz.
         questions_from_file: sorular o dosyadan mı okundu. False: açılışta okunamadı, tahtada örnek sorular var; editör
-        onları dosyanın (ya da yedeğinin) gerçek sorularının üzerine yazmaz (Q1)."""
+        onları dosyanın (ya da yedeğinin) gerçek sorularının üzerine yazmaz (Q1).
+        session_state: önceki oturumun kapanışta kaydedilen durumu (son soru, tahta görüntüsü); None ise geri
+        yüklenmez. startup: bilgisayar açılışında başlatıldı (--baslangic): kayıtlı ekran geç hazır olabilir, bir
+        süre aranır. Hiçbir durumda kayıt kendiliğinden başlamaz."""
         super().__init__(parent)
+        self.autostart = autostart or Autostart()
+        self._session_ready = False                     # kurulum bitene dek oturum durumu yazılmaz (eskiyi ezmesin)
+        self._pending_board: tuple[str, str] | None = None
+        self._startup_screen_wait_left = STARTUP_SCREEN_WAIT_MS if startup else 0
+        self._startup_screen_timer = QTimer(self)
+        self._startup_screen_timer.setSingleShot(True)
+        self._startup_screen_timer.setInterval(STARTUP_SCREEN_POLL_MS)
+        self._startup_screen_timer.timeout.connect(self._restore_screen_preferences)
+        self._board_restore_scheduled = False
         self._preview = None
         self._preview_board = None
         self._preview_screen = None
@@ -203,8 +246,12 @@ class MainWindow(QMainWindow):
         self._restore_settings()
         self.apply_ui_settings()
         self.toolbar.editor_button.setEnabled(self.questions_path is not None)
+        self._wire_session()
+        if session_state is not None:
+            self._restore_session_question(session_state)
         if questions:
             self._on_question_changed(self.flow.index)
+        self._session_ready = True
         # Webcam'in başlatılması artık apply_ui_settings()'in (yukarıda, _restore_settings'ten hemen sonra
         # çağrıldı) "webcam" görünürlük anahtarına bağlı işi -- burada koşulsuz tekrar başlatmak, kapalı
         # kaydedilmiş bir webcam'i yeniden başlatıp Görev 6'nın önlemeye çalıştığı boşa CPU'yu geri getirirdi.
@@ -361,6 +408,7 @@ class MainWindow(QMainWindow):
                     raise OSError(f"Kaydedilen PNG doğrulanamadı: {path}")
                 self._last_snapshot = (qid, image, path)
                 self._autosave_failed = False
+                self._remember_session(board_image=str(path), board_question_id=qid)
             except Exception as err:  # Görüntü oluşturma da kayıt gibi başarısız olabilir.
                 # Kayıt sürerken uyarı sahne dışında kalır; çağıran tahtayı korur.
                 detail = error_notice.describe_os_error(err) if isinstance(err, OSError) else str(err)
@@ -406,6 +454,7 @@ class MainWindow(QMainWindow):
         if not self.flow.questions:
             return
         q = self.flow.questions[i]
+        self._remember_question()
         self.question_zone.set_question(q, i + 1, animate=True)
         self.hint_zone.set_hints(q.id, q.hints)
         for h in range(len(q.hints)):
@@ -455,6 +504,7 @@ class MainWindow(QMainWindow):
         super().changeEvent(event)
         if event.type() == QEvent.Type.WindowStateChange:
             self.toolbar.set_fullscreen(self.isFullScreen())
+            self._remember_window()
             self._observe_record_geometry()
             QTimer.singleShot(0, self._check_record_geometry)
 
@@ -478,12 +528,23 @@ class MainWindow(QMainWindow):
         if not self._screen_preferences_restored:
             self._screen_preferences_restored = True
             QTimer.singleShot(0, self._restore_screen_preferences)
+            if self._pending_board is not None and not self._board_restore_scheduled:
+                self._board_restore_scheduled = True
+                QTimer.singleShot(0, self._restore_board_image)
 
     def _restore_screen_preferences(self):
         screens = QApplication.screens()
         board_key, preview_key = self.settings.board_screen_key, self.settings.preview_screen_key
         board = resolve_screen_key(screens, board_key)
         target = resolve_screen_key(screens, preview_key)
+        if ((board_key and board is None) or (preview_key and target is None)) and self._startup_screen_wait_left > 0 \
+                and self.recorder.state is RecorderState.IDLE and not self._record_saving():
+            # Bilgisayar açılışı: ekran/tablet sürücüleri geç hazır olabilir. UI'yı bloklamadan kısa aralıklarla
+            # yeniden dene; süre dolunca mevcut ekranda kal (aşağıdaki yol).
+            self._startup_screen_wait_left -= STARTUP_SCREEN_POLL_MS
+            self._startup_screen_timer.start()
+            return
+        self._startup_screen_wait_left = 0
         if board_key and board is None:
             target = None
         self._configure_screens(board, target)
@@ -917,7 +978,7 @@ class MainWindow(QMainWindow):
     def open_settings(self) -> None:
         if self._refuse_while_closing(self.toolbar.settings_button) or not self._confirm_recorded_dialog():
             return
-        dlg = SettingsDialog(self.settings, self.fam, self)
+        dlg = SettingsDialog(self.settings, self.fam, self, autostart=self.autostart)
         dlg.applied.connect(self.apply_settings_values)
         dlg.exec()
 
@@ -956,6 +1017,10 @@ class MainWindow(QMainWindow):
 
     def apply_settings_values(self, v: SettingsValues) -> None:
         s = self.settings
+        self._startup_screen_wait_left = 0               # kullanıcı ekranları kendisi seçti: açılış bekleyişi biter
+        self._startup_screen_timer.stop()
+        if v.autostart is not None:
+            self._apply_autostart(v.autostart)
         s.font_file = v.font_file
         s.set_pen(replace(s.pen(), reading_ms=v.reading_ms))
         s.auto_key = v.auto_key
@@ -1071,6 +1136,149 @@ class MainWindow(QMainWindow):
             if hasattr(self.recorder, attr):
                 setattr(self.recorder, attr, val)
 
+    # --- oturum durumu (kapanıp açılınca kaldığı yerden devam) -----------------------
+    def _wire_session(self) -> None:
+        # Tahta boşaldı (Temizle, geri al, soru geçişi): kayıtlı tahta görüntüsü artık geçerli değil.
+        self.canvas.historyChanged.connect(self._on_history_for_session)
+
+    def _on_history_for_session(self, _can_undo: bool, empty: bool) -> None:
+        if empty:
+            self._remember_session(board_image="", board_question_id="")
+
+    def _remember_session(self, **changes) -> None:
+        """Oturum durumunu günceller; yalnız değişince yazılır (diske sürekli yazma yok)."""
+        if not getattr(self, "_session_ready", False):
+            return
+        try:
+            current = self.settings.session_state
+            state = replace(current, **changes)
+            if state != current:
+                self.settings.session_state = state
+        except Exception as err:  # noqa: BLE001 - oturum belleği hiçbir zaman dersi durdurmaz
+            crash_log.log_handled(err, "oturum durumu")
+
+    def _remember_question(self, *, keep_board: bool = False) -> None:
+        # Sorular dosyadan okunamadıysa (örnek sorular) gerçek soru konumunun üzerine yazılmaz.
+        if not self.questions_from_file or not self.flow.questions:
+            return
+        default = paths.default_template_path()
+        self._remember_session(
+            questions_file=str(self.questions_path) if self.questions_path and self.questions_path != default else "",
+            question_id=self.flow.current.id, question_index=self.flow.index,
+            **({} if keep_board else {"board_image": "", "board_question_id": ""}))
+
+    def _remember_window(self) -> None:
+        if not getattr(self, "_session_ready", False):
+            return
+        changes: dict = {"fullscreen": self.isFullScreen()}
+        if not self.isMinimized():
+            rect = self.normalGeometry() if (self.isFullScreen() or self.isMaximized()) else self.geometry()
+            if rect.width() >= 200 and rect.height() >= 150:
+                changes["geometry"] = (rect.x(), rect.y(), rect.width(), rect.height())
+        self._remember_session(**changes)
+
+    def _remember_on_close(self) -> None:
+        self._remember_window()
+        self._remember_question(keep_board=True)
+        if not self.canvas.has_snapshot_content():
+            self._remember_session(board_image="", board_question_id="")
+
+    def _restore_session_question(self, state: SessionState) -> None:
+        """Son soruya (kimliğiyle) döner; tahta görüntüsü pencere gösterilince yüklenir. Kimlik yoksa (dosya
+        değişmiş) ilk soruda kalır; durumlar (bitti/işleniyor) değişmez."""
+        questions = self.flow.questions
+        if not questions or not state.question_id:
+            return
+        saved = state.question_index
+        if 0 <= saved < len(questions) and questions[saved].id == state.question_id:
+            index = saved
+        else:
+            index = next((i for i, q in enumerate(questions) if q.id == state.question_id), None)
+        if index is None:
+            return
+        if index != self.flow.index:
+            self.flow.select(index)
+        if state.board_image and state.board_question_id == state.question_id:
+            self._pending_board = (state.board_image, state.board_question_id)
+
+    def restore_window_state(self, state: SessionState) -> None:
+        """Önceki pencere geometrisini (ekranlardan birinde yeterince görünüyorsa) ve tam ekranı geri getirir.
+        Gösterilmeden önce çağrılır. Ekran artık yoksa varsayılan boyutta kalır."""
+        rect = self._fitting_geometry(state.geometry)
+        if rect is not None:
+            self.setGeometry(rect)
+        if state.fullscreen:
+            self.setWindowState(self.windowState() | Qt.WindowState.WindowFullScreen)
+
+    @staticmethod
+    def _fitting_geometry(geometry) -> "QRect | None":
+        if not geometry:
+            return None
+        x, y, w, h = geometry
+        wanted = QRect(x, y, w, h)
+        best, best_area = None, 0
+        for screen in QApplication.screens():
+            avail = screen.availableGeometry()
+            inter = wanted.intersected(avail)
+            area = max(0, inter.width()) * max(0, inter.height())
+            if area > best_area:
+                best, best_area = avail, area
+        # Pencere ekrandan büyükse (ekran küçüldü) ekrana sığdırılır; yoksa yarısı görünür olmalı.
+        if best is None or best_area < 0.5 * min(w * h, best.width() * best.height()):
+            return None                                   # ekran artık yok / pencere büyük ölçüde dışarıda
+        w, h = min(w, best.width()), min(h, best.height())
+        x = max(best.left(), min(x, best.right() - w + 1))
+        y = max(best.top(), min(y, best.bottom() - h + 1))
+        return QRect(x, y, w, h)
+
+    def show_session_notice(self, text: str) -> None:
+        """Kısa uyarı araç çubuğunun şeridinde (sahneye ve kayda girmez); birkaç saniye sonra kalkar."""
+        self.toolbar.set_alert(SESSION_NOTICE_KEY, text)
+        timer = getattr(self, "_session_notice_timer", None)
+        if timer is None:                                  # pencerenin çocuğu: pencere silinince zamanlayıcı da gider
+            timer = self._session_notice_timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._clear_session_notice)
+        timer.start(SESSION_NOTICE_MS)
+
+    def _clear_session_notice(self) -> None:
+        self.toolbar.set_alert(SESSION_NOTICE_KEY, None)
+
+    def _restore_board_image(self) -> None:
+        """Önceki oturumda o sorunun son tahta PNG'sini (varsa, sağlamsa ve soru aynıysa) tuvale geri koyar.
+        Kullanıcı bu arada çizdiyse dokunmaz. Pencere oranı çok değiştiyse çizim bozulacağı için yüklenmez."""
+        pending, self._pending_board = self._pending_board, None
+        if pending is None or not self.flow.questions:
+            return
+        path, qid = pending
+        try:
+            if self.flow.current.id != qid or self.canvas.has_snapshot_content():
+                return
+            file = Path(path)
+            if not file.is_file() or file.stat().st_size > BOARD_RESTORE_MAX_BYTES:
+                return
+            image = QImage.fromData(file.read_bytes(), "PNG")
+            layer = self.canvas._strokes
+            if image.isNull() or layer.isNull():
+                return
+            have, want = image.width() / max(1, image.height()), layer.width() / max(1, layer.height())
+            if abs(have - want) / want > BOARD_RESTORE_MAX_ASPECT_DIFF:
+                self.show_session_notice("Önceki tahta çizimi, pencere oranı değiştiği için geri yüklenmedi.")
+                return
+            c = self.canvas
+            c._strokes = ink_from_snapshot(image, layer.size(), layer.devicePixelRatio())    # tuval API'si yok: tek nokta
+            c._stroke_count = 1
+            c.update()
+            c.historyChanged.emit(False, False)
+        except Exception as err:  # noqa: BLE001 - bozuk/okunamayan görüntü açılışı düşürmez
+            crash_log.log_handled(err, "tahta görüntüsü geri yükleme")
+
+    def _apply_autostart(self, on: bool) -> None:
+        try:
+            self.autostart.set_enabled(on)
+        except AutostartError as err:
+            error_notice.post("Bilgisayar açılınca başlatma", f"{err}", key="acilista-baslat")
+
     def closeEvent(self, e):
         """Pencere kapatma (pencere düğmesi, close(), QApplication.quit; macOS'ta ⌘Q da pencerelere bu olayı gönderir).
         Kayıt sürerken önce sorulur. Kayıt kaydedilirken pencere kapanmaz: olay yok sayılır, kapanış arka planda
@@ -1101,6 +1309,7 @@ class MainWindow(QMainWindow):
         if self.flow.questions and not self._save_board(self.flow.index):
             e.ignore()
             return
+        self._remember_on_close()
         self._disable_preview()
         try:
             # Varsayılan (2000ms) üst sınır: pencere zaten kapanıyor, birkaç saniyelik gecikme kabul edilebilir

@@ -186,6 +186,16 @@ from matematigin_mantigi.ui.main_window import MainWindow
 from matematigin_mantigi.ui.theme import FontFamilies
 
 app = QApplication([])
+# Varsayılan platform fontuna ek olarak gerçek, genişletilmiş bir sans ile de sına.
+# Punto tek başına yetmez: düğmelerin QSS'si 10px, fakat aile/glif genişliği miras alınır.
+if len(sys.argv) > 1 and sys.argv[1] != "default":
+    from PyQt6.QtGui import QFont
+    from matematigin_mantigi import paths
+    from matematigin_mantigi.ui.theme import load_fonts
+    fam = load_fonts(paths.FONTS_DIR)
+    font = QFont(fam.sans, 11)
+    font.setStretch(int(sys.argv[1]))
+    app.setFont(font)
 tmp = Path(tempfile.mkdtemp())
 st = AppSettings(QSettings(str(tmp / "x.ini"), QSettings.Format.IniFormat))
 st.set_pen(PenSettings(reading_ms=0))
@@ -198,8 +208,21 @@ def sonuc():
     tb = win.toolbar; sa = tb.scroll_area; vp = sa.viewport()
     taşan = [b.text() for b in tb.content.findChildren(QAbstractButton)
              if b.isVisible() and not vp.rect().contains(b.rect().translated(b.mapTo(vp, b.rect().topLeft())))]
+    from PyQt6.QtWidgets import QPushButton, QStyle, QStyleOptionButton
+    metin_tasan = []
+    for b in tb.content.findChildren(QPushButton):
+        if not b.isVisible():
+            continue
+        opt = QStyleOptionButton()
+        b.initStyleOption(opt)
+        room = b.style().subElementRect(QStyle.SubElement.SE_PushButtonContents, opt, b)
+        shown = QPushButton.text(b)  # WrapButton.text() mantıksal metindir; boyanan satırları ölç.
+        if any(b.fontMetrics().horizontalAdvance(line) > room.width() for line in shown.splitlines()):
+            metin_tasan.append([b.text(), shown, room.width()])
     print(json.dumps({"tam": win.isFullScreen(), "w": win.width(), "h": win.height(), "tier": tb.tier,
                       "bar": sa.verticalScrollBar().isVisible(), "tasan": taşan,
+                      "metin_tasan": metin_tasan, "viewport": [vp.width(), vp.height()],
+                      "icerik": [tb.content.width(), tb.content.height()],
                       "dugme": tb.fullscreen_button.text()}))
     app.quit()
 def bekle(n=0):
@@ -213,20 +236,26 @@ app.exec()
 """
 
 
+@pytest.mark.parametrize("stretch,dpi", [("default", 96), (160, 96), (160, 120)])
 @pytest.mark.parametrize("w,h", [(1920, 1080), (1366, 768), (1280, 720)])
-def test_gercek_pencere_tam_ekranda_yan_panel_kaydirmasiz(tmp_path, w, h):
+def test_gercek_pencere_tam_ekranda_yan_panel_kaydirmasiz(tmp_path, w, h, stretch, dpi):
     """Gerçek MainWindow, w x h ekranda tam ekran: araç çubuğunda dikey kaydırma çubuğu yok, düğmeler sığıyor."""
     import os
     import subprocess
     import sys
-    cfg = {"screens": [{"name": "S", "x": 0, "y": 0, "width": w, "height": h, "logicalDpi": 96,
+    # Yapılandırma fiziksel piksel ister; (w,h) hedef mantıksal Qt boyutudur.
+    cfg = {"screens": [{"name": "S", "x": 0, "y": 0, "width": round(w * dpi / 96),
+                        "height": round(h * dpi / 96), "logicalDpi": dpi,
                         "logicalBaseDpi": 96, "dpr": 1.0}]}
     (tmp_path / "ekranlar.json").write_text(json.dumps(cfg), encoding="utf-8")
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen:configfile=ekranlar.json", XDG_CONFIG_HOME=str(tmp_path / "cfg"))
-    p = subprocess.run([sys.executable, "-c", CHILD], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=90)
+    p = subprocess.run([sys.executable, "-c", CHILD, str(stretch)], cwd=tmp_path, env=env,
+                       capture_output=True, text=True, timeout=90)
     lines = [ln for ln in p.stdout.splitlines() if ln.startswith("{")]
     assert p.returncode == 0 and lines, (p.returncode, p.stdout, p.stderr[-1500:])
     r = json.loads(lines[-1])
-    assert r["tam"] and (r["w"], r["h"]) == (w, h), r
-    assert not r["bar"] and not r["tasan"], r
-    assert "Pencere" in r["dugme"], r
+    details = json.dumps(r, ensure_ascii=False)  # pytest sözlüğü kısaltmasın; CI tam ölçümü saklasın.
+    assert r["tam"] and (r["w"], r["h"]) == (w, h), details
+    assert not r["bar"] and not r["tasan"], details
+    assert not r["metin_tasan"], details
+    assert "Pencere" in r["dugme"], details

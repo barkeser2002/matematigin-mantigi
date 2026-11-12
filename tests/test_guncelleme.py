@@ -304,15 +304,55 @@ def test_mac_prepare_ditto_failure_raises(tmp_path):
                            popen=lambda *a, **k: None)
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash yok")
+def _require_posix_bash() -> str:
+    """macOS betiği gerçek POSIX bash ister. Windows'ta PATH'teki bash WSL başlatıcısıdır (dağıtım yoksa
+    'install' metnini UTF-16 basar) ve betiğin hedefi macOS: Windows'ta hiç yoklanmaz, atlanır."""
+    if sys.platform == "win32":
+        pytest.skip("macOS betiği: Windows'ta bash WSL başlatıcısıdır, POSIX bash yok")
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("POSIX bash yok")
+    try:
+        ok = subprocess.run([bash, "-c", "echo $BASH_VERSION"], capture_output=True, timeout=20)
+        ok = ok.returncode == 0 and bool(ok.stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        ok = False
+    if not ok:
+        pytest.skip("çalışan POSIX bash yok")
+    return bash
+
+
+@pytest.mark.parametrize("platform,bash,probe_ok", [
+    ("win32", r"C:\Windows\System32\bash.exe", True),
+    ("linux", None, True),
+    ("linux", "/fake/bash", False),
+])
+def test_mac_bash_guard_rejects_wsl_missing_or_non_posix_shell(monkeypatch, platform, bash, probe_ok):
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(shutil, "which", lambda name: bash)
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0 if probe_ok else 1, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(pytest.skip.Exception, match="POSIX bash"):
+        _require_posix_bash()
+    if platform == "win32" or bash is None:
+        assert not calls  # WSL başlatıcısını yoklamak bile dağıtım kurulumunu açmamalı.
+
+
 def test_mac_script_is_valid_bash(tmp_path):
+    bash = _require_posix_bash()
     script = tmp_path / "s.sh"
     script.write_text(updater.MAC_SCRIPT)
-    assert subprocess.run(["bash", "-n", str(script)]).returncode == 0
+    assert subprocess.run([bash, "-n", str(script)]).returncode == 0
 
 
 def _run_mac_script(tmp_path, *, ditto_ok=True, mv_new_ok=True):
     """Betiği gerçek bash'te sahte ditto/xattr/open ile koşar: yedek, değiştirme ve geri alma gerçekten sınanır."""
+    bash = _require_posix_bash()
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log = tmp_path / "log.txt"
@@ -332,12 +372,11 @@ def _run_mac_script(tmp_path, *, ditto_ok=True, mv_new_ok=True):
     dead = subprocess.Popen(["true"])
     dead.wait()
     env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
-    res = subprocess.run(["bash", str(script), str(dead.pid), str(new), str(old), str(work)], env=env,
+    res = subprocess.run([bash, str(script), str(dead.pid), str(new), str(old), str(work)], env=env,
                          capture_output=True, text=True, timeout=60)
     return res, old, work, log
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash yok")
 def test_mac_script_replaces_app_removes_quarantine_and_reopens(tmp_path):
     res, old, work, log = _run_mac_script(tmp_path)
     assert res.returncode == 0, res.stderr
@@ -348,7 +387,6 @@ def test_mac_script_replaces_app_removes_quarantine_and_reopens(tmp_path):
     assert not work.exists()
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash yok")
 def test_mac_script_leaves_old_app_when_copy_fails(tmp_path):
     res, old, work, log = _run_mac_script(tmp_path, ditto_ok=False)
     assert res.returncode != 0

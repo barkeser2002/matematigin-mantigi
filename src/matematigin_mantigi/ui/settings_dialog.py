@@ -9,6 +9,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel,
                              QLineEdit, QPushButton, QScrollArea, QSlider, QVBoxLayout, QWidget)
 
+from matematigin_mantigi.core.autostart import Autostart
 from matematigin_mantigi.core.models import FrameStyle
 from matematigin_mantigi.core.recorder import RESOLUTIONS
 from matematigin_mantigi.core.settings import VISIBILITY_KEYS, AppSettings
@@ -36,6 +37,7 @@ class SettingsValues:
     visible: dict[str, bool] = field(default_factory=dict)
     board_screen: object = None
     preview_screen: object = None
+    autostart: bool | None = None       # bilgisayar açılınca başlat: None = kullanıcı değiştirmedi
 
 
 def _card(title: str, fam: FontFamilies) -> tuple[QFrame, QVBoxLayout]:
@@ -49,8 +51,9 @@ def _card(title: str, fam: FontFamilies) -> tuple[QFrame, QVBoxLayout]:
 class SettingsDialog(QDialog):
     applied = pyqtSignal(object)      # SettingsValues
 
-    def __init__(self, settings: AppSettings, fam: FontFamilies, parent=None):
+    def __init__(self, settings: AppSettings, fam: FontFamilies, parent=None, *, autostart: Autostart | None = None):
         super().__init__(parent)
+        self._autostart = autostart or Autostart()
         self.setWindowTitle("Ayarlar")
         self.setMinimumWidth(560)
         root = QVBoxLayout(self); root.setContentsMargins(24, 20, 24, 20); root.setSpacing(14)
@@ -62,6 +65,22 @@ class SettingsDialog(QDialog):
         self.scroll.setWidget(self.content); self.scroll.setStyleSheet("QScrollArea { background: transparent; }")
         self.content.setStyleSheet("background: transparent;")
         root.addWidget(self.scroll, 1)
+
+        start_card, startcol = _card("Başlangıç", fam)
+        self.autostart_check = QCheckBox("Bilgisayar açılınca başlat")
+        reason = self._autostart.unsupported_reason
+        # Gösterilen durum gerçek sistem kaydından okunur (kullanıcı elle sildiyse doğru görünür).
+        self._autostart_initial = self._autostart.is_enabled()
+        self.autostart_check.setChecked(self._autostart_initial)
+        self.autostart_check.setEnabled(not reason)
+        self.autostart_check.setToolTip(reason)
+        startcol.addWidget(self.autostart_check)
+        self.autostart_note = QLabel(reason or "Uygulama bilgisayar açılınca son soru, düzen, ekranlar, kamera ve "
+                                     "ayarlarla açılır. Kayıt kendiliğinden başlamaz.")
+        self.autostart_note.setWordWrap(True); self.autostart_note.setFont(theme.font(fam, 10, 400))
+        self.autostart_note.setStyleSheet(f"color: {theme.MUTED};")
+        startcol.addWidget(self.autostart_note)
+        col.addWidget(start_card)
 
         font_card, fcol = _card("Yazı tipi (soru ve ipuçları)", fam)
         row = QHBoxLayout()
@@ -352,7 +371,10 @@ class SettingsDialog(QDialog):
                               frame_style=self.frame_style_combo.currentData(),
                               visible={k: cb.isChecked() for k, cb in self.visibility_checks.items()},
                               board_screen=self.board_screen_combo.currentData(),
-                              preview_screen=self.preview_screen_combo.currentData())
+                              preview_screen=self.preview_screen_combo.currentData(),
+                              autostart=(self.autostart_check.isChecked()
+                                         if self.autostart_check.isEnabled()
+                                         and self.autostart_check.isChecked() != self._autostart_initial else None))
 
     def _apply(self) -> None:
         self.applied.emit(self.value())

@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from matematigin_mantigi import paths
 from matematigin_mantigi.core import crash_log
+from matematigin_mantigi.core.autostart import Autostart
 from matematigin_mantigi.core.models import SAMPLE_QUESTIONS, Question
 from matematigin_mantigi.core.question_loader import backup_path, ensure_template, load_questions
 from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState, RecorderError
@@ -28,6 +29,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--kamera", type=int, default=None, help="Kamera indeksi (varsayılan: ayarlardan)")
     p.add_argument("--kamera-yok", action="store_true", help="Kamerayı açma")
     p.add_argument("--duzen", default=None, help="Düzen dosyası (varsayılan: veri klasöründe duzen.json)")
+    p.add_argument("--baslangic", action="store_true",
+                   help="Bilgisayar açılışında başlatıldı: seçili ekran geç hazır olabilir, bir süre beklenir (kayıt başlamaz)")
     return p.parse_args(argv[1:])
 
 
@@ -71,8 +74,13 @@ def _samples_for_missing_file(template: Path) -> tuple[list[Question], bool]:
     return list(SAMPLE_QUESTIONS), False
 
 
-def build_window(args: argparse.Namespace, fam: theme.FontFamilies, settings: AppSettings | None = None) -> MainWindow:
+def build_window(args: argparse.Namespace, fam: theme.FontFamilies, settings: AppSettings | None = None,
+                 autostart: Autostart | None = None) -> MainWindow:
     settings = settings or AppSettings()
+    autostart = autostart or Autostart()
+    autostart.repair()          # uygulama güncellendi/taşındıysa AÇIK olan kayıt güncel yola sessizce düzelir
+    state = settings.session_state            # kapanıştaki oturum; pencere kurulurken eskisinin üzerine yazılmasın
+    session_notice = None
     fallback_data = None
     user_data_denied = False
     if paths.is_frozen():
@@ -106,6 +114,16 @@ def build_window(args: argparse.Namespace, fam: theme.FontFamilies, settings: Ap
                                 "İzni Sistem Ayarları › Gizlilik ve Güvenlik › Dosyalar ve Klasörler'den değiştirebilirsiniz.")
     template = (Path(args.sorular) if args.sorular else
                 fallback_data / paths.TEMPLATE_NAME if fallback_data else paths.default_template_path())
+    if not args.sorular and state.questions_file:
+        # Son oturumda başka bir soru dosyası açıksa (örn. --sorular) o dosyayla devam; yoksa varsayılan + kısa uyarı.
+        try:
+            saved_file = Path(state.questions_file)
+            if saved_file.is_file():
+                template = saved_file
+            else:
+                session_notice = "Son açık soru dosyası bulunamadı; varsayılan soru dosyası açıldı."
+        except OSError:
+            session_notice = "Son açık soru dosyasına erişilemedi; varsayılan soru dosyası açıldı."
     questions, from_file = ((list(SAMPLE_QUESTIONS), False) if user_data_denied and not args.sorular
                             else load_questions_or_samples(template))
     if args.kamera is not None:
@@ -142,9 +160,16 @@ def build_window(args: argparse.Namespace, fam: theme.FontFamilies, settings: Ap
         return folder
     recorder = MssFfmpegRecorder(recording_folder, create_output_dir=False, fps=settings.record_fps,
                                  audio_device=settings.audio_device or None, out_height=settings.record_height)
+    # Kayıtlı soru konumu yalnız AYNI soru dosyası açıldıysa geri gelir (başka dosyanın kimlikleriyle karışmasın).
+    restore_questions = (from_file and not session_notice
+                         and str(template) == (state.questions_file or str(paths.default_template_path())))
     win = MainWindow(fam, questions, settings, recorder, store, factory, layout_path, questions_path=template,
-                     questions_from_file=from_file)
+                     questions_from_file=from_file, session_state=state if restore_questions else None,
+                     startup=args.baslangic, autostart=autostart)
     win.resize(1920, 1080)
+    win.restore_window_state(state)
+    if session_notice:
+        win.show_session_notice(session_notice)
     return win
 
 

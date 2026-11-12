@@ -1,7 +1,7 @@
 """QSettings üzerinde tipli ayarlar."""
 from __future__ import annotations
 
-from dataclasses import fields
+from dataclasses import dataclass, fields
 import json
 
 from PyQt6.QtCore import QSettings
@@ -28,6 +28,49 @@ VISIBILITY_KEYS: tuple[tuple[str, str], ...] = (
     ("webcam", "Webcam paneli"),
 )
 VISIBILITY_DEFAULTS = {"badge": False}
+
+
+@dataclass(frozen=True)
+class SessionState:
+    """Kapanışta hatırlanan oturum: uygulama yeniden açılınca kaldığı yerden devam eder. Her alan ayrı ayrı
+    doğrulanır; bozuk/eksik alan varsayılana düşer, uygulamayı çökertmez."""
+    questions_file: str = ""            # varsayılandan farklı soru dosyası (örn. --sorular); "" = varsayılan dosya
+    question_id: str = ""
+    question_index: int = 0
+    fullscreen: bool = False
+    geometry: tuple[int, int, int, int] | None = None      # tam ekran değilken pencere (x, y, genişlik, yükseklik)
+    board_image: str = ""               # o sorunun son tahta PNG'si (oturum klasöründe)
+    board_question_id: str = ""         # board_image hangi soruya ait (başka soruya yüklenmez)
+
+    @classmethod
+    def from_json(cls, text: object) -> "SessionState":
+        try:
+            raw = json.loads(text) if isinstance(text, (str, bytes)) else {}
+        except ValueError:
+            raw = {}
+        if not isinstance(raw, dict):
+            return cls()
+
+        def text_of(key: str) -> str:
+            v = raw.get(key)
+            return v if isinstance(v, str) else ""
+
+        index = raw.get("question_index")
+        geometry = raw.get("geometry")
+        if not (isinstance(geometry, list) and len(geometry) == 4
+                and all(isinstance(v, int) and not isinstance(v, bool) for v in geometry)
+                and geometry[2] >= 200 and geometry[3] >= 150):
+            geometry = None
+        return cls(questions_file=text_of("questions_file"), question_id=text_of("question_id"),
+                   question_index=index if isinstance(index, int) and not isinstance(index, bool) and index >= 0 else 0,
+                   fullscreen=raw.get("fullscreen") is True,
+                   geometry=tuple(geometry) if geometry else None,
+                   board_image=text_of("board_image"), board_question_id=text_of("board_question_id"))
+
+    def to_json(self) -> str:
+        data = {f.name: getattr(self, f.name) for f in fields(self)}
+        data["geometry"] = list(self.geometry) if self.geometry else None
+        return json.dumps(data, ensure_ascii=False)
 
 
 class AppSettings:
@@ -82,6 +125,12 @@ class AppSettings:
     def preview_screen_key(self): return self._screen_key("screens/preview")
     @preview_screen_key.setter
     def preview_screen_key(self, value): self._q.setValue("screens/preview", json.dumps(value))
+
+    @property
+    def session_state(self) -> SessionState:
+        return SessionState.from_json(self._q.value("session/state", ""))
+    @session_state.setter
+    def session_state(self, state: SessionState) -> None: self._q.setValue("session/state", state.to_json())
 
     # --- properties --------------------------------------------------------------
     @property

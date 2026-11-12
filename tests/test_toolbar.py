@@ -160,26 +160,34 @@ def test_short_height_does_not_crash_and_keeps_minimum_small(qtbot):
 
 
 def test_full_tier_survives_a_1080p_fullscreen_window_and_thresholds_match_real_fit(qtbot):
-    """Nihai inceleme, madde 8: eşikler (_FULL_MIN_H=1030, _COMPACT_MIN_H=800) brief'in YANLIŞ tahmininden
-    alınmıştı -- gerçek eski asgari 936'ydı. Sonuç: görev çubuğu görünen 1920x1080 tam ekran pencerede
-    ToolBar'a ~1000-1010 px kalıyor ve araç çubuğu FULL ~150 px boşlukla sığacakken COMPACT'a düşüyordu.
-    Kullanıcının birincil hedefi tam olarak o pencere.
+    """Eşikler başlangıç tahminidir; gerçek fontta taşan kademe seçilmez.
 
-    Eşiklerin ölçüldüğü değerler (FULL içeriğinin sizeHint().height()'ı 853, ToolBar ~940'a kadar
-    kaydırmasız sığıyor) toolbar.py'deki yorumda duruyor; BURADA iddia edilmiyor. Sebep bu dosyanın
-    kendi tuzak notu (bkz. test_glyph_button_hides_label_ink_when_show_label_false): offscreen QPA'da
-    kayıtlı font olup olmamasına göre glif ölçüleri -- dolayısıyla content.sizeHint() -- çalıştırma
-    sırasına göre değişiyor. Kademe eşikleri ise saf sayı karşılaştırması, sıradan bağımsız."""
+    Saf eşik sözleşmesi korunur. Gerçek yerleşimde ise 1010 px'te FULL'u
+    koşulsuz istemek, sarılan satırları veya kayıt düğmesini yok saymayı
+    zorunlu kılıyordu. Her kademeyi bağımsız sizeHint + gerçek dış alanla ölç.
+    """
+    from matematigin_mantigi.ui.toolbar import _TIERS, _tier_for_height
     tb = make(qtbot)
-    for h in (1080, 1040, 1010):
+    needs = {}
+    for spec in _TIERS:
+        tb._apply_tier(spec)
+        tb.layout().activate()
+        QApplication.processEvents()
+        chrome = tb.height() - tb.scroll_area.viewport().height()
+        needs[spec.name] = tb.content.sizeHint().height() + chrome
+    for h, initial in [(1080, "full"), (1040, "full"), (1010, "full"),
+                       (1009, "compact"), (950, "compact"), (900, "compact"), (860, "compact"),
+                       (859, "mini"), (768, "mini"), (700, "mini"), (400, "mini")]:
+        assert _tier_for_height(h).name == initial
         tb.resize(88, h)
-        assert tb.tier == "full", h                           # 1080p tam ekran (+ görev çubuğu): FULL kalır
-    for h in (1009, 950, 900, 860):
-        tb.resize(88, h)
-        assert tb.tier == "compact", h
-    for h in (859, 768, 700, 400):
-        tb.resize(88, h)
-        assert tb.tier == "mini", h
+        QApplication.processEvents()
+        candidates = [t.name for t in _TIERS[_TIERS.index(_tier_for_height(h)):]]
+        expected = next((t for t in candidates if needs[t] <= h), "mini")
+        assert tb.tier == expected, (h, needs)
+        if h >= needs["mini"]:
+            assert not tb.scroll_area.verticalScrollBar().isVisible(), (h, needs)
+            assert tb.content.sizeHint().height() <= tb.scroll_area.viewport().height()
+    assert needs["full"] <= 1080  # Olağan fontta FHD hâlâ FULL almalı.
 
 
 def test_record_button_always_visible_and_outside_scroll_area(qtbot):
@@ -388,3 +396,32 @@ def test_glyph_button_hides_label_ink_when_show_label_false(qtbot):
 
     assert band_ink_count(False) == 0           # etiket kapalı: bantta hiç mürekkep yok
     assert band_ink_count(True) > 0             # etiket açık: AYNI bantta mürekkep var -- ölçüm çalışıyor
+
+
+@pytest.mark.parametrize("change", ["show", "progress"])
+def test_measured_fit_is_refreshed_without_a_window_resize(qtbot, request, change):
+    from PyQt6.QtGui import QFont
+    original = QApplication.font()
+    request.addfinalizer(lambda: QApplication.setFont(original))
+    fam = theme.load_fonts(paths.FONTS_DIR)
+    font = QFont(fam.sans)
+    font.setPixelSize(10)
+    if change == "show":
+        font.setStretch(160)
+        font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 160)
+    QApplication.setFont(font)
+    tb = ToolBar(FAM)
+    qtbot.addWidget(tb)
+    tb.set_progress("0/300 tamamlandı · S1")
+    if change == "show":
+        tb.resize(88, 1080)  # resizeEvent gösterilmeden gelir; showEvent de ölçmeli.
+        tb.show()
+    else:
+        tb.show()
+        tb.resize(88, 1080)
+        QApplication.processEvents()
+        assert tb.tier == "full"
+        tb.set_progress("0/300 tamamlandı · " + "Soru " * 20)
+    qtbot.waitUntil(lambda: tb.tier != "full", timeout=3000)
+    qtbot.waitUntil(lambda: not tb.scroll_area.verticalScrollBar().isVisible(), timeout=3000)
+    assert tb.content.height() <= tb.scroll_area.viewport().height()

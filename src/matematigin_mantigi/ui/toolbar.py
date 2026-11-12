@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PyQt6.QtCore import QEvent, QRect, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QRect, Qt, pyqtSignal
 from PyQt6.QtGui import QFontMetrics
 from PyQt6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton,
                              QScrollArea, QSizePolicy, QStyle, QStyleOptionButton, QVBoxLayout, QWidget)
@@ -58,6 +58,13 @@ class _FitButton(WrapButton):
             line = ""
             for word in paragraph.split():
                 word = fm.elidedText(word, Qt.TextElideMode.ElideRight, room)
+                # Qt'nin elidedText hesabı geniş harf aralığında üç noktanın
+                # son aralığını eksik sayabilir; boyanacak sonucu da ölç.
+                if fm.horizontalAdvance(word) > room:
+                    stem = word.removesuffix("…")
+                    while stem and fm.horizontalAdvance(stem + "…") > room:
+                        stem = stem[:-1]
+                    word = stem + "…" if fm.horizontalAdvance("…") <= room else ""
                 candidate = f"{line} {word}" if line else word
                 if line and fm.horizontalAdvance(candidate) > room:
                     lines.append(line)
@@ -299,6 +306,16 @@ class ToolBar(QWidget):
         outer.addWidget(self.record_label)
 
         self._apply_tier(_FULL)
+        self._fit_ready = True
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._refresh_fit()
+
+    def _refresh_fit(self) -> None:
+        self._tier_need.clear()
+        self._apply_tier(next(t for t in _TIERS if t.name == self.tier))
+        self._update_tier()
 
     # --- helpers -----------------------------------------------------------
     def _caption(self, text: str) -> QLabel:
@@ -351,20 +368,28 @@ class ToolBar(QWidget):
 
     def _first_fitting(self, spec: _TierSpec) -> _TierSpec:
         """Yükseklik eşiğinin seçtiği kademeden başlayıp içeriği kaydırmasız sığan ilk kademeyi verir (MINI son
-        çare). Kademenin gereksinimi bir kez ölçülür (uygulayıp content.minimumSizeHint) ve önbelleklenir."""
+        çare). Kademenin gereksinimi sabit genişlikteki tüm satırlarla ölçülür;
+        gösterim/metin değişiminde _refresh_fit önbelleği geçersiz kılar."""
         lay, alert = self.layout(), self.alert_label
         chrome = (lay.contentsMargins().top() + lay.contentsMargins().bottom() + lay.spacing()
-                  + self.record_button.sizeHint().height() + lay.spacing() + self.record_label.sizeHint().height())
+                  + lay.spacing() + self.record_label.sizeHint().height())
         if not alert.isHidden():
             chrome += alert.heightForWidth(self.width()) + lay.spacing()
-        avail = self.height() - chrome
         for t in _TIERS[_TIERS.index(spec):]:
+            # RecordButton özel çizilir; sizeHint() (-1, -1) döner. Gerçek sabit
+            # çapı, mevcut değil denenen kademeden al (FULL ile MINI farklı).
+            avail = self.height() - chrome - t.record_d
             need = self._tier_need.get(t.name)
             if need is None:
                 keep = self.tier
                 self._apply_tier(t)
                 self.content.layout().activate()
-                need = self._tier_need[t.name] = self.content.minimumSizeHint().height()
+                # minimumSizeHint, sarılan QLabel satırlarını saymaz. Genişlik
+                # sabit: heightForWidth, düğmelerle etiketlerin tüm satırlarını içerir.
+                need = self._tier_need[t.name] = max(
+                    self.content.minimumSizeHint().height(),
+                    self.content.layout().totalHeightForWidth(self.width()),
+                )
                 if keep != t.name:
                     self._apply_tier(next(x for x in _TIERS if x.name == keep))
                     self.content.layout().activate()
@@ -435,10 +460,14 @@ class ToolBar(QWidget):
             d = self.width_buttons[w]; d.blockSignals(True); d.setChecked(True); d.blockSignals(False)
 
     def set_work_label(self, text: str) -> None:
-        self.work_button.setText(text)
+        if self.work_button.text() != text:
+            self.work_button.setText(text)
+            self._refresh_fit()
 
     def set_progress(self, text: str) -> None:
-        self.progress_label.setText(text)
+        if self.progress_label.text() != text:
+            self.progress_label.setText(text)
+            self._refresh_fit()
 
     def set_recording(self, on: bool) -> None:
         self.record_button.blockSignals(True); self.record_button.setChecked(on); self.record_button.blockSignals(False)
@@ -454,7 +483,11 @@ class ToolBar(QWidget):
 
     def _sync_fullscreen_button(self) -> None:
         b = self.fullscreen_button
-        b.setText(self.WINDOWED_TEXT if self._fullscreen else self.FULLSCREEN_TEXT)
+        text = self.WINDOWED_TEXT if self._fullscreen else self.FULLSCREEN_TEXT
+        if b.text() != text:
+            b.setText(text)
+            if hasattr(self, "_fit_ready"):
+                self._refresh_fit()
         b.setEnabled(not self._recording)           # kayıt sürerken pencere değişirse yanlış alan kayda girer
         if self._recording:
             b.setToolTip("Kayıt sürerken tam ekran/pencere değiştirilemez (kayıt alanı kaymasın). Kaydı durdurunca F11 / Esc çalışır.")

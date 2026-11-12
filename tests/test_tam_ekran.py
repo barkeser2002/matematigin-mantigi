@@ -195,6 +195,9 @@ if len(sys.argv) > 1 and sys.argv[1] != "default":
     fam = load_fonts(paths.FONTS_DIR)
     font = QFont(fam.sans, 11)
     font.setStretch(int(sys.argv[1]))
+    # Streç Linux'ta da uygulanıyor; 81px sözcük yine iki satırda sığıyordu.
+    # Harf aralığı, platformun font geri düşüşünden bağımsız ek satır üretir.
+    font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 160)
     app.setFont(font)
 tmp = Path(tempfile.mkdtemp())
 st = AppSettings(QSettings(str(tmp / "x.ini"), QSettings.Format.IniFormat))

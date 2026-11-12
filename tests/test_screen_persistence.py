@@ -34,7 +34,7 @@ def test_restoration_does_not_open_preview_when_board_missing(window, monkeypatc
     window.settings.board_screen_key = ('missing', '', '', '')
     window.settings.preview_screen_key = screen_key(board)
     calls = []
-    monkeypatch.setattr(window, '_configure_screens', lambda b, p: calls.append((b, p)))
+    monkeypatch.setattr(window, '_configure_screens', lambda b, p, **kw: calls.append((b, p)))
     window._restore_screen_preferences()
     assert calls == [(None, None)]
 
@@ -46,7 +46,7 @@ def test_restoration_resolves_devices_independent_of_order(window, monkeypatch):
     window.settings.preview_screen_key = screen_key(preview)
     monkeypatch.setattr(QApplication, 'screens', staticmethod(lambda: [preview, board]))
     calls = []
-    monkeypatch.setattr(window, '_configure_screens', lambda b, p: calls.append((b, p)))
+    monkeypatch.setattr(window, '_configure_screens', lambda b, p, **kw: calls.append((b, p)))
     window._restore_screen_preferences()
     assert calls == [(board, preview)]
 

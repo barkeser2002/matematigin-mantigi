@@ -560,7 +560,7 @@ def test_startup_waits_for_the_saved_board_screen_without_blocking(qtbot, tmp_pa
     ini_settings.board_screen_key = missing
     win = make_window(qtbot, tmp_path, ini_settings, dead_camera, startup=True, show=False)
     calls = []
-    monkeypatch.setattr(win, "_configure_screens", lambda b, p: calls.append((b, p)))
+    monkeypatch.setattr(win, "_configure_screens", lambda b, p, **kw: calls.append((b, p)))
     win._restore_screen_preferences()
     assert calls == []                                          # hemen vazgeçilmedi, UI dönüyor
     qtbot.waitUntil(lambda: calls == [(None, None)], timeout=5000)   # süre dolunca mevcut ekranda kalır
@@ -582,7 +582,7 @@ def test_startup_uses_the_screen_as_soon_as_it_appears(qtbot, tmp_path, ini_sett
     win = make_window(qtbot, tmp_path, ini_settings, dead_camera, startup=True, show=False)
     calls, screens = [], []
     monkeypatch.setattr(QApplication, "screens", staticmethod(lambda: list(screens)))
-    monkeypatch.setattr(win, "_configure_screens", lambda b, p: calls.append((b, p)))
+    monkeypatch.setattr(win, "_configure_screens", lambda b, p, **kw: calls.append((b, p)))
     win._restore_screen_preferences()
     qtbot.wait(60)
     assert calls == []
@@ -595,7 +595,7 @@ def test_normal_launch_does_not_wait_for_a_missing_screen(qtbot, tmp_path, ini_s
     ini_settings.board_screen_key = ("tablet", "v", "m", "1")
     win = make_window(qtbot, tmp_path, ini_settings, dead_camera, startup=False, show=False)
     calls = []
-    monkeypatch.setattr(win, "_configure_screens", lambda b, p: calls.append((b, p)))
+    monkeypatch.setattr(win, "_configure_screens", lambda b, p, **kw: calls.append((b, p)))
     win._restore_screen_preferences()
     assert calls == [(None, None)]
     close_window(win)
@@ -604,7 +604,7 @@ def test_normal_launch_does_not_wait_for_a_missing_screen(qtbot, tmp_path, ini_s
 def test_applying_settings_cancels_the_startup_wait(qtbot, tmp_path, ini_settings, dead_camera, monkeypatch):
     ini_settings.board_screen_key = ("tablet", "v", "m", "1")
     win = make_window(qtbot, tmp_path, ini_settings, dead_camera, startup=True, show=False)
-    monkeypatch.setattr(win, "_configure_screens", lambda b, p: None)
+    monkeypatch.setattr(win, "_configure_screens", lambda b, p, **kw: None)
     win._restore_screen_preferences()
     assert win._startup_screen_timer.isActive()
     win.apply_settings_values(SettingsValues(board_screen=None, preview_screen=None))
@@ -654,6 +654,52 @@ def test_build_window_restores_missing_file_with_default_and_a_short_toolbar_not
     assert win.toolbar.alert_label.text() == ""                         # birkaç saniye sonra kalkar
     assert win.flow.current.id == win.flow.questions[0].id             # eski dosyanın konumu uygulanmadı
     assert win.recorder.state is RecorderState.IDLE
+    close_window(win)
+
+
+@pytest.mark.parametrize("startup", [False, True])
+@pytest.mark.parametrize("fullscreen", [False, True, None])
+def test_board_screen_launch_keeps_the_last_window_mode(
+        qtbot, tmp_path, monkeypatch, ini_settings, startup, fullscreen):
+    from matematigin_mantigi.ui.dual_screen import screen_key
+
+    monkeypatch.chdir(tmp_path)
+    board = QApplication.primaryScreen()
+    # Varsayılan offscreen ekranın adı boştur; gerçek ekran gibi kalıcı kimlik ver.
+    monkeypatch.setattr(board, "name", lambda: "tablet")
+    ini_settings.board_screen_key = screen_key(board)
+    assert ini_settings.board_screen_key is not None
+    if fullscreen is not None:
+        ini_settings.session_state = SessionState(fullscreen=fullscreen, geometry=(30, 40, 640, 480))
+    configured = []
+    original = MainWindow._configure_screens
+
+    def observe(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        configured.append(True)
+
+    monkeypatch.setattr(MainWindow, "_configure_screens", observe)
+    win = app_mod.build_window(_args(tmp_path, *(["--baslangic"] if startup else [])), FAM, ini_settings,
+                               mac_autostart(tmp_path / "ev"))
+    qtbot.addWidget(win)
+    win.show()
+    qtbot.waitUntil(lambda: bool(configured))
+    assert win.isFullScreen() is (fullscreen is not False)
+    assert win.screen() is board
+    if fullscreen is False:
+        assert win.geometry() == QRect(30, 40, 640, 480)
+    close_window(win)
+
+
+def test_selecting_a_board_screen_in_settings_still_enters_fullscreen(
+        qtbot, tmp_path, ini_settings, dead_camera):
+    ini_settings.session_state = SessionState(fullscreen=False, geometry=(30, 40, 640, 480))
+    win = make_window(qtbot, tmp_path, ini_settings, dead_camera, state=ini_settings.session_state)
+    assert not win.isFullScreen()
+    board = QApplication.primaryScreen()
+    win.apply_settings_values(SettingsValues(board_screen=board, preview_screen=None))
+    qtbot.waitUntil(win.isFullScreen)
+    assert win.screen() is board
     close_window(win)
 
 

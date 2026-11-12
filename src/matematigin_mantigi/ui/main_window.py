@@ -175,6 +175,9 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
         self.autostart = autostart or Autostart()
         self._session_ready = False                     # kurulum bitene dek oturum durumu yazılmaz (eskiyi ezmesin)
+        # Soru/pencere olayları ayarları güncellemeden önce açılıştaki tercihi al. İlk açılışta tahta ekranı
+        # seçimi eskisi gibi tam ekran açılır; kayıtlı pencere modu yalnız geri yüklemede korunur.
+        self._initial_fullscreen = settings.session_state.fullscreen if settings.has_session_state else True
         self._pending_board: tuple[str, str] | None = None
         self._startup_screen_wait_left = STARTUP_SCREEN_WAIT_MS if startup else 0
         self._startup_screen_timer = QTimer(self)
@@ -547,7 +550,7 @@ class MainWindow(QMainWindow):
         self._startup_screen_wait_left = 0
         if board_key and board is None:
             target = None
-        self._configure_screens(board, target)
+        self._configure_screens(board, target, restoring=True)
 
     def _preview_closed(self):
         self.settings.preview_screen_key = None
@@ -590,7 +593,7 @@ class MainWindow(QMainWindow):
         except RuntimeError:
             return False
 
-    def _configure_screens(self, board, target):
+    def _configure_screens(self, board, target, *, restoring=False):
         if self.recorder.state is RecorderState.RECORDING or self._record_saving():
             self.toolbar.set_alert("preview", "Kayıt sırasında ekran seçimi değiştirilemez.")
             return
@@ -602,8 +605,19 @@ class MainWindow(QMainWindow):
                 return
             if self.windowHandle():
                 self.windowHandle().setScreen(board)
-            self.move(board.availableGeometry().topLeft())
-            self.showFullScreen()
+            if not restoring or self._initial_fullscreen:
+                self.move(board.availableGeometry().topLeft())
+                self.showFullScreen()
+            else:
+                self.showNormal()
+                avail = board.availableGeometry()
+                if not avail.contains(self.frameGeometry()):
+                    # Başka/kayıp ekrandaki veya taşan pencereyi ortala; çerçeveye de yer bırak.
+                    # Hedef ekrana zaten sığan kayıtlı geometriyi değiştirme.
+                    rect = QRect(0, 0, min(self.width(), avail.width() * 9 // 10),
+                                 min(self.height(), avail.height() * 9 // 10))
+                    rect.moveCenter(avail.center())
+                    self.setGeometry(rect)
         board = board or self.screen()
         if target is None:
             self.toolbar.set_alert("preview", None)

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QRect, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QFontMetrics
 from PyQt6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton,
-                             QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
+                             QScrollArea, QSizePolicy, QStyle, QStyleOptionButton, QVBoxLayout, QWidget)
 
 from matematigin_mantigi.core.models import PALETTE, TOOL_META, WIDTHS, Tool
 from matematigin_mantigi.ui import theme
@@ -18,6 +18,58 @@ _BTN_CSS = (f"QPushButton {{ background: {theme.TOOLBAR_BTN}; color: {theme.TOOL
             f" border-radius: 6px; padding: 5px 3px; font-size: 10px; font-weight: 600; }}"
             f"QPushButton:checked {{ background: {theme.ACCENT}; color: white; }}"
             f"QPushButton:disabled {{ color: {theme.TOOLBAR_DIM}; }}")
+
+
+class _FitButton(WrapButton):
+    """88px panelin metin düğmesi: karakter sayısı değil gerçek boyama alanı ölçülür.
+
+    QPushButton'ın doğal minimum genişliği tüm scroll içeriğini büyütebilir; yatay
+    kaydırma kapalıyken simge düğmeleri bile sağdan kırpılır. Paneli/kayıt alanını
+    büyütmek yerine genişliği içeride tut, kelimeleri sar; tek kelime de sığmıyorsa
+    elide et. text() ve ipucu her zaman tam komutu korur.
+    """
+
+    def setText(self, text: str) -> None:
+        self._logical = text
+        self.setToolTip(text)
+        if hasattr(self, "_fit_width"):
+            self.fit_width(self._fit_width, compact=self._compact)
+        else:
+            QPushButton.setText(self, text)
+
+    def fit_width(self, width: int, *, compact: bool = False) -> None:
+        self._fit_width, self._compact = width, compact
+        self.setFixedWidth(width)
+        self.ensurePolished()
+        opt = QStyleOptionButton()
+        self.initStyleOption(opt)
+        opt.rect = QRect(0, 0, width, 100)
+        room = self.style().subElementRect(QStyle.SubElement.SE_PushButtonContents, opt, self).width()
+        fm = QFontMetrics(self.font(), self)
+        text = self._logical
+        if compact and fm.horizontalAdvance(text) > room:
+            words = text.split()
+            for word in (words[:1] + words[-1:]):
+                if len(word) == 1 and not word.isalnum():
+                    text = word  # MINI: komutun simgesi + tam metinli ipucu.
+                    break
+        lines: list[str] = []
+        for paragraph in text.splitlines():
+            line = ""
+            for word in paragraph.split():
+                word = fm.elidedText(word, Qt.TextElideMode.ElideRight, room)
+                candidate = f"{line} {word}" if line else word
+                if line and fm.horizontalAdvance(candidate) > room:
+                    lines.append(line)
+                    line = word
+                else:
+                    line = candidate
+            lines.append(line)
+        shown = "\n".join(lines)
+        QPushButton.setText(self, shown)
+        text_size = fm.size(Qt.TextFlag.TextShowMnemonic, shown)
+        self.setFixedHeight(self.style().sizeFromContents(QStyle.ContentsType.CT_PushButton,
+                                                         opt, text_size, self).height())
 
 
 @dataclass(frozen=True)
@@ -135,16 +187,16 @@ class ToolBar(QWidget):
         col.addWidget(self._nine, 0, Qt.AlignmentFlag.AlignHCenter)
         cap = self._caption("KAYITTA\nGÖRÜNMEZ"); col.addWidget(cap); self.section_captions.append(cap)
 
-        self.pen_settings_button = QPushButton("Kalem"); self.pen_settings_button.setStyleSheet(_BTN_CSS)
+        self.pen_settings_button = _FitButton("Kalem"); self.pen_settings_button.setStyleSheet(_BTN_CSS)
         self.pen_settings_button.clicked.connect(self.penSettingsRequested)
-        self.settings_button = QPushButton("⚙ Ayarlar"); self.settings_button.setStyleSheet(_BTN_CSS)
+        self.settings_button = _FitButton("⚙ Ayarlar"); self.settings_button.setStyleSheet(_BTN_CSS)
         self.settings_button.clicked.connect(self.settingsRequested)
-        self.editor_button = QPushButton("✎ Sorular"); self.editor_button.setStyleSheet(_BTN_CSS)
+        self.editor_button = _FitButton("✎ Sorular"); self.editor_button.setStyleSheet(_BTN_CSS)
         self.editor_button.clicked.connect(self.editorRequested)
-        self.layout_button = QPushButton("⧉ Düzen"); self.layout_button.setCheckable(True)
+        self.layout_button = _FitButton("⧉ Düzen"); self.layout_button.setCheckable(True)
         self.layout_button.setStyleSheet(_BTN_CSS)
         self.layout_button.toggled.connect(self.layoutEditToggled)
-        self.fullscreen_button = QPushButton(self.FULLSCREEN_TEXT); self.fullscreen_button.setStyleSheet(_BTN_CSS)
+        self.fullscreen_button = _FitButton(self.FULLSCREEN_TEXT); self.fullscreen_button.setStyleSheet(_BTN_CSS)
         self.fullscreen_button.clicked.connect(self.fullscreenRequested)
         self._fullscreen, self._recording = False, False
         self._sync_fullscreen_button()
@@ -193,11 +245,11 @@ class ToolBar(QWidget):
         col.addWidget(self._rule())
 
         cap = self._caption("SORU AKIŞI"); col.addWidget(cap); self.section_captions.append(cap)
-        self.work_button = WrapButton("Soruyu işle"); self.work_button.setStyleSheet(_BTN_CSS)
+        self.work_button = _FitButton("Soruyu işle"); self.work_button.setStyleSheet(_BTN_CSS)
         self.work_button.clicked.connect(self.workToggled)
-        self.prev_button = WrapButton("← Önceki soru"); self.prev_button.setStyleSheet(_BTN_CSS)
+        self.prev_button = _FitButton("← Önceki soru"); self.prev_button.setStyleSheet(_BTN_CSS)
         self.prev_button.clicked.connect(self.prevRequested)
-        self.next_button = WrapButton("Sıradaki soru →"); self.next_button.setStyleSheet(_BTN_CSS)
+        self.next_button = _FitButton("Sıradaki soru →"); self.next_button.setStyleSheet(_BTN_CSS)
         self.next_button.clicked.connect(self.nextRequested)
         self.progress_label = self._caption("0/0")
         self.progress_label.setWordWrap(True)         # "0/3 tamamlandı · S1" iki satıra kırılır
@@ -206,9 +258,9 @@ class ToolBar(QWidget):
         col.addWidget(self._rule())
 
         hrow = QHBoxLayout(); hrow.setSpacing(4)
-        self.undo_button = QPushButton("↶"); self.undo_button.setStyleSheet(_BTN_CSS)
+        self.undo_button = _FitButton("↶"); self.undo_button.setStyleSheet(_BTN_CSS)
         self.undo_button.clicked.connect(self.undoRequested); self.undo_button.setEnabled(False)
-        self.clear_button = QPushButton("✕"); self.clear_button.setStyleSheet(_BTN_CSS)
+        self.clear_button = _FitButton("✕"); self.clear_button.setStyleSheet(_BTN_CSS)
         self.clear_button.clicked.connect(self.clearRequested)
         hrow.addWidget(self.undo_button); hrow.addWidget(self.clear_button)
         col.addLayout(hrow)
@@ -330,6 +382,19 @@ class ToolBar(QWidget):
         self.record_button.set_diameter(spec.record_d)
         self._col.setSpacing(spec.spacing)
         self._col.setContentsMargins(*spec.margins)
+        inner = self.width() - spec.margins[0] - spec.margins[2]
+        for b in (self.pen_settings_button, self.settings_button, self.editor_button,
+                  self.layout_button, self.fullscreen_button, self.work_button,
+                  self.prev_button, self.next_button):
+            b.fit_width(inner, compact=spec is _MINI)
+        # QLabel'ın uzun kelime minimumu da scroll içeriğini yatayda büyütmesin.
+        # Sabit panel genişliğinde yüksekliği Qt'nin heightForWidth hesabı belirler.
+        for cap in (*self.section_captions, self.progress_label):
+            cap.setFixedWidth(inner)
+            cap.setWordWrap(True)
+        half = (inner - 4) // 2
+        self.undo_button.fit_width(half)
+        self.clear_button.fit_width(inner - 4 - half)
         self._nine.setFont(theme.hand_font(self.fam, spec.nine_px, 700))
         for cap in self.section_captions:
             cap.setVisible(spec.captions_visible)

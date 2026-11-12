@@ -171,13 +171,13 @@ def test_full_tier_survives_a_1080p_fullscreen_window_and_thresholds_match_real_
     kayıtlı font olup olmamasına göre glif ölçüleri -- dolayısıyla content.sizeHint() -- çalıştırma
     sırasına göre değişiyor. Kademe eşikleri ise saf sayı karşılaştırması, sıradan bağımsız."""
     tb = make(qtbot)
-    for h in (1010, 1000, 960, 950):
+    for h in (1080, 1040, 1010):
         tb.resize(88, h)
-        assert tb.tier == "full", h                           # 1080p tam ekran + görev çubuğu: FULL kalır
-    for h in (949, 900, 800, 790):
+        assert tb.tier == "full", h                           # 1080p tam ekran (+ görev çubuğu): FULL kalır
+    for h in (1009, 950, 900, 860):
         tb.resize(88, h)
         assert tb.tier == "compact", h
-    for h in (789, 700, 400):
+    for h in (859, 768, 700, 400):
         tb.resize(88, h)
         assert tb.tier == "mini", h
 
@@ -207,7 +207,7 @@ def test_alert_strip_sits_above_record_button_and_fits_in_every_tier(qtbot):
     for text in ("Kayıt kaydediliyor…", "Kayıt sürerken pencere değiştirilemez"):
         tb.set_alert("test", text)
         assert alert.text() == text
-        for h, tier in ((1100, "full"), (900, "compact"), (700, "mini"), (400, "mini")):
+        for h, tier in ((1100, "full"), (950, "compact"), (700, "mini"), (400, "mini")):
             tb.resize(88, h)
             QApplication.processEvents()                      # kademe değişiminin yeniden yerleşimi
             g, btn = alert.geometry(), tb.record_button.geometry()
@@ -277,7 +277,7 @@ def test_alert_strip_takes_only_its_own_room_so_content_does_not_start_scrolling
             assert shown.tier == plain.tier, (text, h)
             assert shown.scroll_area.viewport().height() == plain.scroll_area.viewport().height(), (text, h)
     shown.set_alert("test", None)
-    shown.resize(88, 960)
+    shown.resize(88, 1020)                                    # FULL eşiği 1010: şeritsiz FULL, şeritli COMPACT
     QApplication.processEvents()
     assert shown.tier == "full"
     shown.set_alert("test", "Kayıt kaydediliyor…")                    # yeniden boyutlanmadan: kalan yere COMPACT sığar

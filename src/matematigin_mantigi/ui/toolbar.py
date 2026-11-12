@@ -59,16 +59,18 @@ _MINI = _TierSpec(
     name="mini", glyph_h=28, glyph_px=16, show_label=False,
     swatch_d=24, dot_d=14, record_d=44,
     spacing=4, margins=(8, 8, 8, 8), nine_px=28,
-    captions_visible=False, dot_rows=(WIDTHS,), single_line=True,
+    captions_visible=False, dot_rows=(WIDTHS,), single_line=False,   # tek satır 93 px'e taşıp kırpılıyordu (iç genişlik 72)
 )
 
-# Eşikler ÖLÇÜMLE seçildi (nihai inceleme, madde 8): FULL içeriğinin sizeHint().height()'ı 853 px,
-# yani ToolBar ~940 px'e kadar kaydırmasız sığıyor. Eski 1030 değeri brief'in yanlış tahminindendi
-# (gerçek eski asgari 936'ydı) ve görev çubuğu görünen 1920x1080 TAM EKRAN penceresinde -- kullanıcının
-# BİRİNCİL hedefi -- ToolBar'a kalan ~1000-1010 px'i COMPACT'a düşürüyordu, oysa FULL ~150 px boşlukla
-# sığıyor. COMPACT için aynı pay: 790.
-_FULL_MIN_H = 950
-_COMPACT_MIN_H = 790
+# Eşikler ÖLÇÜMLE seçildi: kademenin içeriği (content.minimumSizeHint) + kaydırma alanının dışındaki kayıt
+# düğmesi/etiketi/boşluklar (~89 px) kaydırmasız sığmalı. Tam ekran düğmesiyle (+28 px) ölçülen içerik:
+# FULL ~910 px -> ToolBar >= ~1000 px; COMPACT ~757 px -> >= ~850 px; MINI ~600 px -> >= ~700 px.
+# 1080p tam ekranda (1080 px) FULL, 1366x768 tam ekranda MINI kaydırmasız sığar. Eşikler yalnız başlangıç
+# tahminidir: gerçek yazı tipi/DPI içeriği büyütürse _update_tier ölçülen gereksinimle bir alt kademeye iner,
+# böylece kaydırma yalnız MINI bile sığmayan çok küçük pencerede (son çare) çıkar.
+_FULL_MIN_H = 1010
+_COMPACT_MIN_H = 860
+_TIERS = (_FULL, _COMPACT, _MINI)
 
 
 def _tier_for_height(h: int) -> _TierSpec:
@@ -89,6 +91,8 @@ class ToolBar(QWidget):
     görünür ve tıklanabilir.
     """
 
+    FULLSCREEN_TEXT, WINDOWED_TEXT = "⛶ Tam ekran", "❐ Pencere"
+
     toolSelected = pyqtSignal(object)      # Tool
     colorSelected = pyqtSignal(str)        # hex
     widthSelected = pyqtSignal(int)
@@ -102,11 +106,13 @@ class ToolBar(QWidget):
     settingsRequested = pyqtSignal()
     editorRequested = pyqtSignal()
     layoutEditToggled = pyqtSignal(bool)
+    fullscreenRequested = pyqtSignal()
 
     def __init__(self, fam: FontFamilies, parent=None):
         super().__init__(parent)
         self.fam = fam
         self.tier = _FULL.name
+        self._tier_need: dict[str, int] = {}          # kademe -> kaydırmasız gereken içerik yüksekliği (ölçülünce)
         self.setFixedWidth(theme.TOOLBAR_WIDTH)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.setStyleSheet(f"background: {theme.INK};")
@@ -138,8 +144,13 @@ class ToolBar(QWidget):
         self.layout_button = QPushButton("⧉ Düzen"); self.layout_button.setCheckable(True)
         self.layout_button.setStyleSheet(_BTN_CSS)
         self.layout_button.toggled.connect(self.layoutEditToggled)
+        self.fullscreen_button = QPushButton(self.FULLSCREEN_TEXT); self.fullscreen_button.setStyleSheet(_BTN_CSS)
+        self.fullscreen_button.clicked.connect(self.fullscreenRequested)
+        self._fullscreen, self._recording = False, False
+        self._sync_fullscreen_button()
         col.addWidget(self.pen_settings_button); col.addWidget(self.settings_button)
         col.addWidget(self.editor_button); col.addWidget(self.layout_button)
+        col.addWidget(self.fullscreen_button)
         col.addWidget(self._rule())
 
         self._tool_group = QButtonGroup(self); self._tool_group.setExclusive(True)
@@ -280,9 +291,34 @@ class ToolBar(QWidget):
         alert = self.alert_label
         room = 0 if alert.isHidden() else alert.heightForWidth(self.width()) + self.layout().spacing()
         spec = _tier_for_height(self.height() - room)
+        if self.isVisible():
+            spec = self._first_fitting(spec)
         if spec.name != self.tier:
             self.tier = spec.name
             self._apply_tier(spec)
+
+    def _first_fitting(self, spec: _TierSpec) -> _TierSpec:
+        """Yükseklik eşiğinin seçtiği kademeden başlayıp içeriği kaydırmasız sığan ilk kademeyi verir (MINI son
+        çare). Kademenin gereksinimi bir kez ölçülür (uygulayıp content.minimumSizeHint) ve önbelleklenir."""
+        lay, alert = self.layout(), self.alert_label
+        chrome = (lay.contentsMargins().top() + lay.contentsMargins().bottom() + lay.spacing()
+                  + self.record_button.sizeHint().height() + lay.spacing() + self.record_label.sizeHint().height())
+        if not alert.isHidden():
+            chrome += alert.heightForWidth(self.width()) + lay.spacing()
+        avail = self.height() - chrome
+        for t in _TIERS[_TIERS.index(spec):]:
+            need = self._tier_need.get(t.name)
+            if need is None:
+                keep = self.tier
+                self._apply_tier(t)
+                self.content.layout().activate()
+                need = self._tier_need[t.name] = self.content.minimumSizeHint().height()
+                if keep != t.name:
+                    self._apply_tier(next(x for x in _TIERS if x.name == keep))
+                    self.content.layout().activate()
+            if need <= avail or t is _MINI:
+                return t
+        return _MINI
 
     def _apply_tier(self, spec: _TierSpec) -> None:
         for b in self.tool_buttons.values():
@@ -343,6 +379,22 @@ class ToolBar(QWidget):
         self.record_button.blockSignals(True); self.record_button.setChecked(on); self.record_button.blockSignals(False)
         self.record_label.setText("DURDUR" if on else "KAYIT")
         self.record_button.update()
+        self._recording = on
+        self._sync_fullscreen_button()
+
+    def set_fullscreen(self, on: bool) -> None:
+        """Pencere tam ekrana girince/çıkınca düğmenin yazısı değişir (sinyal yaymaz)."""
+        self._fullscreen = on
+        self._sync_fullscreen_button()
+
+    def _sync_fullscreen_button(self) -> None:
+        b = self.fullscreen_button
+        b.setText(self.WINDOWED_TEXT if self._fullscreen else self.FULLSCREEN_TEXT)
+        b.setEnabled(not self._recording)           # kayıt sürerken pencere değişirse yanlış alan kayda girer
+        if self._recording:
+            b.setToolTip("Kayıt sürerken tam ekran/pencere değiştirilemez (kayıt alanı kaymasın). Kaydı durdurunca F11 / Esc çalışır.")
+        else:
+            b.setToolTip("Tam ekrandan pencereye dön (F11 / Esc)" if self._fullscreen else "Tam ekran (F11)")
 
     def set_recording_time(self, seconds: int) -> None:
         """Kayıt süresi araç çubuğunda sayar (kayda girmez): 'DURDUR · 01:23'."""

@@ -108,9 +108,13 @@ def _turkish_details_button(box: QMessageBox) -> None:
 
 class _Preview(CameraView):
     closed = pyqtSignal()
+    fullscreenKey = pyqtSignal()        # F11 / Esc ana pencereye iletilir: önizleme etkinken ana pencerenin
+    escapeKey = pyqtSignal()            # WindowShortcut'ları çalışmaz, tam ekrandan çıkış kilitlenirdi
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        QShortcut(QKeySequence("F11"), self, activated=self.fullscreenKey.emit)
+        QShortcut(QKeySequence("Escape"), self, activated=self.escapeKey.emit)
         self.close_button = QPushButton("Kapat", self)
         self.close_button.setObjectName("preview_close")
         self.close_button.clicked.connect(self.close)
@@ -219,6 +223,7 @@ class MainWindow(QMainWindow):
         tb.recordToggled.connect(self.toggle_recording)
         tb.penSettingsRequested.connect(self.open_pen_settings)
         tb.settingsRequested.connect(self.open_settings)
+        tb.fullscreenRequested.connect(self._toggle_fullscreen)
         tb.editorRequested.connect(self.open_editor)
         tb.layoutEditToggled.connect(self.work_area.set_edit_mode)
         self.work_area.editModeChanged.connect(tb.set_layout_edit)
@@ -449,6 +454,7 @@ class MainWindow(QMainWindow):
     def changeEvent(self, event):
         super().changeEvent(event)
         if event.type() == QEvent.Type.WindowStateChange:
+            self.toolbar.set_fullscreen(self.isFullScreen())
             self._observe_record_geometry()
             QTimer.singleShot(0, self._check_record_geometry)
 
@@ -550,6 +556,8 @@ class MainWindow(QMainWindow):
         preview.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self._preview, self._preview_board, self._preview_screen = preview, board, target
         preview.closed.connect(self._preview_closed)
+        preview.fullscreenKey.connect(self._toggle_fullscreen)
+        preview.escapeKey.connect(self._escape)
         self.webcam_panel.frameReady.connect(preview.set_frame)
         self.webcam_panel.placeholderChanged.connect(preview.set_placeholder)
         if self.webcam_panel.view._frame is not None:

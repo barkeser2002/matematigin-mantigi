@@ -1,14 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller spec: macOS .app (PyQt6 + OpenCV + numpy + openpyxl). Çalıştırma: pyinstaller mac/matematigin_mantigi.spec
-import re
 from pathlib import Path
 
 import imageio_ffmpeg
 
 ROOT = Path(SPECPATH).parent
 PKG = ROOT / "src" / "matematigin_mantigi"
-_m = re.search(r'^BUILD\s*=\s*"(\d+)"', (PKG / "_build.py").read_text(encoding="utf-8"), re.M)
-BUILD = _m.group(1) if _m else "0"                # yapı numarası; yerel derlemede (dev) "0"
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()          # ikili pakete girer; imageio_ffmpeg pakette aynı yoldan bulur
 
 block_cipher = None
@@ -51,7 +48,6 @@ app = BUNDLE(
         "CFBundleDisplayName": "Matematiğin Mantığı",
         "CFBundleName": "Matematiğin Mantığı",
         "CFBundleShortVersionString": "0.1.0",
-        "CFBundleVersion": BUILD,                  # yapı numarası (CI _build.py'ye yazar)
         "NSHighResolutionCapable": True,
         "LSMinimumSystemVersion": "14.0",
         # İzin metinleri: bunlar olmadan macOS kamera/mikrofonu sessizce reddeder.

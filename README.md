@@ -155,10 +155,37 @@ Kamera, mikrofon, ekran kaydı ve Documents klasörü izinleri ilk kullanımda s
 Ekran kaydı izni verildikten sonra uygulamayı yeniden başlat (macOS bunu ister). Birden fazla kamera varsa
 (ör. OBS Virtual Camera 0, FaceTime 1) ⚙ Ayarlar > Kamera > "Kameraları tara" gerçek adlarıyla listeler.
 
-## Windows paketi (.exe)
+## Windows paketi (.exe) ve kurulum programı
 
 Yerelde: `powershell -ExecutionPolicy Bypass -File windows\build_win.ps1` — `.venv` kurar, testleri koşar,
 `dist\Matematigin Mantigi\Matematigin Mantigi.exe` (tek klasör) üretir. ffmpeg ve PortAudio (ses) ikilileri pakete girer.
+[Inno Setup 6](https://jrsoftware.org/isinfo.php) kuruluysa aynı betik `windows\installer.iss`'yi derleyip
+`kurulum\Matematigin-Mantigi-Kurulum.exe` üretir (yoksa uyarı verip atlar).
+
+## Kurulum ve güncelleme
+
+**Windows (önerilen):** [Releases](https://github.com/barkeser2002/matematigin-mantigi/releases/latest) sayfasından
+`Matematigin-Mantigi-Kurulum.exe`'yi indirip çalıştır. Yönetici izni istemez; kullanıcı bazında
+`%LOCALAPPDATA%\Programs\Matematigin Mantigi` altına kurar, Başlat menüsü kısayolu ekler (masaüstü kısayolu isteğe bağlı),
+Ayarlar > Uygulamalar'dan kaldırılır. Kaldırma Belgeler\Matematiğin Mantığı altındaki sorularını, kayıtlarını ve
+ayarlarını silmez. Kurulum programı imzasız olduğundan SmartScreen "Windows bilgisayarınızı korudu" diyebilir:
+**Ek bilgi > Yine de çalıştır**. Kurulum istemeyen `Matematigin-Mantigi-Windows.zip`'i açıp klasörden çalıştırabilir.
+
+**macOS:** `Matematigin-Mantigi-macOS.zip`'i aç, `.app`'i Uygulamalar'a taşı (açılmazsa aşağıdaki `xattr` notu).
+
+**Otomatik güncelleme (paketli uygulamada):** Açılıştan birkaç saniye sonra arka planda GitHub'daki son yapıya
+(`build-N`) bakılır; daha yeni yapı varsa "Yapı N mevcut (şu an M). İndirilip kurulsun ve program yeniden başlasın mı?"
+diye sorulur. Seçenekler: **Güncelle**, **Sonra**, **Bu sürümü atla** (o yapı bir daha sorulmaz, daha yenisi sorulur).
+- Kayıt sürerken (ya da kayıt kaydedilirken) soru çıkmaz; kayıt bitince ya da sonraki açılışta sorulur.
+- Ağ yoksa ya da GitHub'a ulaşılamazsa hiçbir şey gösterilmez (ayrıntı `hatalar.log`'da).
+- İndirme ilerleme çubuklu ve iptal edilebilir; dosya boyutu (varsa özeti) doğrulanır, yarım dosya kurulmaz.
+- Windows'ta kurulum programıyla kurulduysa kurulum sessiz yapılır ve uygulama kendiliğinden yeniden açılır. ZIP'ten
+  çalışıyorsa güncelleme yerine kurulum programı indirilip çalıştırılır.
+- macOS'ta yeni `.app` indirilip açılır, uygulama kapanınca eskisinin yerine konur (eskisi önce yedeklenir, başarısızsa geri
+  alınır), uygulama yeniden açılır. `.app` yazılabilir bir klasörde değilse (ör. `/Applications` izni yok) açık bir mesajla
+  indirme sayfası önerilir.
+- Kaynaktan (`python -m matematigin_mantigi`) ve yerel `dev` derlemelerinde güncelleyici kapalıdır. Yapı numarasını
+  CI, derlemeden önce `src/matematigin_mantigi/_build.py`'ye yazar.
 
 ## Otomatik yapı ve release (GitHub Actions)
 
@@ -168,7 +195,9 @@ Bir daldan elle çalıştırılırsa yalnız derler, Release yayınlamaz (dalı 
 Yalnız belge ya da görsel dosyaları (`*.md`, `docs/`, `graphify-out/`, `uploads/`, kök dizindeki resimler ve tasarım
 prototipleri) değişen push release üretmez; aynı push'ta tek bir kod ya da yapı dosyası (`src/`, `tests/`,
 `constraints.txt`, `sorular_gorsel/`, workflow...) varsa üretir.
-Yalnız Mac için `.github/workflows/mac.yml` de var. İndirdikten sonra Windows: klasörü kopyala, `.exe` çalıştır;
+Yalnız Mac için `.github/workflows/mac.yml` de var. Release'te Windows için `Matematigin-Mantigi-Kurulum.exe` (Inno Setup;
+CI'da `windows-latest` imajındaki Inno Setup ile, eksikse `choco install innosetup` ile derlenir) ve ZIP bulunur.
+İndirdikten sonra Windows: kurulum programını çalıştır (ya da ZIP'te klasörü kopyala, `.exe` çalıştır);
 macOS: zipi aç, `.app`'i Uygulamalar'a taşı; açılmazsa yukarıdaki `xattr -dr com.apple.quarantine` komutunu çalıştır
 (ya da Sistem Ayarları > Gizlilik ve Güvenlik > "Yine de Aç").
 

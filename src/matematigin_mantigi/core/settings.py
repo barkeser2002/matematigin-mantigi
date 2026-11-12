@@ -127,6 +127,11 @@ class AppSettings:
     def preview_screen_key(self, value): self._q.setValue("screens/preview", json.dumps(value))
 
     @property
+    def has_session_state(self) -> bool:
+        """İlk açılışı, pencere modunda kaydedilmiş bir oturumdan ayırır."""
+        return self._q.contains("session/state")
+
+    @property
     def session_state(self) -> SessionState:
         return SessionState.from_json(self._q.value("session/state", ""))
     @session_state.setter

@@ -538,3 +538,28 @@ def test_controller_recording_started_during_download_waits_for_idle(qtbot, ctl_
     assert ctl_env.launched == [] and ctl_env.win.isVisible()   # kayıt sürerken uygulama kapanmaz
     ctl_env.win.recorder.state = RecorderState.IDLE
     qtbot.waitUntil(lambda: bool(ctl_env.launched), timeout=5000)
+
+
+def test_app_main_starts_the_update_check_once(tmp_path):
+    """app.main açılışta güncelleme denetleyicisini tek noktadan başlatır; kaynaktan çalışırken (frozen değil) kapalıdır."""
+    script = tmp_path / "calistir.py"
+    script.write_text('''
+import sys
+from PyQt6.QtCore import QTimer
+from PyQt6.QtWidgets import QApplication
+from matematigin_mantigi import app as app_mod
+from matematigin_mantigi.ui import update_dialog
+
+real = update_dialog.install
+def spy(win, **kw):
+    c = real(win, **kw)
+    print("BAGLANDI", c.enabled, flush=True)
+    QTimer.singleShot(200, lambda: (win.close(), QApplication.instance().quit()))
+    return c
+update_dialog.install = spy
+sys.exit(app_mod.main(["matematigin-mantigi", "--kamera-yok", "--sorular", "sorular.xlsx", "--duzen", "duzen.json"]))
+''', encoding="utf-8")
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", XDG_CONFIG_HOME=str(tmp_path / "cfg"))
+    r = subprocess.run([sys.executable, str(script)], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.count("BAGLANDI") == 1 and "BAGLANDI False" in r.stdout

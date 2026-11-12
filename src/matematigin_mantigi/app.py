@@ -16,7 +16,7 @@ from matematigin_mantigi.core.question_loader import backup_path, ensure_templat
 from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState, RecorderError
 from matematigin_mantigi.core.session_store import SessionStore
 from matematigin_mantigi.core.settings import AppSettings
-from matematigin_mantigi.ui import error_notice, theme
+from matematigin_mantigi.ui import error_notice, theme, update_dialog
 from matematigin_mantigi.ui.camera_worker import OpenCvSource
 from matematigin_mantigi.ui.main_window import MainWindow
 from matematigin_mantigi.ui.question_editor import describe_load_error
@@ -213,4 +213,5 @@ def main(argv: list[str] | None = None) -> int:
     win.closed.connect(lambda: QTimer.singleShot(0, lambda: app.exit(0)))
     win.show()
     _wire_notice(notice, win)          # gösterildikten sonra: kutu pencerenin (artık kurulu) görünürlüğünü izler
+    update_dialog.install(win)         # açılışta güncelleme kontrolü; kaynaktan/dev yapıda kapalı, kayıt sürerken sormaz
     return app.exec()

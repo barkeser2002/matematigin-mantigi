@@ -421,7 +421,19 @@ def test_measured_fit_is_refreshed_without_a_window_resize(qtbot, request, chang
         tb.resize(88, 1080)
         QApplication.processEvents()
         assert tb.tier == "full"
-        tb.set_progress("0/300 tamamlandı · " + "Soru " * 20)
+        before = tb.progress_label.text()
+        # Aynı sözcük sayısı Windows'ta daha az satır tutabiliyor. Beklentiyi
+        # gevşetme: FULL'u gerçekten taşıran en kısa sarılmış metni ölçerek kur.
+        for count in range(1, 81):
+            text = "0/300 tamamlandı · " + "Soru " * count
+            tb.progress_label.setText(text)
+            tb.content.layout().activate()
+            if tb.content.sizeHint().height() > tb.scroll_area.viewport().height():
+                break
+        else:
+            pytest.fail("Regresyon kurgusu FULL içeriğini taşırmadı")
+        tb.progress_label.setText(before)
+        tb.set_progress(text)
     qtbot.waitUntil(lambda: tb.tier != "full", timeout=3000)
     qtbot.waitUntil(lambda: not tb.scroll_area.verticalScrollBar().isVisible(), timeout=3000)
     assert tb.content.height() <= tb.scroll_area.viewport().height()

@@ -4,13 +4,13 @@ from __future__ import annotations
 import os
 import sys
 import time
-from threading import Event
+from threading import Event, Lock
 from typing import Protocol
 
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")   # eklenti günlükleri de (FFmpeg vb.) bu seviyeye uyar
 import cv2  # noqa: E402
 import numpy as np
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QImage
 
 from dataclasses import replace
@@ -97,16 +97,19 @@ def resize_to_width(frame: np.ndarray, width: int) -> np.ndarray:
 
 class CameraWorker(QThread):
     frameReady = pyqtSignal(QImage)
+    frameAvailable = pyqtSignal()             # panel için en fazla bir bekleyen GUI bildirimi
     cameraError = pyqtSignal(str)
     opened = pyqtSignal(int, int)
     keyHueDetected = pyqtSignal(int)          # kenarlardan ölçülen perde tonu (OpenCV birimi)
     AUTO_KEY_EVERY = 90                       # kare; ~3 sn'de bir yeniden ölç
+    MAX_CHROMA_WIDTH = 640                    # büyük önizleme kayıtla CPU/bellek için yarışmasın
     FRAME_TIMEOUT_MS = 2000                   # kare gelmezse donuk görüntü yerine yeniden bağlantı
     MAX_FRAME_ERRORS = 30                     # art arda bu kadar kare alınamaz/işlenemezse akış hata verip durur
 
     def __init__(self, source: FrameSource, params: ChromaParams, chroma_enabled: bool = True,
                  out_width: int = 640, target_fps: int = 30, auto_key: bool = True, parent=None,
-                 open_retries: int = 0, retry_ms: int = 2000, reconnect: bool = False):
+                 open_retries: int = 0, retry_ms: int = 2000, reconnect: bool = False,
+                 render_width: int | None = None):
         super().__init__(parent)
         self._source = source
         self._params = params
@@ -121,6 +124,10 @@ class CameraWorker(QThread):
         # Sonlu FrameSource tüketicileri eski bitiş davranışını korur; canlı panel yeniden bağlanır.
         self._reconnect = reconnect
         self._frames = 0
+        self._frame_lock = Lock()
+        self._render_width = render_width
+        self._latest_frame: tuple[QImage, QImage] | None = None
+        self._frame_pending = False
 
     def set_chroma_enabled(self, on: bool) -> None:
         self._chroma = on
@@ -144,6 +151,9 @@ class CameraWorker(QThread):
 
     def set_out_width(self, w: int) -> None:
         self._out_width = max(64, int(w))
+
+    def set_render_width(self, w: int) -> None:
+        self._render_width = max(1, int(w))
 
     def stop(self) -> None:
         self._running = False
@@ -181,16 +191,41 @@ class CameraWorker(QThread):
         return False
 
     def _deliver(self, frame: np.ndarray) -> None:
-        frame = resize_to_width(frame, min(self._out_width, int(frame.shape[1])))
+        width = min(self._out_width, int(frame.shape[1]))
+        # Ham HD önizleme korunur. Float maskeler ve dökülme bastırma piksel başına çok daha
+        # pahalı: ikinci ekran onları tam ekran boyutuna büyütmemeli. GUI yalnız boyar.
+        if self._chroma:
+            width = min(width, self.MAX_CHROMA_WIDTH)
+        frame = resize_to_width(frame, width)
         try:
             self._maybe_calibrate(frame)
         except Exception as err:  # noqa: BLE001 - ton ölçülemezse eski ton kalır; kare yine gösterilir
             crash_log.log_handled(err, "perde tonu ölçümü")
         self._frames += 1
         if self._chroma:
-            self.frameReady.emit(to_qimage_bgra(apply_chroma_key_bgra(frame, self._params)))
+            image = to_qimage_bgra(apply_chroma_key_bgra(frame, self._params))
         else:
-            self.frameReady.emit(to_qimage_bgr(frame))
+            image = to_qimage_bgr(frame)
+        # QPainter her görünümün her çiziminde BGR/alfa dönüşümü yapmasın.
+        image = image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+        render = image
+        if self._render_width is not None and self._render_width < image.width():
+            render = image.scaledToWidth(self._render_width, Qt.TransformationMode.SmoothTransformation)
+        with self._frame_lock:
+            self._latest_frame = (render, image)
+            notify = not self._frame_pending
+            self._frame_pending = True
+        if notify:
+            self.frameAvailable.emit()
+        # Sonlu işçi tüketicilerinin uyumluluk sinyali; canlı panel bunu kuyruğa bağlamaz.
+        self.frameReady.emit(image)
+
+    def take_latest_frame(self) -> tuple[QImage, QImage] | None:
+        """GUI son kareyi alır; arada gelen eski kareler bildirim/kopya biriktirmez."""
+        with self._frame_lock:
+            image, self._latest_frame = self._latest_frame, None
+            self._frame_pending = False
+        return image
 
     def _release(self) -> None:
         try:

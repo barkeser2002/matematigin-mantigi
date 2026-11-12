@@ -22,6 +22,7 @@ class CameraView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._frame: QImage | None = None
+        self._render_frame: QImage | None = None
         self._panel_ref = None
         self.placeholder_text = "Kamera bekleniyor…"
         self.raw_mode = False
@@ -48,11 +49,16 @@ class CameraView(QWidget):
     def set_frame(self, img: QImage) -> None:
         self._observe_sender()
         self._frame = img
+        self._render_frame = img
+        self._request_frame_update()
+
+    def _request_frame_update(self) -> None:
         self.update()
 
     def set_placeholder(self, text: str) -> None:
         self._observe_sender()
         self._frame = None
+        self._render_frame = None
         self.placeholder_text = text
         self.update()
 
@@ -75,7 +81,7 @@ class CameraView(QWidget):
             target = self._frame.size().scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio)
             x = (self.width() - target.width()) // 2
             y = self.height() - target.height()               # alt kenara yaslı
-            p.drawImage(QRect(x, y, target.width(), target.height()), self._frame)
+            p.drawImage(QRect(x, y, target.width(), target.height()), self._render_frame)
         p.end()
 
 
@@ -100,6 +106,7 @@ class WebcamPanel(Zone):
         self.body.setContentsMargins(0, 0, 0, 0)
 
         self.view = CameraView(self)
+        self.view._panel_ref = ref(self)
         self.body.addWidget(self.view, 1)
 
         self.fam = fam
@@ -129,14 +136,19 @@ class WebcamPanel(Zone):
     def _make_worker(self, source_factory: Callable[[], FrameSource]) -> CameraWorker:
         w = CameraWorker(source_factory(), self._params, self.chroma_enabled, auto_key=self._auto_key, parent=self,
                          open_retries=self.open_retries, reconnect=True,
-                         out_width=self._output_width())
-        w.frameReady.connect(self._on_frame)
+                         out_width=self._output_width(),
+                         render_width=round(self.view.width() * self.view.devicePixelRatioF()))
+        w.frameAvailable.connect(self._consume_latest_frame)
         w.opened.connect(self._on_opened)
         w.cameraError.connect(self._on_error)
         return w
 
     def _output_width(self) -> int:
         widths = [64, round(self.width() * self.devicePixelRatioF())]
+        # Kayıttaki küçük kutunun yeşil perde maliyeti önizleme açılınca değişmesin.
+        # Ham mod HD kalır; anahtarlanmış önizleme kayıt kamerasını büyüterek gösterir.
+        if getattr(self, "chroma_enabled", False):
+            return min(max(widths), CameraWorker.MAX_CHROMA_WIDTH)
         for view in self._consumers:
             if not sip.isdeleted(view) and view.isVisible():
                 widths.append(round(view.width() * view.devicePixelRatioF()))
@@ -145,6 +157,7 @@ class WebcamPanel(Zone):
     def _update_output_width(self) -> None:
         if hasattr(self, "worker"):
             self.worker.set_out_width(self._output_width())
+            self.worker.set_render_width(round(self.view.width() * self.view.devicePixelRatioF()))
 
     def event(self, event) -> bool:
         result = super().event(event)
@@ -156,12 +169,23 @@ class WebcamPanel(Zone):
         if self.worker.isRunning() and not self._stop_requested:
             self._on_error("Kamera bekleniyor…")
 
-    def _on_frame(self, img: QImage) -> None:
+    def _consume_latest_frame(self) -> None:
+        worker = self.sender()
+        # disconnect öncesinde kuyruğa girmiş eski işçi bildirimini de yoksay.
+        if worker is self.worker and not self._stop_requested:
+            frames = worker.take_latest_frame()
+            if frames is not None:
+                render, image = frames
+                self._on_frame(image, render)
+
+    def _on_frame(self, img: QImage, render_img: QImage | None = None) -> None:
         self._frame_watchdog.start(CameraWorker.FRAME_TIMEOUT_MS)
         self.has_camera = True
         if self.view.placeholder_text:
             self._set_placeholder("")
         self.view.set_frame(img)
+        if render_img is not None:
+            self.view._render_frame = render_img
         self.frameReady.emit(img)
 
     def set_source_factory(self, source_factory: Callable[[], FrameSource]) -> None:
@@ -224,7 +248,7 @@ class WebcamPanel(Zone):
         ateşlenmez: worker `_pending_workers`te kalır. Sınırsız birikmesini start() engeller -- üst
         sınır doluyken yeni iş parçacığı AÇILMAZ, dolayısıyla emekli edilecek yeni bir çalışan worker
         da doğmaz (bkz. start())."""
-        worker.frameReady.disconnect()
+        worker.frameAvailable.disconnect()
         worker.opened.disconnect()
         worker.cameraError.disconnect()
         self._pending_workers.append(worker)
@@ -283,6 +307,7 @@ class WebcamPanel(Zone):
     def set_chroma_enabled(self, on: bool) -> None:
         self.chroma_enabled = on
         self.worker.set_chroma_enabled(on)
+        self._update_output_width()
         self._refresh_overlay()
 
     def set_params(self, p: ChromaParams) -> None:

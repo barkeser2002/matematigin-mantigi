@@ -148,6 +148,23 @@ class _Preview(CameraView):
         self.close_button.setObjectName("preview_close")
         self.close_button.clicked.connect(self.close)
         self.close_button.adjustSize()
+        # Harici yardımcı görüntü kayıttan önce gelmez: pahalı tam ekran boyama 10 Hz.
+        # Kare alanı hemen güncellenir; zamanlayıcı daima en yeni kareyi çizer.
+        self._paint_timer = QTimer(self)
+        self._paint_timer.setSingleShot(True)
+        self._paint_timer.setInterval(100)
+        self._paint_timer.timeout.connect(self._paint_latest_frame)
+
+    def _request_frame_update(self) -> None:
+        if not self._paint_timer.isActive():
+            self._paint_timer.start()
+
+    def _paint_latest_frame(self) -> None:
+        self.update()
+
+    def set_placeholder(self, text: str) -> None:
+        self._paint_timer.stop()
+        super().set_placeholder(text)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

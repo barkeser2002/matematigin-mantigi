@@ -114,9 +114,14 @@ QMessageBox yanıtları monkeypatch edilir.
 | d470c41, kırmızı | 26,71 | 26,71 | 26,71 | **7,70** |
 | Düzeltme, yeşil | 27,21 | 27,21 | 27,21 | **27,21** |
 
-Birim kare/sn. Test teslim/tahta çizimi için ≥20, harici çizim için
-≥max(20, tahta×0,70) ve ≤32 sınar. İşçi aynı kalmalı, kamera bir kez
-açılmalı ve kayıt geometri kesintisi yaşamamalıdır. Ayrı piksel testi eski
+Birim kare/sn. İlk test sürümü teslim/tahta çizimi için ≥20, harici çizim için
+≥max(20, tahta×0,70) ve ≤32 sınadı. Son CI-uyumlu sürüm mutlak tabanı
+`min(20, teslim_fps×0,80)` olarak hesaplar; harici görünüm ayrıca tahta çizim
+hızının en az %80'ini korumalıdır. Kaynak ≥25 fps teslim edebiliyorsa mutlak
+20 fps kapısı aynen kalır; kaynak/CI zaten daha yavaşsa olmayan karelerin
+çizilmesi istenmez. Gerçek fps değerleri değiştirilmeden raporlanır.
+İşçi aynı kalmalı, kamera bir kez açılmalı ve kayıt geometri kesintisi
+yaşamamalıdır. Ayrı piksel testi eski
 kodda bilinear karışım nedeniyle 129 yerine beklenen 255 kırmızıyı üretemez;
 yeni kodda harici hızlı yol ve tahtanın yumuşak yolu ayrı doğrulanır.
 Deterministik saat testi 30 Hz bütçesinden kalan süreyi, kare birleştirmeyi,
@@ -126,11 +131,27 @@ yeni kare yokken zamanlayıcının susmasını ve kopma iptalini sınar.
 macOS'ta bu yeni test kırmızıydı: kaynak teslimi, tahta çizimi ve harici çizim
 hep 9,37 fps idi (yani 10 Hz harici sınırı değil, bütün sentetik akış yavaştı).
 Bu nedenle zamanlayıcı regresyonunun çizim yükü de 320×180 mantıksal piksele
-sınırlandı; ≥20 eşiği ve göreli koşul düşürülmedi, tam ekran ölçümü betikte
-korundu. Aynı son test tekrar arşivlenmiş d470c41 kaynakla kırmızı
+sınırlandı; tam ekran ölçümü betikte korundu. Aynı ara test tekrar
+arşivlenmiş d470c41 kaynakla kırmızı
 (harici 7,70; tahta 24,46), yeni kaynakla yeşil (harici 21,44; tahta 23,26)
-oldu. Bu son Linux örneği tam paketle eşzamanlı koşuldu; ilk 27,21 fps
-kanıtı yukarıda ayrı tutulmuştur.
+oldu. Bu Linux örneği tam paketle eşzamanlı koşuldu; ilk 27,21 fps
+kanıtı yukarıda ayrı tutulmuştur. İkinci CI (`43378019134`) macOS'ta bütün
+akışı 13,94 fps ölçtü ve aynı mutlak eşikte düştü; pencere boyutu tek başına
+nedeni açıklamadı. Son sürüm çizim ritmini 64×36 ham kaynakla ayrı sınar ve
+hız tabanını yukarıdaki kaynak hızına göre hesaplar; yeşil perde maliyeti
+ayrı regresyon/ölçümde korunur. Boyut veya HSV maliyetinin macOS düşüşünün
+tek nedeni olduğu kanıtlanmış değildir. Son testin tekrarında d470c41
+kırmızı (harici 8,91; tahta 28,51), düzeltme yeşil (harici 23,93;
+tahta 25,73; teslim 25,28) oldu. Son hedef paket **58 passed in 31.92s**,
+çıkış 0; ham kanıt `tdd-son-kirmizi.log` ve `kamera-son-hedefleri.log`.
+
+Linux tam paket bir kez koşuldu: **1 failed, 1333 passed, 2 skipped,
+1 xfailed in 1253.01s** (çıkış 1). Düşen test
+`tests/test_crash_log.py::test_app_survives_unhandled_slot_exception_and_logs_it`:
+beklenen `AYAKTA 1 [False]` yerine `AYAKTA 0 []`. Aynı test ana checkout'ta
+ve dalda tek başına geçti; ana checkout'ta ek sekiz tekrarın sekizi de geçti.
+Tam paket hatasının önceden var olduğu kesinleştirilemedi; kamera kapalı bu
+senaryoya drive-by düzeltme yapılmadı. Yerel tam paket yeşil ilan edilmez.
 
 ### Önce/sonra: iki FHD offscreen ekran
 

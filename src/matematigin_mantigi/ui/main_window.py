@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QColorDialog, QApplication, QHBoxLayout, QMainWindow
 
 from matematigin_mantigi import paths
 from matematigin_mantigi.core import crash_log
+from matematigin_mantigi.core import ornek_toplama
 from matematigin_mantigi.core.autostart import Autostart, AutostartError
 from matematigin_mantigi.core import layout_model as lm
 from matematigin_mantigi.core.models import (SHAPE_META, TOOL_META, WIDTHS, Nib, PenSettings, Question, QuestionStatus, Shape,
@@ -32,6 +33,7 @@ from matematigin_mantigi.ui.settings_dialog import SettingsDialog, SettingsValue
 from matematigin_mantigi.ui import error_notice, theme
 from matematigin_mantigi.ui.theme import FontFamilies
 from matematigin_mantigi.ui.toolbar import ToolBar
+from matematigin_mantigi.ui.ornek_toplama_window import OrnekToplamaPenceresi
 from matematigin_mantigi.ui.webcam_panel import WebcamPanel, CameraView
 from matematigin_mantigi.ui.dual_screen import layout_supported, resolve_screen_key, screen_key
 from matematigin_mantigi.ui.work_area import WorkArea
@@ -214,6 +216,7 @@ class MainWindow(QMainWindow):
         self._geometry_interrupted = False
         self._reporting_record_result = False
         self._close_after_save = False                  # pencere kapatılmak istendi: kayıt bitince kapanacak
+        self._sample_window = None                     # Tanıma örneği topla penceresi (ilk açılışta kurulur)
         self.base_fam = fam                       # paketle gelen aile; Ayarlar'daki dosya bunun üstüne biner
         self.fam, self.settings, self.recorder, self.session_store = fam, settings, recorder, session_store
         # apply_ui_settings artık her göz düğmesi tıklamasında da çalıştığı için (Görev 6) burada
@@ -297,6 +300,7 @@ class MainWindow(QMainWindow):
         tb.settingsRequested.connect(self.open_settings)
         tb.fullscreenRequested.connect(self._toggle_fullscreen)
         tb.editorRequested.connect(self.open_editor)
+        tb.sampleRequested.connect(self.open_sample_collector)
         tb.layoutEditToggled.connect(self.work_area.set_edit_mode)
         self.work_area.editModeChanged.connect(tb.set_layout_edit)
         self.work_area.layoutChanged.connect(self._save_layout)
@@ -1105,6 +1109,16 @@ class MainWindow(QMainWindow):
         dlg = SettingsDialog(self.settings, self.fam, self, autostart=self.autostart)
         dlg.applied.connect(self.apply_settings_values)
         dlg.exec()
+
+    def open_sample_collector(self) -> None:
+        """Tanıma örneği toplama penceresi (yalnız toplama; uygulamada tanıma yok). Kayıt sürerken ayrı onay."""
+        if self._refuse_while_closing(self.toolbar.sample_button) or not self._confirm_recorded_dialog():
+            return
+        if self._sample_window is None:
+            self._sample_window = OrnekToplamaPenceresi(self.fam, ornek_toplama.ornek_koku())
+        self._sample_window.show()
+        self._sample_window.raise_()
+        self._sample_window.activateWindow()
 
     def open_editor(self) -> None:
         if self._refuse_while_closing(self.toolbar.editor_button):

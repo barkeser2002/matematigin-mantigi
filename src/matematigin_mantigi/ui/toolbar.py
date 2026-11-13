@@ -129,7 +129,7 @@ _MINI = _TierSpec(
 # 1080p tam ekranda (1080 px) FULL, 1366x768 tam ekranda MINI kaydırmasız sığar. Eşikler yalnız başlangıç
 # tahminidir: gerçek yazı tipi/DPI içeriği büyütürse _update_tier ölçülen gereksinimle bir alt kademeye iner,
 # böylece kaydırma yalnız MINI bile sığmayan çok küçük pencerede (son çare) çıkar.
-_FULL_MIN_H = 1010
+_FULL_MIN_H = 1030      # Tanıma düğmesi (+28 px) sonrası ölçülen FULL ~944 + çerçeve ~77 px
 _COMPACT_MIN_H = 860
 _TIERS = (_FULL, _COMPACT, _MINI)
 
@@ -169,6 +169,7 @@ class ToolBar(QWidget):
     penSettingsRequested = pyqtSignal()
     settingsRequested = pyqtSignal()
     editorRequested = pyqtSignal()
+    sampleRequested = pyqtSignal()         # Tanıma örneği topla penceresi
     layoutEditToggled = pyqtSignal(bool)
     fullscreenRequested = pyqtSignal()
 
@@ -206,6 +207,9 @@ class ToolBar(QWidget):
         self.settings_button.clicked.connect(self.settingsRequested)
         self.editor_button = _FitButton("✎ Sorular"); self.editor_button.setStyleSheet(_BTN_CSS)
         self.editor_button.clicked.connect(self.editorRequested)
+        self.sample_button = _FitButton("▦ Tanıma"); self.sample_button.setStyleSheet(_BTN_CSS)
+        self.sample_button.setToolTip("Tanıma örneği topla: kendi sembol çizimlerini kaydet")
+        self.sample_button.clicked.connect(self.sampleRequested)
         self.layout_button = _FitButton("⧉ Düzen"); self.layout_button.setCheckable(True)
         self.layout_button.setStyleSheet(_BTN_CSS)
         self.layout_button.toggled.connect(self.layoutEditToggled)
@@ -214,7 +218,7 @@ class ToolBar(QWidget):
         self._fullscreen, self._recording = False, False
         self._sync_fullscreen_button()
         col.addWidget(self.pen_settings_button); col.addWidget(self.settings_button)
-        col.addWidget(self.editor_button); col.addWidget(self.layout_button)
+        col.addWidget(self.editor_button); col.addWidget(self.sample_button); col.addWidget(self.layout_button)
         col.addWidget(self.fullscreen_button)
         col.addWidget(self._rule())
 
@@ -454,7 +458,7 @@ class ToolBar(QWidget):
         self.size_label.setFixedWidth(inner)
         self.size_label.setWordWrap(True)
         self.size_slider.setFixedWidth(inner)
-        for b in (self.pen_settings_button, self.settings_button, self.editor_button,
+        for b in (self.pen_settings_button, self.settings_button, self.editor_button, self.sample_button,
                   self.layout_button, self.fullscreen_button, self.work_button,
                   self.prev_button, self.next_button):
             b.fit_width(inner, compact=spec is _MINI)

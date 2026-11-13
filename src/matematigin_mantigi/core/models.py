@@ -40,15 +40,22 @@ class Shape(str, Enum):
     PENTAGON = "pentagon"
     HEXAGON = "hexagon"
     STAR = "star"
-    AXES = "axes"                    # koordinat düzlemi
+    AXES = "axes"                    # koordinat ekseni (x-y okları)
+    AXES_TICKS = "axes_ticks"        # koordinat ekseni + çentikler
+    DOUBLE_ARROW = "double_arrow"    # çift yönlü ok
+    NUMBER_LINE = "number_line"      # çentikli sayı doğrusu (10 eşit aralık)
+    ANGLE = "angle"                  # iki ışın + yay
 
 
 SHAPE_META: dict[Shape, tuple[str, str]] = {
     Shape.LINE: ("Çizgi", "╱"),
     Shape.ARROW: ("Ok", "→"),
+    Shape.DOUBLE_ARROW: ("Çift ok", "↔"),
+    Shape.NUMBER_LINE: ("Sayı doğrusu", "⊢"),
+    Shape.ANGLE: ("Açı", "∠"),
     Shape.RECT: ("Dikdörtgen", "▭"),
     Shape.SQUARE: ("Kare", "□"),
-    Shape.ELLIPSE: ("Elips", "○"),
+    Shape.ELLIPSE: ("Elips", "⬭"),
     Shape.CIRCLE: ("Daire", "◯"),
     Shape.TRIANGLE: ("İkizkenar üçgen", "△"),
     Shape.EQUILATERAL: ("Eşkenar üçgen", "▵"),
@@ -59,10 +66,16 @@ SHAPE_META: dict[Shape, tuple[str, str]] = {
     Shape.PENTAGON: ("Düzgün beşgen", "⬠"),
     Shape.HEXAGON: ("Düzgün altıgen", "⬡"),
     Shape.STAR: ("Yıldız", "☆"),
-    Shape.AXES: ("Koordinat düzlemi", "┼"),
+    Shape.AXES: ("Koordinat ekseni", "┼"),
+    Shape.AXES_TICKS: ("Eksen çentikli", "╋"),
 }
-# Menü sırası: önce çizgiler, sonra dörtgenler/daireler, üçgenler, çokgenler, özel şekiller.
-SHAPE_ORDER = tuple(SHAPE_META)
+# Menü sırası (5 sütun): çizgiler, dörtgen/daire, üçgenler, çokgenler, eksenler.
+SHAPE_ORDER: tuple[Shape, ...] = (
+    Shape.LINE, Shape.ARROW, Shape.DOUBLE_ARROW, Shape.NUMBER_LINE, Shape.ANGLE,
+    Shape.RECT, Shape.SQUARE, Shape.ELLIPSE, Shape.CIRCLE, Shape.TRIANGLE,
+    Shape.EQUILATERAL, Shape.RIGHT_TRIANGLE, Shape.RHOMBUS, Shape.PARALLELOGRAM, Shape.TRAPEZOID,
+    Shape.PENTAGON, Shape.HEXAGON, Shape.STAR, Shape.AXES, Shape.AXES_TICKS,
+)
 
 
 def next_shape(s: Shape) -> Shape:
@@ -84,6 +97,13 @@ class Nib(str, Enum):
     ROUND = "Yuvarlak"
     FELT = "Keçeli"
     CHALK = "Tebeşir"
+    HIGHLIGHTER = "Fosforlu"
+
+
+class LineStyle(str, Enum):
+    SOLID = "Düz"
+    DASHED = "Kesikli"
+    DOTTED = "Noktalı"
 
 
 class FrameStyle(str, Enum):
@@ -116,8 +136,10 @@ class PenSettings:
     min_width: int = 1
     max_width: int = 12
     nib: Nib = Nib.ROUND
+    hold_to_straight: bool = True
+    line_style: LineStyle = LineStyle.SOLID
     math_recognition: bool = True
-    shape_correction: bool = True
+    shape_correction: bool = False
     autosave: bool = True
     template_matching: bool = False
     reading_ms: int = 40       # soru yazma animasyonu, ms/harf; 0 = kapalı

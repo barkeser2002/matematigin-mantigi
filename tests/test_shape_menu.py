@@ -48,7 +48,7 @@ def test_menu_is_laid_out_in_a_grid_that_fits_on_small_screens(qtbot):
     m = ShapeMenu()
     qtbot.addWidget(m)
     m.show()
-    assert m.width() <= 360 and m.height() <= 360
+    assert m.width() <= 460 and m.height() <= 420      # 5 sütun, ad satırlı düğmeler + dolgu satırı; 720p'ye sığar
     assert len({b.y() for b in m.buttons.values()}) >= 2        # tek şerit değil, ızgara
 
 

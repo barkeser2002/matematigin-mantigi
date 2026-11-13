@@ -3,11 +3,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields
 import json
+import re
 
 from PyQt6.QtCore import QSettings
 
 from matematigin_mantigi.core.chroma_key import ChromaParams
-from matematigin_mantigi.core.models import FrameStyle, HintMaskMode, Nib, PenSettings, Tool
+from matematigin_mantigi.core.models import FrameStyle, HintMaskMode, LineStyle, Nib, PenSettings, Shape, Tool
+from matematigin_mantigi.core.stroke import eraser_diameter
+
+ERASER_MIN, ERASER_MAX = 10, 120
+ERASER_SIZES = (20, 34, 50, 80, 120)
 
 # Tahtadaki gizlenebilir yazısal öğeler: (anahtar, etiket)
 VISIBILITY_KEYS: tuple[tuple[str, str], ...] = (
@@ -76,6 +81,9 @@ class SessionState:
 class AppSettings:
     def __init__(self, backend: QSettings | None = None):
         self._q = backend or QSettings("MatematiginMantigi", "Ogretim")
+        # Eski kalınlık ölçeğini yalnız ilk açılışta taşı; sonra kalemden bağımsız.
+        if not self._q.contains("eraser/size"):
+            self.eraser_size = eraser_diameter(self.width)
 
     # --- helpers ---------------------------------------------------------------
     def _int(self, key: str, default: int) -> int:
@@ -144,14 +152,54 @@ class AppSettings:
     def tool(self, t: Tool) -> None: self._q.setValue("tool", t.value)
 
     @property
+    def shape(self) -> Shape: return self._enum("shape", Shape, Shape.RECT)
+    @shape.setter
+    def shape(self, s: Shape) -> None: self._q.setValue("shape", s.value)
+
+    @property
+    def shape_fill(self) -> bool: return self._bool("shape/fill", False)
+    @shape_fill.setter
+    def shape_fill(self, on: bool) -> None: self._q.setValue("shape/fill", bool(on))
+
+    @property
     def color(self) -> str: return self._str("color", "#1c1b19")
     @color.setter
     def color(self, hx: str) -> None: self._q.setValue("color", hx)
 
     @property
+    def custom_colors(self) -> list[str]:
+        try:
+            raw = json.loads(self._str("pen/custom_colors", "[]"))
+        except ValueError:
+            return []
+        if not isinstance(raw, list):
+            return []
+        colors = []
+        for value in raw:
+            if isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+                value = value.lower()
+                if value not in colors:
+                    colors.append(value)
+        return colors[:4]
+
+    def remember_custom_color(self, hx: str) -> None:
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", hx):
+            return
+        hx = hx.lower()
+        colors = [hx] + [c for c in self.custom_colors if c != hx]
+        self._q.setValue("pen/custom_colors", json.dumps(colors[:4]))
+
+    @property
     def width(self) -> int: return self._int("width", 4)
     @width.setter
     def width(self, w: int) -> None: self._q.setValue("width", int(w))
+
+    @property
+    def eraser_size(self) -> int:
+        return max(ERASER_MIN, min(ERASER_MAX, self._int("eraser/size", eraser_diameter(self.width))))
+    @eraser_size.setter
+    def eraser_size(self, size: int) -> None:
+        self._q.setValue("eraser/size", max(ERASER_MIN, min(ERASER_MAX, int(size))))
 
     @property
     def hint_mask(self) -> HintMaskMode: return self._enum("hint_mask", HintMaskMode, HintMaskMode.BLUR)
@@ -265,6 +313,8 @@ class AppSettings:
             min_width=self._int("pen/min_width", d.min_width),
             max_width=self._int("pen/max_width", d.max_width),
             nib=self._enum("pen/nib", Nib, d.nib),
+            line_style=self._enum("pen/line_style", LineStyle, d.line_style),
+            hold_to_straight=self._bool("pen/hold_to_straight", d.hold_to_straight),
             math_recognition=self._bool("pen/math_recognition", d.math_recognition),
             shape_correction=self._bool("pen/shape_correction", d.shape_correction),
             autosave=self._bool("pen/autosave", d.autosave),
@@ -275,7 +325,7 @@ class AppSettings:
     def set_pen(self, p: PenSettings) -> None:
         for f in fields(PenSettings):
             v = getattr(p, f.name)
-            self._q.setValue(f"pen/{f.name}", v.value if isinstance(v, Nib) else v)
+            self._q.setValue(f"pen/{f.name}", v.value if isinstance(v, (Nib, LineStyle)) else v)
 
     def sync(self) -> None:
         self._q.sync()

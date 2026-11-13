@@ -10,19 +10,21 @@ from typing import Callable, Sequence
 
 from PyQt6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QKeySequence, QShortcut
-from PyQt6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QMessageBox, QPushButton, QToolTip, QWidget
+from PyQt6.QtWidgets import QColorDialog, QApplication, QHBoxLayout, QMainWindow, QMessageBox, QPushButton, QToolTip, QWidget
 
 from matematigin_mantigi import paths
 from matematigin_mantigi.core import crash_log
+from matematigin_mantigi.core import ornek_toplama
 from matematigin_mantigi.core.autostart import Autostart, AutostartError
 from matematigin_mantigi.core import layout_model as lm
-from matematigin_mantigi.core.models import (SHAPE_META, TOOL_META, PenSettings, Question, QuestionStatus, Shape, Tool)
+from matematigin_mantigi.core.models import (SHAPE_META, TOOL_META, WIDTHS, Nib, PenSettings, Question, QuestionStatus, Shape,
+                                             Tool)
 from matematigin_mantigi.core.question_flow import QuestionFlow
 from matematigin_mantigi.core.recorder import (DISK_HINT, Recorder, RecorderError, RecorderState, MicrophoneStartError, MssFfmpegRecorder, exception_text,
                                                record_rect_for)
 from matematigin_mantigi.core.camera_recorder import CameraRecorder
 from matematigin_mantigi.core.session_store import SessionStore
-from matematigin_mantigi.core.settings import AppSettings, SessionState
+from matematigin_mantigi.core.settings import AppSettings, SessionState, ERASER_MIN, ERASER_MAX, ERASER_SIZES
 from matematigin_mantigi.ui.camera_worker import FrameSource
 from matematigin_mantigi.ui.cursors import cursor_for
 from matematigin_mantigi.ui.hint_zone import HintZone
@@ -34,6 +36,7 @@ from matematigin_mantigi.ui.settings_dialog import SettingsDialog, SettingsValue
 from matematigin_mantigi.ui import error_notice, theme
 from matematigin_mantigi.ui.theme import FontFamilies
 from matematigin_mantigi.ui.toolbar import ToolBar
+from matematigin_mantigi.ui.ornek_toplama_window import OrnekToplamaPenceresi
 from matematigin_mantigi.ui.webcam_panel import WebcamPanel, CameraView
 from matematigin_mantigi.ui.dual_screen import layout_supported, resolve_screen_key, screen_key
 from matematigin_mantigi.ui.work_area import WorkArea
@@ -73,6 +76,7 @@ SAVING_ALERT = "Kayıt kaydediliyor…"   # kapanış (ffmpeg + ses birleştirme
 CLOSING_ALERT = "Kayıt kaydediliyor… bitince pencere kapanacak"     # pencere kapatılmak istendi, kayıt bekleniyor
 # Kapanış beklenirken editör/ayarlar düğmesine basılınca düğmenin yanında görünen kısa neden.
 CLOSING_NO_DIALOG = "Kayıt kaydediliyor; bitince pencere kapanacak. Bu pencere şimdi açılmaz."
+SHAPE_MENU_RECORDING_MS = 8000     # kayıt sürerken şekil menüsü bu kadar sonra kendiliğinden kapanır (kalıcı bindirme olmaz)
 STOP_AND_QUIT, KEEP_RECORDING = "Durdur ve çık", "Kayda devam et"   # kayıt sürerken kapatma sorusunun düğmeleri
 # Kayıt pencerelerinin metni kendi başına anlaşılır olmalı: Qt macOS'ta QMessageBox başlığını göstermez.
 START_FAILED = "Kayıt başlamadı."
@@ -233,6 +237,7 @@ class MainWindow(QMainWindow):
         self._geometry_interrupted = False
         self._reporting_record_result = False
         self._close_after_save = False                  # pencere kapatılmak istendi: kayıt bitince kapanacak
+        self._sample_window = None                     # Tanıma örneği topla penceresi (ilk açılışta kurulur)
         self.base_fam = fam                       # paketle gelen aile; Ayarlar'daki dosya bunun üstüne biner
         self.fam, self.settings, self.recorder, self.session_store = fam, settings, recorder, session_store
         # apply_ui_settings artık her göz düğmesi tıklamasında da çalıştığı için (Görev 6) burada
@@ -301,7 +306,10 @@ class MainWindow(QMainWindow):
         tb, c, flow = self.toolbar, self.canvas, self.flow
         tb.toolSelected.connect(self._on_tool)
         tb.shapeSelected.connect(self._on_shape)
+        tb.shapeFillSelected.connect(self._on_shape_fill)
+        tb.shape_menu_gate = self._shape_menu_gate
         tb.colorSelected.connect(self._on_color)
+        tb.customColorRequested.connect(self.open_custom_color)
         tb.widthSelected.connect(self._on_width)
         tb.undoRequested.connect(c.undo)
         tb.clearRequested.connect(c.clear)
@@ -313,6 +321,7 @@ class MainWindow(QMainWindow):
         tb.settingsRequested.connect(self.open_settings)
         tb.fullscreenRequested.connect(self._toggle_fullscreen)
         tb.editorRequested.connect(self.open_editor)
+        tb.sampleRequested.connect(self.open_sample_collector)
         tb.layoutEditToggled.connect(self.work_area.set_edit_mode)
         self.work_area.editModeChanged.connect(tb.set_layout_edit)
         self.work_area.layoutChanged.connect(self._save_layout)
@@ -321,6 +330,8 @@ class MainWindow(QMainWindow):
         self.badge.ticked.connect(tb.set_recording_time)     # süre araç çubuğunda sayar (kayda girmez)
         self.badge.ticked.connect(self._check_recorder)
 
+        c.effectiveToolChanged.connect(self._effective_tool_changed)
+        c.pressureChanged.connect(self.refresh_cursor)
         c.historyChanged.connect(lambda can_undo, _e: tb.set_undo_enabled(can_undo))
         c.pressureChanged.connect(lambda p: self._status(f"XP-Pen · {p:.2f}"))
         c.inputSourceChanged.connect(lambda src: self._status("XP-Pen" if src == "tablet" else "fare"))
@@ -355,7 +366,11 @@ class MainWindow(QMainWindow):
             QShortcut(QKeySequence(keys), self, activated=run)
         for i, tool in enumerate(Tool, start=1):
             sc(str(i), lambda t=tool: (self._on_tool(t), self.toolbar.set_tool(t)))
+        sc("[", self._smaller_size)
+        sc("]", self._larger_size)
         sc("Ctrl+Z", self.canvas.undo)
+        sc("Ctrl+Shift+Z", self.canvas.redo)
+        sc("Ctrl+Y", self.canvas.redo)
         sc("Ctrl+Shift+X", self.canvas.clear)
         sc("N", self.flow.next_question)
         sc("P", self.flow.prev_question)
@@ -368,6 +383,21 @@ class MainWindow(QMainWindow):
         sc("L", lambda: self.work_area.set_edit_mode(not self.work_area.edit_mode))
         sc("F11", self._toggle_fullscreen)
         sc("Escape", self._escape, while_typing=True)
+
+    def _smaller_size(self) -> None:
+        self._step_size(-1)
+
+    def _larger_size(self) -> None:
+        self._step_size(1)
+
+    def _step_size(self, direction: int) -> None:
+        c = self.canvas
+        erasing = c.effective_tool == Tool.ERASER
+        current = c.eraser_size if erasing else c.base_width
+        steps = (ERASER_MIN, *ERASER_SIZES, ERASER_MAX) if erasing else WIDTHS
+        candidates = [s for s in steps if (s - current) * direction > 0]
+        if candidates:
+            self._on_width(min(candidates) if direction > 0 else max(candidates))
 
     def _return_key(self) -> None:
         if self._typing():
@@ -395,7 +425,12 @@ class MainWindow(QMainWindow):
     def _restore_settings(self) -> None:
         s = self.settings
         self.canvas.set_tool(s.tool); self.canvas.set_color(QColor(s.color)); self.canvas.set_base_width(s.width)
-        self.toolbar.set_tool(s.tool); self.toolbar.set_color(s.color); self.toolbar.set_width(s.width)
+        self.canvas.set_shape(s.shape); self.canvas.set_shape_fill(s.shape_fill)
+        self.toolbar.set_shape(s.shape); self.toolbar.set_shape_fill(s.shape_fill)
+        self.canvas.set_eraser_size(s.eraser_size)
+        self.toolbar.set_custom_colors(s.custom_colors)
+        self.toolbar.set_tool(s.tool); self.toolbar.set_color(s.color)
+        self._sync_size_control()
         self.hint_zone.set_mask_mode(s.hint_mask)
         self.question_zone.set_reading_ms(s.pen().reading_ms)
         self.work_area.set_click_mode(s.tool == Tool.CLICK)
@@ -406,6 +441,8 @@ class MainWindow(QMainWindow):
     def _on_tool(self, t: Tool) -> None:
         reopen_menu = t == Tool.SHAPE and self.canvas.tool == Tool.SHAPE      # Şekil'e tekrar basış: görsel menü
         self.canvas.set_tool(t); self.settings.tool = t
+        self.toolbar.set_tool(t)
+        self._sync_size_control()
         self.toolbar.set_shape(self.canvas.shape)
         if reopen_menu:
             self.toolbar.open_shape_menu()
@@ -413,31 +450,81 @@ class MainWindow(QMainWindow):
         self.refresh_cursor(); self._status("XP-Pen")
 
     def _on_shape(self, shape: Shape) -> None:
-        self.canvas.set_shape(shape)
+        self.canvas.set_shape(shape); self.settings.shape = shape
         self.canvas.set_tool(Tool.SHAPE); self.settings.tool = Tool.SHAPE
         self.toolbar.set_tool(Tool.SHAPE)
+        self._sync_size_control()
         self.work_area.set_click_mode(False)
         self.refresh_cursor(); self._status("XP-Pen")
 
+    def _on_shape_fill(self, on: bool) -> None:
+        self.canvas.set_shape_fill(on); self.settings.shape_fill = on
+
+    def _shape_menu_gate(self) -> int:
+        """Şekil menüsü: -1 açılmaz (kapanış bekleniyor), 0 açık kalır, >0 ms sonra kendiliğinden kapanır.
+        Kayıt sürerken menü sahneye kalıcı bindirme yapmaz: kısa süre sonra kapanır. Onay kutusu sorulmaz:
+        menü geçici bir açılır listedir, içinde kaydedilmemiş iş yoktur (bkz. SHAPE_MENU_RECORDING_MS)."""
+        if self._close_after_save:
+            return -1
+        if self._record_starting or self.recorder.state is RecorderState.RECORDING:
+            return SHAPE_MENU_RECORDING_MS
+        return 0
+
+    def open_custom_color(self) -> None:
+        if self._refuse_while_closing(self.toolbar.custom_color_button) or not self._confirm_recorded_dialog():
+            return
+        color = QColorDialog.getColor(self.canvas.color, self, "Özel kalem rengi",
+                                      QColorDialog.ColorDialogOption.DontUseNativeDialog)
+        if color.isValid():
+            hx = color.name()
+            self.settings.remember_custom_color(hx)
+            self.toolbar.set_custom_colors(self.settings.custom_colors)
+            self._on_color(hx)
+
     def _on_color(self, hx: str) -> None:
+        self.toolbar.set_color(hx)
         self.canvas.set_color(QColor(hx)); self.settings.color = hx
         if self.canvas.tool != Tool.PEN:              # renk seçimi kalemi seçer
             self._on_tool(Tool.PEN); self.toolbar.set_tool(Tool.PEN)
         self.refresh_cursor()
 
     def _on_width(self, w: int) -> None:
-        self.canvas.set_base_width(w); self.settings.width = w
+        if self.canvas.effective_tool == Tool.ERASER:
+            self.canvas.set_eraser_size(w); self.settings.eraser_size = self.canvas.eraser_size
+        else:
+            self.canvas.set_base_width(w); self.settings.width = w
+        self._sync_size_control()
         self.refresh_cursor(); self._status("XP-Pen")
 
+    def _sync_size_control(self) -> None:
+        c = self.canvas
+        tool = c.effective_tool
+        self.toolbar.set_size_context(tool, c.eraser_size if tool == Tool.ERASER else c.base_width)
+
+    def _effective_tool_changed(self) -> None:
+        self.toolbar.set_tool(self.canvas.effective_tool)
+        self._sync_size_control()
+        self.refresh_cursor()
+
     def refresh_cursor(self) -> None:
-        self.work_area.set_tool_cursor(cursor_for(self.canvas.tool, self.canvas.color, self.canvas.base_width,
-                                                  self.canvas.devicePixelRatioF()))
+        c = self.canvas
+        nib = c._pen_settings.nib if c._pen_settings is not None else Nib.ROUND
+        key = (c.effective_tool, c.color.rgba(), c.base_width, c.eraser_size,
+               round(c.cursor_width(), 1), nib, c.devicePixelRatioF())
+        if key == getattr(self, "_cursor_key", None):
+            return
+        self._cursor_key = key
+        self.work_area.set_tool_cursor(cursor_for(c.effective_tool, c.color, c.base_width,
+                                                 c.devicePixelRatioF(), eraser_size=c.eraser_size,
+                                                 pen_diameter=key[4], nib=nib))
 
     def _status(self, pressure_text: str) -> None:
-        tool = TOOL_META[self.canvas.tool][0]
-        if self.canvas.tool == Tool.SHAPE:
+        effective = self.canvas.effective_tool
+        tool = TOOL_META[effective][0]
+        if effective == Tool.SHAPE:
             tool = f"Şekil ({SHAPE_META[self.canvas.shape][0]})"
-        self.work_area.set_status(f"Araç: {tool} · Kalınlık: {self.canvas.base_width} px · Basınç: {pressure_text}")
+        width = self.canvas.eraser_size if effective == Tool.ERASER else self.canvas.base_width
+        self.work_area.set_status(f"Araç: {tool} · Kalınlık: {width} px · Basınç: {pressure_text}")
 
     def _save_board(self, i: int, *, automatic: bool = False) -> bool:
         if self.canvas.has_snapshot_content():
@@ -1054,13 +1141,15 @@ class MainWindow(QMainWindow):
     def open_pen_settings(self) -> None:
         if self._refuse_while_closing(self.toolbar.pen_settings_button):
             return
-        dlg = PenSettingsDialog(self.settings.pen(), self.canvas.color, self.canvas.base_width, self.fam, self)
+        dlg = PenSettingsDialog(self.settings.pen(), self.canvas.color, self.canvas.base_width, self.fam, self,
+                                eraser_size=self.canvas.eraser_size)
         dlg.applied.connect(self._apply_pen_settings)
         dlg.exec()
 
     def _apply_pen_settings(self, p: PenSettings) -> None:
         self.settings.set_pen(p)
         self.canvas.set_pen_settings(p)
+        self.refresh_cursor()
         self.question_zone.set_reading_ms(p.reading_ms)
 
     def _confirm_recorded_dialog(self) -> bool:
@@ -1081,6 +1170,16 @@ class MainWindow(QMainWindow):
         dlg = SettingsDialog(self.settings, self.fam, self, autostart=self.autostart)
         dlg.applied.connect(self.apply_settings_values)
         dlg.exec()
+
+    def open_sample_collector(self) -> None:
+        """Tanıma örneği toplama penceresi (yalnız toplama; uygulamada tanıma yok). Kayıt sürerken ayrı onay."""
+        if self._refuse_while_closing(self.toolbar.sample_button) or not self._confirm_recorded_dialog():
+            return
+        if self._sample_window is None:
+            self._sample_window = OrnekToplamaPenceresi(self.fam, ornek_toplama.ornek_koku())
+        self._sample_window.show()
+        self._sample_window.raise_()
+        self._sample_window.activateWindow()
 
     def open_editor(self) -> None:
         if self._refuse_while_closing(self.toolbar.editor_button):
@@ -1122,7 +1221,8 @@ class MainWindow(QMainWindow):
         if v.autostart is not None:
             self._apply_autostart(v.autostart)
         s.font_file = v.font_file
-        s.set_pen(replace(s.pen(), reading_ms=v.reading_ms))
+        s.set_pen(replace(s.pen(), reading_ms=v.reading_ms, hold_to_straight=v.hold_to_straight))
+        self.canvas.set_pen_settings(s.pen())
         s.auto_key = v.auto_key
         s.chroma_enabled = v.chroma_enabled
         s.presenter_name = v.presenter_name

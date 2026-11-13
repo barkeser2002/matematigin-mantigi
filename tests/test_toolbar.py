@@ -175,8 +175,8 @@ def test_full_tier_survives_a_1080p_fullscreen_window_and_thresholds_match_real_
         QApplication.processEvents()
         chrome = tb.height() - tb.scroll_area.viewport().height()
         needs[spec.name] = tb.content.sizeHint().height() + chrome
-    for h, initial in [(1080, "full"), (1040, "full"), (1010, "full"),
-                       (1009, "compact"), (950, "compact"), (900, "compact"), (860, "compact"),
+    for h, initial in [(1080, "full"), (1040, "full"), (1030, "full"),
+                       (1029, "compact"), (950, "compact"), (900, "compact"), (860, "compact"),
                        (859, "mini"), (768, "mini"), (700, "mini"), (400, "mini")]:
         assert _tier_for_height(h).name == initial
         tb.resize(88, h)
@@ -285,7 +285,7 @@ def test_alert_strip_takes_only_its_own_room_so_content_does_not_start_scrolling
             assert shown.tier == plain.tier, (text, h)
             assert shown.scroll_area.viewport().height() == plain.scroll_area.viewport().height(), (text, h)
     shown.set_alert("test", None)
-    shown.resize(88, 1020)                                    # FULL eşiği 1010: şeritsiz FULL, şeritli COMPACT
+    shown.resize(88, 1040)                                    # FULL eşiği 1030: şeritsiz FULL, şeritli COMPACT
     QApplication.processEvents()
     assert shown.tier == "full"
     shown.set_alert("test", "Kayıt kaydediliyor…")                    # yeniden boyutlanmadan: kalan yere COMPACT sığar

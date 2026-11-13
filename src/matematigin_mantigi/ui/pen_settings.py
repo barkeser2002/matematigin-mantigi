@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import (QButtonGroup, QCheckBox, QDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
+from PyQt6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
                              QLabel, QPushButton, QSlider, QVBoxLayout)
 
-from matematigin_mantigi.core.models import Nib, PenSettings
+from matematigin_mantigi.core.models import LineStyle, Nib, PenSettings
 from matematigin_mantigi.ui import cursors, theme
 from matematigin_mantigi.ui.theme import FontFamilies
 
@@ -22,7 +22,8 @@ def _card(title: str, fam: FontFamilies) -> tuple[QFrame, QVBoxLayout]:
 class PenSettingsDialog(QDialog):
     applied = pyqtSignal(object)
 
-    def __init__(self, current: PenSettings, color: QColor, base_width: int, fam: FontFamilies, parent=None):
+    def __init__(self, current: PenSettings, color: QColor, base_width: int, fam: FontFamilies, parent=None,
+                 *, eraser_size: int | None = None):
         super().__init__(parent)
         self.setWindowTitle("Kalem, silgi & imleç")
         self.setMinimumWidth(720)
@@ -43,7 +44,7 @@ class PenSettingsDialog(QDialog):
         cur_col.addWidget(note)
         tiles = QHBoxLayout(); tiles.setSpacing(18)
         for label, cur in ((f"Kalem · {color.name()}", cursors.pen_cursor(color, base_width)),
-                           ("Silgi", cursors.eraser_cursor(base_width)),
+                           ("Silgi", cursors.eraser_cursor(base_width, diameter=eraser_size)),
                            ("Lazer", cursors.laser_cursor())):
             tile = QVBoxLayout(); pic = QLabel(); pic.setPixmap(cur.pixmap()); pic.setAlignment(Qt.AlignmentFlag.AlignCenter)
             cap = QLabel(label); cap.setFont(theme.font(fam, 10, 500)); cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -68,6 +69,11 @@ class PenSettingsDialog(QDialog):
             row = QHBoxLayout(); row.addWidget(slider, 1); row.addWidget(value)
             lab = QLabel(name); lab.setFont(theme.font(fam, 11, 500))
             form.addRow(lab, row)
+        self.line_style_combo = QComboBox()
+        for style in LineStyle:
+            self.line_style_combo.addItem(style.value, style)
+        self.line_style_combo.setCurrentIndex(self.line_style_combo.findData(current.line_style))
+        form.addRow("Çizgi biçimi", self.line_style_combo)
         pen_col.addLayout(form)
         scale_note = QLabel("Kalınlıklar, araç çubuğunda 4 px seçiliyken geçerlidir; diğer kademeler aralığı orantılı ölçekler.")
         scale_note.setWordWrap(True); pen_col.addWidget(scale_note)
@@ -82,17 +88,24 @@ class PenSettingsDialog(QDialog):
         nib_row.addStretch(1); pen_col.addLayout(nib_row)
         grid.addWidget(pen_card, 0, 1)
 
-        fx_card, fx_col = _card("Tanıma özellikleri · Yakında", fam)
-        fx_note = QLabel("Bu özellikler henüz kullanılamıyor; tanıma yapılmaz.")
+        fx_card, fx_col = _card("Tanıma özellikleri", fam)
+        fx_note = QLabel("Matematik ve şablon tanıma henüz hazır değil; şekil düzeltme açılabilir.")
         fx_note.setFont(theme.font(fam, 11, 400)); fx_col.addWidget(fx_note)
         self.toggles: dict[str, QCheckBox] = {}
-        for key, name, desc in (
-            ("math_recognition", "Matematik tanıma", "El yazısı denklemleri düzgün metne çevir"),
-            ("shape_correction", "Şekil düzeltme", "Titrek daire/çizgi → geometrik şekil"),
-            ("template_matching", "Ön tanımlı soru tanıma", "Yazılan soruyu şablonla eşleştir"),
+        for key, name, desc, available in (
+            ("math_recognition", "Matematik tanıma", "El yazısı denklemleri düzgün metne çevir", False),
+            ("shape_correction", "Şekil düzeltme",
+             "Kalem kalkınca çizgi düz çizgi, daire, elips, üçgen, dikdörtgen veya çokgene döner; "
+             "geri al ham çizgiyi getirir", True),
+            ("template_matching", "Ön tanımlı soru tanıma", "Yazılan soruyu şablonla eşleştir", False),
         ):
-            cb = QCheckBox(f"{name} · Yakında"); cb.setEnabled(False); cb.setFont(theme.font(fam, 12, 600))
+            cb = QCheckBox(name if available else f"{name} · Yakında"); cb.setFont(theme.font(fam, 12, 600))
+            if available:
+                cb.setChecked(current.shape_correction)
+            else:
+                cb.setEnabled(False)
             d = QLabel(desc); d.setFont(theme.font(fam, 10, 400)); d.setStyleSheet(f"color: {theme.MUTED};")
+            d.setWordWrap(True)
             fx_col.addWidget(cb); fx_col.addWidget(d)
             self.toggles[key] = cb
         grid.addWidget(fx_card, 1, 0, 1, 2)
@@ -144,8 +157,10 @@ class PenSettingsDialog(QDialog):
         nib = next(n for n, b in self.nib_buttons.items() if b.isChecked())
         return PenSettings(pressure_curve=self.curve_slider.value(), smoothing=self.smoothing_slider.value(),
                            min_width=self.min_slider.value(), max_width=self.max_slider.value(), nib=nib,
+                           line_style=self.line_style_combo.currentData(),
+                           hold_to_straight=self._current.hold_to_straight,
                            math_recognition=self._current.math_recognition,
-                           shape_correction=self._current.shape_correction,
+                           shape_correction=self.toggles["shape_correction"].isChecked(),
                            autosave=self.toggles["autosave"].isChecked(),
                            template_matching=self._current.template_matching,
                            reading_ms=self._current.reading_ms)

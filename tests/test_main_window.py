@@ -121,17 +121,18 @@ def test_tool_switch_updates_cursor_and_status(window, qtbot):
     assert window.canvas.cursor().pixmap().size() == QSize(36, 36)
     assert "Araç: Silgi" in window.work_area.status_label.text()
     qtbot.mouseClick(window.toolbar.width_buttons[8], Qt.MouseButton.LeftButton)
-    assert window.canvas.cursor().pixmap().size() == QSize(70, 70)          # silgi alanı büyüdü
+    assert window.canvas.cursor().pixmap().size() == QSize(82, 82)          # bağımsız 80 px silgi
     qtbot.mouseClick(window.toolbar.tool_buttons[Tool.PEN], Qt.MouseButton.LeftButton)
     assert window.canvas.cursor().pixmap().size() == QSize(36, 36)          # kurşun kalem ikonu
-    assert window.settings.width == 8 and window.settings.tool == Tool.PEN
+    assert window.settings.width == 4 and window.settings.eraser_size == 80
+    assert window.settings.tool == Tool.PEN
 
 
 def test_tool_cursor_also_applies_over_zones(window, qtbot):
     qtbot.mouseClick(window.toolbar.tool_buttons[Tool.ERASER], Qt.MouseButton.LeftButton)
     qtbot.mouseClick(window.toolbar.width_buttons[12], Qt.MouseButton.LeftButton)
     for zone in (window.question_zone, window.hint_zone, window.webcam_panel):
-        assert zone.cursor().pixmap().size() == QSize(82, 82)
+        assert zone.cursor().pixmap().size() == QSize(122, 122)  # bağımsız 120 px silgi
     assert window.hint_zone.cards[0].cursor().shape() == Qt.CursorShape.PointingHandCursor
 
 

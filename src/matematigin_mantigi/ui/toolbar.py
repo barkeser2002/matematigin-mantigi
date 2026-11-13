@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PyQt6.QtCore import QPoint, QRect, Qt, pyqtSignal
-from PyQt6.QtGui import QFontMetrics
+from PyQt6.QtCore import QPoint, QRect, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QFontMetrics, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton,
-                             QScrollArea, QSizePolicy, QStyle, QStyleOptionButton, QVBoxLayout, QWidget)
+                             QMenu, QScrollArea, QSizePolicy, QSlider, QStyle, QStyleOptionButton, QVBoxLayout, QWidget)
 
 from matematigin_mantigi.core.models import PALETTE, SHAPE_META, TOOL_META, WIDTHS, Shape, Tool
+from matematigin_mantigi.core.settings import ERASER_MIN, ERASER_MAX, ERASER_SIZES
 from matematigin_mantigi.ui import theme
 from matematigin_mantigi.ui.shape_menu import ShapeMenu
 from matematigin_mantigi.ui.theme import FontFamilies
@@ -128,7 +129,7 @@ _MINI = _TierSpec(
 # 1080p tam ekranda (1080 px) FULL, 1366x768 tam ekranda MINI kaydırmasız sığar. Eşikler yalnız başlangıç
 # tahminidir: gerçek yazı tipi/DPI içeriği büyütürse _update_tier ölçülen gereksinimle bir alt kademeye iner,
 # böylece kaydırma yalnız MINI bile sığmayan çok küçük pencerede (son çare) çıkar.
-_FULL_MIN_H = 1010
+_FULL_MIN_H = 1030      # Tanıma düğmesi (+28 px) sonrası ölçülen FULL ~944 + çerçeve ~77 px
 _COMPACT_MIN_H = 860
 _TIERS = (_FULL, _COMPACT, _MINI)
 
@@ -154,7 +155,9 @@ class ToolBar(QWidget):
     FULLSCREEN_TEXT, WINDOWED_TEXT = "⛶ Tam ekran", "❐ Pencere"
 
     toolSelected = pyqtSignal(object)      # Tool
+    customColorRequested = pyqtSignal()
     shapeSelected = pyqtSignal(object)     # Shape (görsel şekil menüsünden)
+    shapeFillSelected = pyqtSignal(bool)   # dolgu: True yarı saydam, False boş
     colorSelected = pyqtSignal(str)        # hex
     widthSelected = pyqtSignal(int)
     workToggled = pyqtSignal()
@@ -166,12 +169,14 @@ class ToolBar(QWidget):
     penSettingsRequested = pyqtSignal()
     settingsRequested = pyqtSignal()
     editorRequested = pyqtSignal()
+    sampleRequested = pyqtSignal()         # Tanıma örneği topla penceresi
     layoutEditToggled = pyqtSignal(bool)
     fullscreenRequested = pyqtSignal()
 
     def __init__(self, fam: FontFamilies, parent=None):
         super().__init__(parent)
         self.fam = fam
+        self._size_tool = Tool.PEN
         self.tier = _FULL.name
         self._tier_need: dict[str, int] = {}          # kademe -> kaydırmasız gereken içerik yüksekliği (ölçülünce)
         self.setFixedWidth(theme.TOOLBAR_WIDTH)
@@ -202,6 +207,9 @@ class ToolBar(QWidget):
         self.settings_button.clicked.connect(self.settingsRequested)
         self.editor_button = _FitButton("✎ Sorular"); self.editor_button.setStyleSheet(_BTN_CSS)
         self.editor_button.clicked.connect(self.editorRequested)
+        self.sample_button = _FitButton("▦ Tanıma"); self.sample_button.setStyleSheet(_BTN_CSS)
+        self.sample_button.setToolTip("Tanıma örneği topla: kendi sembol çizimlerini kaydet")
+        self.sample_button.clicked.connect(self.sampleRequested)
         self.layout_button = _FitButton("⧉ Düzen"); self.layout_button.setCheckable(True)
         self.layout_button.setStyleSheet(_BTN_CSS)
         self.layout_button.toggled.connect(self.layoutEditToggled)
@@ -210,7 +218,7 @@ class ToolBar(QWidget):
         self._fullscreen, self._recording = False, False
         self._sync_fullscreen_button()
         col.addWidget(self.pen_settings_button); col.addWidget(self.settings_button)
-        col.addWidget(self.editor_button); col.addWidget(self.layout_button)
+        col.addWidget(self.editor_button); col.addWidget(self.sample_button); col.addWidget(self.layout_button)
         col.addWidget(self.fullscreen_button)
         col.addWidget(self._rule())
 
@@ -227,28 +235,46 @@ class ToolBar(QWidget):
         shape_btn.rightClicked.connect(self.open_shape_menu)
         self.shape_menu = ShapeMenu(self)
         self.shape_menu.shapeSelected.connect(self._on_shape_chosen)
+        self.shape_menu.fillSelected.connect(self.shapeFillSelected)
+        self.shape_menu_gate = None            # bağlanınca: () -> int (bkz. open_shape_menu)
         self.set_shape(Shape.RECT)
         self.tool_buttons[Tool.PEN].setChecked(True)
         col.addWidget(self._rule())
 
         self._swatch_group = QButtonGroup(self); self._swatch_group.setExclusive(True)
         self.swatches: dict[str, SwatchButton] = {}
+        palette_col = QVBoxLayout(); palette_col.setSpacing(0)
         row = QHBoxLayout(); row.setSpacing(0)
         for i, hx in enumerate(PALETTE):
             s = SwatchButton(hx); self._swatch_group.addButton(s); self.swatches[hx] = s
             s.clicked.connect(lambda _c=False, h=hx: self.colorSelected.emit(h))
             if i % 2 == 0 and i:
-                col.addLayout(row); row = QHBoxLayout(); row.setSpacing(0)
+                palette_col.addLayout(row); row = QHBoxLayout(); row.setSpacing(0)
             row.addWidget(s)
-        col.addLayout(row)
+        palette_col.addLayout(row)
         self.swatches[PALETTE[0]].setChecked(True)
+        self.custom_color_button = QPushButton()
+        icon = QPixmap(10, 10); icon.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(icon); painter.setPen(QColor(theme.PANEL_SOFT))
+        painter.drawLine(1, 5, 9, 5); painter.drawLine(5, 1, 5, 9); painter.end()
+        self.custom_color_button.setIcon(QIcon(icon))
+        self.custom_color_button.setIconSize(QSize(10, 10))
+        self.custom_color_button.setFixedWidth(12)
+        self.custom_color_button.setStyleSheet(_BTN_CSS + "QPushButton { padding: 0; } QPushButton::menu-indicator { width: 0; }")
+        self.custom_color_button.setAccessibleName("Özel renk ve son dört renk")
+        self.color_menu = QMenu(self.custom_color_button)
+        self.custom_color_button.setMenu(self.color_menu)
+        self.set_custom_colors([])
+        palette_row = QHBoxLayout(); palette_row.setSpacing(0)
+        palette_row.addLayout(palette_col); palette_row.addWidget(self.custom_color_button)
+        col.addLayout(palette_row)
 
         cap = self._caption("KALINLIK"); col.addWidget(cap); self.section_captions.append(cap)
         self._width_group = QButtonGroup(self); self._width_group.setExclusive(True)
         self.width_buttons: dict[int, DotButton] = {}
         for w in WIDTHS:
             d = DotButton(w); self._width_group.addButton(d); self.width_buttons[w] = d
-            d.clicked.connect(lambda _c=False, v=w: self.widthSelected.emit(v))
+            d.clicked.connect(lambda _c=False, v=w: self._select_preset(v))
         # Beş DotButton'ın satır dağılımı kademeye göre değişir (FULL/COMPACT: 3+2,
         # MINI: 5'i tek satırda) -> ayrı bir alt QVBoxLayout, bkz. _set_dot_rows.
         self._dots_col = QVBoxLayout(); self._dots_col.setSpacing(0)
@@ -256,6 +282,17 @@ class ToolBar(QWidget):
         self.dot_rows: list[QHBoxLayout] = []
         self._dot_row_shape: tuple[tuple[int, ...], ...] | None = None
         self.width_buttons[4].setChecked(True)
+        self.size_label = self._caption("Silgi · 34 px")
+        self.size_label.hide()
+        col.addWidget(self.size_label)
+        self.size_slider = QSlider(Qt.Orientation.Horizontal)
+        self.size_slider.setRange(ERASER_MIN, ERASER_MAX)
+        self.size_slider.setValue(34)
+        self.size_slider.setToolTip("Silgi çapı (px) · [ küçült / ] büyüt")
+        self.size_slider.setAccessibleName("Silgi çapı")
+        self.size_slider.valueChanged.connect(self.widthSelected)
+        self.size_slider.hide()
+        col.addWidget(self.size_slider)
         col.addWidget(self._rule())
 
         cap = self._caption("SORU AKIŞI"); col.addWidget(cap); self.section_captions.append(cap)
@@ -411,11 +448,20 @@ class ToolBar(QWidget):
             s.set_diameter(spec.swatch_d)
         for d in self.width_buttons.values():
             d.set_size(spec.dot_d)
+            # Küçük panelde çap kaydırıcısı kalsın; yinelenen hazır boyut
+            # satırı macOS'un daha yüksek doğal kontrol ölçülerinde taşır.
+            d.setVisible(self._size_tool != Tool.ERASER or spec is not _MINI)
+        # En küçük kademede (MINI) Tanıma düğmesi gizlenir: 1280x720 @160% kaydırmasız kalsın. Tanıma penceresi
+        # o kademede açılamaz; daha yüksek kademede (FULL/COMPACT) kullanılır.
+        self.sample_button.setVisible(spec is not _MINI)
         self.record_button.set_diameter(spec.record_d)
         self._col.setSpacing(spec.spacing)
         self._col.setContentsMargins(*spec.margins)
         inner = self.width() - spec.margins[0] - spec.margins[2]
-        for b in (self.pen_settings_button, self.settings_button, self.editor_button,
+        self.size_label.setFixedWidth(inner)
+        self.size_label.setWordWrap(True)
+        self.size_slider.setFixedWidth(inner)
+        for b in (self.pen_settings_button, self.settings_button, self.editor_button, self.sample_button,
                   self.layout_button, self.fullscreen_button, self.work_button,
                   self.prev_button, self.next_button):
             b.fit_width(inner, compact=spec is _MINI)
@@ -458,13 +504,60 @@ class ToolBar(QWidget):
     def set_tool(self, t: Tool) -> None:
         b = self.tool_buttons[t]; b.blockSignals(True); b.setChecked(True); b.blockSignals(False)
 
+    def set_custom_colors(self, colors: list[str]) -> None:
+        self.color_menu.clear()
+        choose = self.color_menu.addAction("Özel renk seç…")
+        choose.triggered.connect(self.customColorRequested)
+        if colors:
+            self.color_menu.addSeparator()
+        for hx in colors[:4]:
+            action = self.color_menu.addAction(hx)
+            action.setData(hx)
+        if not getattr(self, "_color_menu_wired", False):
+            self.color_menu.triggered.connect(self._recent_color_selected)
+            self._color_menu_wired = True
+
+    def _recent_color_selected(self, action) -> None:
+        if action.data():
+            self.colorSelected.emit(action.data())
+
     def set_color(self, hx: str) -> None:
-        if hx in self.swatches:
-            s = self.swatches[hx]; s.blockSignals(True); s.setChecked(True); s.blockSignals(False)
+        self._swatch_group.setExclusive(False)
+        for color, button in self.swatches.items():
+            button.setChecked(color == hx)
+        self._swatch_group.setExclusive(True)
+        self.custom_color_button.setToolTip(f"Özel renk seç / Son 4 özel renk · Seçili: {hx}")
+
+    def _select_preset(self, w: int) -> None:
+        value = ERASER_SIZES[WIDTHS.index(w)] if self._size_tool == Tool.ERASER else w
+        self.widthSelected.emit(value)
+
+    def set_size_context(self, tool: Tool, width: int) -> None:
+        erasing = tool == Tool.ERASER
+        changed = erasing != (self._size_tool == Tool.ERASER)
+        self._size_tool = tool
+        self.size_slider.setVisible(erasing)
+        self.size_label.setVisible(erasing)
+        for w, b in self.width_buttons.items():
+            size = ERASER_SIZES[WIDTHS.index(w)] if erasing else w
+            b.setToolTip(f"{'Silgi çapı' if erasing else 'Kalem kalınlığı'} · {size} px")
+            b.setAccessibleName(b.toolTip())
+        self.set_width(width)
+        if changed:
+            self._refresh_fit()
 
     def set_width(self, w: int) -> None:
-        if w in self.width_buttons:
-            d = self.width_buttons[w]; d.blockSignals(True); d.setChecked(True); d.blockSignals(False)
+        erasing = self._size_tool == Tool.ERASER
+        self._width_group.setExclusive(False)
+        for key, button in self.width_buttons.items():
+            value = ERASER_SIZES[WIDTHS.index(key)] if erasing else key
+            button.setChecked(value == w)
+        self._width_group.setExclusive(True)
+        if erasing:
+            self.size_slider.blockSignals(True)
+            self.size_slider.setValue(w)
+            self.size_slider.blockSignals(False)
+            self.size_label.setText(f"Silgi · {w} px")
 
     def set_work_label(self, text: str) -> None:
         if self.work_button.text() != text:
@@ -537,7 +630,15 @@ class ToolBar(QWidget):
         self.shape_menu.set_current(shape)
         b.update()
 
+    def set_shape_fill(self, on: bool) -> None:
+        self.shape_menu.set_fill(on)
+
     def open_shape_menu(self) -> None:
+        """shape_menu_gate: -1 açılmaz; 0 açık kalır; >0 o kadar ms sonra kendiliğinden kapanır (kayıt sürerken)."""
+        gate = self.shape_menu_gate() if self.shape_menu_gate is not None else 0
+        if gate < 0:
+            return
+        self.shape_menu.set_auto_close_ms(gate)
         b = self.tool_buttons[Tool.SHAPE]
         screen = b.screen() or QApplication.primaryScreen()
         self.shape_menu.popup_beside(b.mapToGlobal(QPoint(b.width() + 6, 0)), screen.availableGeometry())

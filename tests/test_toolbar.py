@@ -76,7 +76,7 @@ def test_shape_glyph_and_reclick_emits(qtbot):
     tb.toolSelected.connect(lambda t: fired.append(t))
     qtbot.mouseClick(tb.tool_buttons[Tool.SHAPE], Qt.MouseButton.LeftButton)
     qtbot.mouseClick(tb.tool_buttons[Tool.SHAPE], Qt.MouseButton.LeftButton)
-    assert fired == [Tool.SHAPE, Tool.SHAPE]                   # seçiliyken de yayar (şekil döngüsü)
+    assert fired == [Tool.SHAPE, Tool.SHAPE]                   # seçiliyken de yayar (şekil menüsü)
     tb.set_shape_glyph("○")
     assert tb.tool_buttons[Tool.SHAPE].glyph == "○"
 

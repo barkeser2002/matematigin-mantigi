@@ -41,6 +41,7 @@ class GlyphButton(QAbstractButton):
     Boyut sabit değil: set_metrics ile yükseklik/glif boyutu/etiket görünürlüğü ölçeklenir.
     Genişlik (W) her kademede sabit kalır, yalnız yükseklik küçülür."""
 
+    rightClicked = pyqtSignal()
     W = 56
     H = 48
     GLYPH_PX = 18
@@ -49,11 +50,26 @@ class GlyphButton(QAbstractButton):
     def __init__(self, glyph: str, label: str, parent=None):
         super().__init__(parent)
         self.glyph, self.label = glyph, label
+        self.shape_icon = None          # Shape ise glif yerine şeklin kendi çizimi (Şekil düğmesi)
         self.glyph_px = self.GLYPH_PX
         self.show_label = True
         self.setCheckable(True)
         self.setFixedSize(self.W, self.H)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, e: QMouseEvent) -> None:
+        if e.button() == Qt.MouseButton.RightButton:
+            e.accept()               # menü bırakınca açılır: basışta açılan açılır pencere bırakmayı yutardı
+            return
+        super().mousePressEvent(e)
+
+    def mouseReleaseEvent(self, e: QMouseEvent) -> None:
+        if e.button() == Qt.MouseButton.RightButton:
+            if self.rect().contains(e.position().toPoint()):
+                self.rightClicked.emit()
+            e.accept()
+            return
+        super().mouseReleaseEvent(e)
 
     def set_metrics(self, h: int, glyph_px: int, show_label: bool) -> None:
         self.glyph_px = glyph_px
@@ -71,6 +87,19 @@ class GlyphButton(QAbstractButton):
         p.drawRoundedRect(QRectF(0, 0, w, h), 6, 6)
         p.setPen(QColor("#ffffff" if on else theme.TOOLBAR_MUTED))
         f = QFont(self.font()); f.setPixelSize(self.glyph_px); p.setFont(f)
+        glyph_box = QRectF(0, h * (4 / 48), w, h / 2) if self.show_label else QRectF(0, 0, w, h)
+        if self.shape_icon is not None:
+            from matematigin_mantigi.ui.shape_paint import paint_shape_icon
+            p.setPen(QPen(p.pen().color(), 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            paint_shape_icon(p, self.shape_icon, glyph_box.center().x(), glyph_box.center().y(),
+                             min(glyph_box.height(), w) * .8)
+            if self.show_label:
+                f.setPixelSize(self.LABEL_PX); f.setWeight(QFont.Weight(600)); p.setFont(f)
+                p.setPen(QColor("#ffffff" if on else theme.TOOLBAR_MUTED))
+                p.drawText(QRectF(0, h * (28 / 48), w, h / 3), Qt.AlignmentFlag.AlignCenter, theme.tr_upper(self.label))
+            p.end()
+            return
         if self.show_label:
             # Oranlar orijinal 56x48 düzeninden türetildi: glif üstte yarım yükseklik,
             # 9px etiket altta üçte bir yükseklik (48 tabanına göre 4/48 ve 28/48 ofsetleri).

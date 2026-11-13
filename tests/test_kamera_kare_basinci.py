@@ -99,6 +99,58 @@ def test_external_preview_coalesces_repaints_but_keeps_latest_frame(qtbot, monke
     assert updates[-1] is None, 'Kopma durumu çizim sınırını beklememeli'
 
 
+def test_external_preview_uses_fast_scaling_without_changing_board(qtbot):
+    from PyQt6.QtGui import QColor
+    from matematigin_mantigi.ui.main_window import _Preview
+
+    image = QImage(2, 2, QImage.Format.Format_RGB32)
+    image.fill(QColor('blue'))
+    image.setPixelColor(0, 0, QColor('red'))
+    image.setPixelColor(0, 1, QColor('red'))
+    views = [CameraView(), _Preview()]
+    reds = []
+    for view in views:
+        qtbot.addWidget(view)
+        view.resize(200, 200)
+        view.set_frame(image)
+        view.show()
+        # Yakın komşu ölçekleme renkleri karıştırmaz; tahta yumuşak yolu korur.
+        rendered = view.grab().toImage()
+        dpr = rendered.devicePixelRatio()
+        reds.append(rendered.pixelColor(round(99 * dpr), round(180 * dpr)).red())
+    assert 0 < reds[0] < 255
+    assert reds[1] == 255, 'Büyük harici önizleme GUI üzerinde bilinear ölçeklenmemeli'
+
+
+def test_preview_limits_bursts_to_30_hz_and_stops_without_new_frames(qtbot, monkeypatch):
+    from matematigin_mantigi.ui import main_window as module
+
+    clock = [100.0]
+    monkeypatch.setattr(module, 'monotonic', lambda: clock[0])
+    preview = module._Preview()
+    qtbot.addWidget(preview)
+    updates = []
+    monkeypatch.setattr(preview, 'update', lambda: updates.append(preview._frame))
+    image = QImage(4, 4, QImage.Format.Format_RGB32)
+    image.fill(0)
+    preview.set_frame(image)
+    qtbot.waitUntil(lambda: len(updates) == 1)
+    assert not preview._paint_timer.isActive(), 'Yeni kare olmadan periyodik çizim yapılmamalı'
+    clock[0] += .010
+    preview.set_frame(image)
+    assert 23 <= preview._paint_timer.interval() <= 24, \
+        'Her kareye sabit gecikme değil 30 Hz bütçesinden kalan süre uygulanmalı'
+    latest = image.copy()
+    preview.set_frame(latest)
+    qtbot.waitUntil(lambda: len(updates) == 2)
+    assert updates[-1] is latest
+    assert not preview._paint_timer.isActive()
+    preview.set_frame(image)
+    preview.set_placeholder('Kamera bekleniyor…')
+    assert not preview._paint_timer.isActive()
+    assert updates[-1] is None
+
+
 def test_worker_prepares_small_panel_image_without_losing_hd_preview(qtbot):
     worker = CameraWorker(Camera(), ChromaParams(), chroma_enabled=False, out_width=1280,
                           render_width=160)
@@ -201,6 +253,94 @@ def test_moving_preview_within_second_screen_does_not_stop_recording(window, qtb
         qtbot.waitUntil(lambda: window._stop_worker is None, timeout=15000)
         window.webcam_panel.shutdown()
         assert window.webcam_panel.worker.wait(2000)
+
+
+def test_recording_external_preview_paints_at_camera_rate(window, qtbot, monkeypatch,
+                                                         tmp_path):
+    """Teslimi değil gerçekten çizilen farklı kareleri RECORDING aralığında ölç."""
+    from PyQt6.QtCore import QTimer
+    from PyQt6.QtWidgets import QMessageBox
+    from matematigin_mantigi.core.recorder import MssFfmpegRecorder, RecorderState
+    from test_recorder import small_synthetic_grabber
+    from test_preview_regressions import open_preview
+
+    monkeypatch.setattr(QMessageBox, 'question', lambda *a: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(QMessageBox, 'warning', lambda *a: QMessageBox.StandardButton.Ok)
+    window.settings.audio_device = None
+    window.settings.record_fps = 30
+    window.recorder = MssFfmpegRecorder(lambda: tmp_path / 'kayit', fps=30,
+                                      grabber=small_synthetic_grabber, out_height=0)
+    camera = Camera()
+    # Küçük kaynak zamanlayıcı regresyonunu sunucunun HSV/HD işlem hızından ayırır.
+    camera.frame = np.full((90, 160, 3), (30, 200, 40), np.uint8)
+    panel = window.webcam_panel
+    panel.set_source_factory(lambda: camera)
+    preview = open_preview(window, monkeypatch)
+    preview.setGeometry(window._preview_screen.availableGeometry())
+    counts = {'board': 0, 'preview': 0}
+    painted = {'board': set(), 'preview': set()}
+    sampling = False
+    real_board = panel.view.set_frame
+    real_paint = CameraView.paintEvent
+
+    def board_frame(image):
+        real_board(image)
+        if sampling and window.recorder.state is RecorderState.RECORDING:
+            counts['board'] += 1
+
+    def preview_frame(image):
+        assert preview._frame.cacheKey() == image.cacheKey()
+        if sampling and window.recorder.state is RecorderState.RECORDING:
+            counts['preview'] += 1
+
+    def paint(view, event):
+        real_paint(view, event)
+        if sampling and window.recorder.state is RecorderState.RECORDING and view._frame is not None:
+            name = 'preview' if view is preview else 'board' if view is panel.view else None
+            if name:
+                painted[name].add(view._frame.cacheKey())
+
+    monkeypatch.setattr(panel.view, 'set_frame', board_frame)
+    monkeypatch.setattr(CameraView, 'paintEvent', paint)
+    # Gerçek önizleme yuvasından sonra aynı cacheKey'in teslim edildiğini doğrula.
+    panel.frameReady.connect(preview_frame)
+    try:
+        panel.start()
+        qtbot.waitUntil(lambda: preview._frame is not None, timeout=5000)
+        window.toggle_recording(True)
+        assert window.recorder.state is RecorderState.RECORDING
+        worker = panel.worker
+        # Isınma sonrası iki saniyelik, hassas zamanlayıcılı ortak ölçüm aralığı.
+        qtbot.waitUntil(lambda: window.recorder.frames_written >= 5, timeout=5000)
+        done = []
+        timer = QTimer(window)
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda: done.append(True))
+        start = time.monotonic()
+        sampling = True
+        timer.start(2200)
+        qtbot.waitUntil(lambda: bool(done), timeout=10000)
+        sampling = False  # finalize sırasında gelen kareleri sayma
+        elapsed = time.monotonic() - start
+        fps = {name: len(keys) / elapsed for name, keys in painted.items()}
+        delivered_fps = {name: count / elapsed for name, count in counts.items()}
+        print({'drawn_fps': fps, 'delivered_fps': delivered_fps, 'seconds': elapsed})
+        assert window.recorder.state is RecorderState.RECORDING
+        assert counts['preview'] == counts['board']
+        assert delivered_fps['preview'] >= 20
+        assert fps['board'] >= 20
+        assert fps['preview'] >= max(20, fps['board'] * .70), \
+            'Harici görünüm 10 Hz ile değil kamera hızına yakın çizilmeli'
+        assert fps['preview'] <= 32, 'Harici çizim yaklaşık 30 Hz tavanını aşmamalı'
+        assert panel.worker is worker and camera.opens == 1
+        assert not window._geometry_interrupted
+    finally:
+        sampling = False
+        if window.recorder.state is RecorderState.RECORDING:
+            window.toggle_recording(False)
+        qtbot.waitUntil(lambda: window._stop_worker is None, timeout=15000)
+        panel.shutdown()
+        assert panel.worker.wait(2000)
 
 
 def test_recording_preview_preserves_live_frame_distribution(window, qtbot, monkeypatch,

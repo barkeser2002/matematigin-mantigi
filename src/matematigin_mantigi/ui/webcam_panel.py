@@ -17,6 +17,7 @@ from matematigin_mantigi.ui.zone import Zone
 
 
 class CameraView(QWidget):
+    SMOOTH_SCALING = True
     clicked = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -71,7 +72,7 @@ class CameraView(QWidget):
 
     def paintEvent(self, _e):
         p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, self.SMOOTH_SCALING)
         if self._frame is None:
             # kamera yokken çizim yok; sadece küçük gri durum yazısı (tahta temiz kalır)
             p.setPen(QColor(theme.MUTED))

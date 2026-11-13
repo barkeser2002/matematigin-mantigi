@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from math import ceil
+from time import monotonic
 import numpy as np
 from pathlib import Path
 from typing import Callable, Sequence
@@ -136,6 +138,8 @@ def ink_from_snapshot(image: QImage, size: QSize, dpr: float = 1.0) -> QImage:
 
 
 class _Preview(CameraView):
+    SMOOTH_SCALING = False             # büyük yardımcı görüntüde ucuz yakın komşu ölçekleme
+    MAX_PAINT_FPS = 30
     closed = pyqtSignal()
     fullscreenKey = pyqtSignal()        # F11 / Esc ana pencereye iletilir: önizleme etkinken ana pencerenin
     escapeKey = pyqtSignal()            # WindowShortcut'ları çalışmaz, tam ekrandan çıkış kilitlenirdi
@@ -148,18 +152,22 @@ class _Preview(CameraView):
         self.close_button.setObjectName("preview_close")
         self.close_button.clicked.connect(self.close)
         self.close_button.adjustSize()
-        # Harici yardımcı görüntü kayıttan önce gelmez: pahalı tam ekran boyama 10 Hz.
-        # Kare alanı hemen güncellenir; zamanlayıcı daima en yeni kareyi çizer.
+        # Yalnız yeni kare gelince çiz; bekleyen tek istek daima en yeni kareyi kullanır.
+        # Her kareye sabit 33 ms eklemek 30 fps kaynağı 15 fps'ye böler: önceki
+        # istekten kalan süreyi bekleyerek yaklaşık 30 Hz tavanını koru.
+        self._last_paint_request = 0.0
         self._paint_timer = QTimer(self)
         self._paint_timer.setSingleShot(True)
-        self._paint_timer.setInterval(100)
+        self._paint_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._paint_timer.timeout.connect(self._paint_latest_frame)
 
     def _request_frame_update(self) -> None:
         if not self._paint_timer.isActive():
-            self._paint_timer.start()
+            remaining = 1 / self.MAX_PAINT_FPS - (monotonic() - self._last_paint_request)
+            self._paint_timer.start(max(0, ceil(remaining * 1000)))
 
     def _paint_latest_frame(self) -> None:
+        self._last_paint_request = monotonic()
         self.update()
 
     def set_placeholder(self, text: str) -> None:

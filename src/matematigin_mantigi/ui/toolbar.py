@@ -417,6 +417,9 @@ class ToolBar(QWidget):
             s.set_diameter(spec.swatch_d)
         for d in self.width_buttons.values():
             d.set_size(spec.dot_d)
+            # Küçük panelde çap kaydırıcısı kalsın; yinelenen hazır boyut
+            # satırı macOS'un daha yüksek doğal kontrol ölçülerinde taşır.
+            d.setVisible(self._size_tool != Tool.ERASER or spec is not _MINI)
         self.record_button.set_diameter(spec.record_d)
         self._col.setSpacing(spec.spacing)
         self._col.setContentsMargins(*spec.margins)

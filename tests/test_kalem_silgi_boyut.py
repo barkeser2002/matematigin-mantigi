@@ -227,6 +227,25 @@ def test_eraser_controls_fit_sidebar_without_scroll(qtbot, height):
     assert tb.scroll_area.verticalScrollBar().maximum() == 0
 
 
+def test_small_eraser_sidebar_prioritizes_slider_and_keeps_presets_on_tall_panel(qtbot):
+    from matematigin_mantigi.core.models import Tool
+    from matematigin_mantigi.ui.toolbar import ToolBar
+    from matematigin_mantigi.ui.theme import FontFamilies
+    tb = ToolBar(FontFamilies("Arial", "Arial", False))
+    qtbot.addWidget(tb)
+    tb.resize(88, 720)
+    tb.show()
+    qtbot.waitExposed(tb)
+    tb.set_size_context(Tool.ERASER, 80)
+    assert tb.size_slider.isVisible() and tb.size_label.isVisible()
+    assert all(button.isHidden() for button in tb.width_buttons.values())
+    tb.set_size_context(Tool.PEN, 4)
+    assert all(button.isVisible() for button in tb.width_buttons.values())
+    tb.resize(88, 1100)
+    tb.set_size_context(Tool.ERASER, 80)
+    assert all(button.isVisible() for button in tb.width_buttons.values())
+
+
 def test_existing_status_reports_effective_size_on_tip_switch(window):
     from PyQt6.QtGui import QPointingDevice
     window._on_width(8)

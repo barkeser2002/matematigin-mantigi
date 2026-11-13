@@ -122,7 +122,17 @@ yeni kodda harici hızlı yol ve tahtanın yumuşak yolu ayrı doğrulanır.
 Deterministik saat testi 30 Hz bütçesinden kalan süreyi, kare birleştirmeyi,
 yeni kare yokken zamanlayıcının susmasını ve kopma iptalini sınar.
 
-### Önce/sonra: iki gerçek FHD offscreen ekran
+İlk dal CI koşusunda (`43376307186`) Windows paket/test/artifact yeşil,
+macOS'ta bu yeni test kırmızıydı: kaynak teslimi, tahta çizimi ve harici çizim
+hep 9,37 fps idi (yani 10 Hz harici sınırı değil, bütün sentetik akış yavaştı).
+Bu nedenle zamanlayıcı regresyonunun çizim yükü de 320×180 mantıksal piksele
+sınırlandı; ≥20 eşiği ve göreli koşul düşürülmedi, tam ekran ölçümü betikte
+korundu. Aynı son test tekrar arşivlenmiş d470c41 kaynakla kırmızı
+(harici 7,70; tahta 24,46), yeni kaynakla yeşil (harici 21,44; tahta 23,26)
+oldu. Bu son Linux örneği tam paketle eşzamanlı koşuldu; ilk 27,21 fps
+kanıtı yukarıda ayrı tutulmuştur.
+
+### Önce/sonra: iki FHD offscreen ekran
 
 `scripts/measure_camera_preview.py` artık teslim ve **farklı çizilen kare**
 hızlarını ayrı yazar; bütün sayaçlar RECORDING aralığıyla sınırlıdır.

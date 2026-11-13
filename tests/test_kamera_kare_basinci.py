@@ -276,7 +276,10 @@ def test_recording_external_preview_paints_at_camera_rate(window, qtbot, monkeyp
     panel = window.webcam_panel
     panel.set_source_factory(lambda: camera)
     preview = open_preview(window, monkeypatch)
-    preview.setGeometry(window._preview_screen.availableGeometry())
+    area = window._preview_screen.availableGeometry()
+    # Çizim boyutunu da sınırla: macOS offscreen DPR=2'de 800×800 pencere
+    # 1600×1600 raster işine dönüşüp zamanlayıcı regresyonunu gölgeleyebilir.
+    preview.setGeometry(area.x(), area.y(), 320, 180)
     counts = {'board': 0, 'preview': 0}
     painted = {'board': set(), 'preview': set()}
     sampling = False

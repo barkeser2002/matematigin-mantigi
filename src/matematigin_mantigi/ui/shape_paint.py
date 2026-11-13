@@ -19,7 +19,12 @@ def fill_color(pen: QColor) -> QColor:
 def paint_shape(p: QPainter, shape: Shape, a: QPointF, b: QPointF, fill: QColor | None = None) -> None:
     """Şekli çizer. fill verilirse yalnız kapalı öğeler (Oval, closed Poly) yarı saydam dolar; açık öğeler dolmaz.
     Sınırlar (Shift/Alt) çağıran tarafından uygulanmış olmalı: bkz. core.shapes.constrain."""
-    for item in shape_geometry(shape, (a.x(), a.y()), (b.x(), b.y())):
+    paint_items(p, shape_geometry(shape, (a.x(), a.y()), (b.x(), b.y())), fill)
+
+
+def paint_items(p: QPainter, items, fill: QColor | None = None) -> None:
+    """core.shapes öğelerini (Poly/Oval) boyar; kalem ve renk çağıranın QPen'inden gelir."""
+    for item in items:
         closed = isinstance(item, Oval) or item.closed
         p.setBrush(QBrush(fill) if fill is not None and closed else Qt.BrushStyle.NoBrush)
         if isinstance(item, Oval):

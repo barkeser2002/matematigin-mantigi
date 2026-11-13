@@ -5,6 +5,9 @@ from __future__ import annotations
 from collections import deque
 import random
 import math
+import time
+
+import numpy as np
 
 from PyQt6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (QBrush, QColor, QFont, QImage, QKeyEvent, QMouseEvent, QPainter, QPainterPath, QPaintEvent, QPen, QPixmap,
@@ -13,10 +16,11 @@ from PyQt6.QtWidgets import QLineEdit, QWidget
 
 from matematigin_mantigi.core.models import LineStyle, Nib, PenSettings, Shape, Tool
 from matematigin_mantigi.core.settings import ERASER_MIN, ERASER_MAX
+from matematigin_mantigi.core.shape_recognition import correct_stroke, geometry_items
 from matematigin_mantigi.core.shapes import CLOSED_SHAPES, constrain
 from matematigin_mantigi.core.stroke import LASER_COLOR, MOUSE_PRESSURE, eraser_diameter, pressure_width
 from matematigin_mantigi.ui import theme
-from matematigin_mantigi.ui.shape_paint import fill_color, paint_shape
+from matematigin_mantigi.ui.shape_paint import fill_color, paint_items, paint_shape
 
 
 def _grown(old: QImage, size: QSize, dpr: float) -> QImage:
@@ -52,6 +56,7 @@ class DrawingCanvas(QWidget):
     inputSourceChanged = pyqtSignal(str)        # "tablet" | "mouse"
     MAX_UNDO = 30
     LASER_FADE_MS = 1500                        # lazer izi bu sürede sönerek kaybolur
+    WRITING_GAP_S = 1.2                         # bu sürede biten komşu kalem çizgisi = yazı bağlamı (dönüşme yok)
     show_grid = False                           # düz beyaz tahta; True ise 28px nokta ızgarası
 
     def __init__(self, parent=None):
@@ -86,6 +91,10 @@ class DrawingCanvas(QWidget):
         self._hold_timer.setInterval(600)
         self._hold_timer.timeout.connect(self._correct_held_stroke)
         self._stroke_count = 0
+        self._stroke_points: list[tuple[float, float, float]] = []     # kalem çizgisinin ham (x, y, basınç) noktaları
+        self._recent_ink: deque[tuple[tuple[float, float, float, float], float]] = deque(maxlen=32)
+        self._clock = time.monotonic                # testte sahte saat; yazı bağlamı zamanına bakar
+        self.last_correction: str | None = None     # son çizgi düzeltildiyse tanınan şekil türü, yoksa None
         self._tablet_down = False
         self._mouse_down = False
         self._last: QPointF | None = None
@@ -204,6 +213,8 @@ class DrawingCanvas(QWidget):
         self._stroke_before = self._strokes.copy()
         self._stroke_start = QPointF(pos)
         self._straight = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+        self.last_correction = None
+        self._stroke_points = [(pos.x(), pos.y(), pressure)] if self._active_tool == Tool.PEN and not self._straight else []
         self._stroke_path = QPainterPath(pos)
         self._last, self._raw_last, self._last_p = pos, pos, pressure
         self._draw_segment(pos, pos, pressure)
@@ -218,6 +229,8 @@ class DrawingCanvas(QWidget):
             self._preview_shape(pos)
             self._last = pos
             return
+        if self._active_tool == Tool.PEN and not self._straight and not modifiers & Qt.KeyboardModifier.ShiftModifier:
+            self._stroke_points.append((pos.x(), pos.y(), pressure))
         if self._active_tool == Tool.PEN and (self._straight or modifiers & Qt.KeyboardModifier.ShiftModifier):
             self._straight = True
             delta = pos - self._stroke_start
@@ -273,6 +286,8 @@ class DrawingCanvas(QWidget):
             p.end()
             self._shape_start = None
             self.update()
+        if self._active_tool == Tool.PEN:
+            self._finish_pen_stroke()
         self._last = None
         self._raw_last = None
         if self._active_tool == Tool.LASER:
@@ -326,12 +341,57 @@ class DrawingCanvas(QWidget):
         self._stroke_count = 0
         self._undo.clear()
         self._redo.clear()
+        self._recent_ink.clear()
         self.update()
         self.historyChanged.emit(False, True)
 
     def _push_undo(self) -> None:
         self._redo.clear()
         self._undo.append((self._strokes.copy(), self._stroke_count))
+
+    # --- şekil düzeltme (kalem kalkınca) ---------------------------------------------------------
+    def _correction_enabled(self) -> bool:
+        s = self._pen_settings
+        return (s is not None and s.shape_correction and s.nib == Nib.ROUND and not self._straight
+                and self._active_tool == Tool.PEN)
+
+    def _in_writing_cluster(self, box: tuple[float, float, float, float], now: float) -> bool:
+        """Yakın zamanda biten ve bu çizgiye komşu bir kalem çizgisi varsa yazı bağlamıdır: dönüşme yok."""
+        x0, y0, x1, y1 = box
+        margin = max(30.0, 0.25 * max(x1 - x0, y1 - y0))
+        for (a0, b0, a1, b1), t in self._recent_ink:
+            if now - t > self.WRITING_GAP_S:
+                continue
+            if a0 - margin <= x1 and a1 + margin >= x0 and b0 - margin <= y1 and b1 + margin >= y0:
+                return True
+        return False
+
+    def _finish_pen_stroke(self) -> None:
+        """Kalem kalkınca çizgiyi tanır. Şekil bulunursa: ham çizgi bir geri al adımı olarak yığında kalır,
+        tahta da (çizgi öncesi görüntü üstüne) düzgün şekille yeniden boyanır. Bulunamazsa ham çizgi kalır."""
+        points, self._stroke_points = self._stroke_points, []
+        if len(points) < 2:
+            return
+        xy = np.asarray(points, dtype=float)
+        box = (float(xy[:, 0].min()), float(xy[:, 1].min()), float(xy[:, 0].max()), float(xy[:, 1].max()))
+        now = self._clock()
+        clustered = self._in_writing_cluster(box, now)
+        self._recent_ink.append((box, now))
+        if clustered or not self._correction_enabled():
+            return
+        result = correct_stroke(xy)
+        if result is None:
+            return
+        self._push_undo()                                       # ham çizgi: ilk geri al bunu geri getirir
+        self._strokes = self._stroke_before.copy()
+        p = QPainter(self._strokes)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(QPen(self.color, self._pen_width(float(xy[:, 2].mean())), self._line_style(),
+                      Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        paint_items(p, geometry_items(result), None)
+        p.end()
+        self.last_correction = result["type"]
+        self.update()
 
     # --- yazı aracı ------------------------------------------------------------
     def begin_text(self, pos: QPointF) -> None:

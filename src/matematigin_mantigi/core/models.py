@@ -139,7 +139,7 @@ class PenSettings:
     hold_to_straight: bool = True
     line_style: LineStyle = LineStyle.SOLID
     math_recognition: bool = True
-    shape_correction: bool = True
+    shape_correction: bool = False
     autosave: bool = True
     template_matching: bool = False
     reading_ms: int = 40       # soru yazma animasyonu, ms/harf; 0 = kapalı

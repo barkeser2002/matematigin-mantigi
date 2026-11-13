@@ -451,6 +451,9 @@ class ToolBar(QWidget):
             # Küçük panelde çap kaydırıcısı kalsın; yinelenen hazır boyut
             # satırı macOS'un daha yüksek doğal kontrol ölçülerinde taşır.
             d.setVisible(self._size_tool != Tool.ERASER or spec is not _MINI)
+        # En küçük kademede (MINI) Tanıma düğmesi gizlenir: 1280x720 @160% kaydırmasız kalsın. Tanıma penceresi
+        # o kademede açılamaz; daha yüksek kademede (FULL/COMPACT) kullanılır.
+        self.sample_button.setVisible(spec is not _MINI)
         self.record_button.set_diameter(spec.record_d)
         self._col.setSpacing(spec.spacing)
         self._col.setContentsMargins(*spec.margins)

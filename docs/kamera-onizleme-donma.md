@@ -220,3 +220,90 @@ HD kaynak için `--source-width 1280` (varsayılan). Önceki üretim kodu
 `git archive d470c41 src` ile scratch'e açılmış `src` ağacını `PYTHONPATH`
 olarak verin, ana checkout'u değiştirmeyin. Test çıktısını `tail`'e borulamak
 çıkış kodunu gizler; dosyaya yazıp gerçek sonucu ayrı saklayın.
+
+## Üçüncü tur: zamanlama yarışı ve yenilenen ölçümler
+
+Kanıt kökü: `/root/hermes/profiles/baris-beyin/cache/scratch/mm-onizleme-fps-tur3/`.
+Ana checkout değiştirilmedi; eski kod ayrı, geçici ve detached
+`/root/matematigin-mantigi-wt/onizleme-fps-d470c41-tur3` worktree'sinde
+çalıştırıldı. Eski kaynak yolu `d470c41-kaynak-yolu.txt` ile doğrulandı.
+
+### İstisnadan sonra ayakta kalma testi
+
+Eski test, pencere kurulurken 100 ms sonra istisna ve 1500 ms sonra rapor
+planlıyordu. Olay döngüsü başlamadan açılış işi uzarsa iki zamanlayıcı da
+vadesini doldurabilir: istisnanın kuyruklu uyarısı gösterilmeden rapor
+`AYAKTA 0 []` yazıyordu. Bu, uygulamanın öldüğünü göstermiyordu.
+
+- Değişmemiş `d470c41` üzerinde dosyanın olağan koşusu **15 passed in 31.45s**,
+  çıkış 0 (`d470c41-eski-dosya.log`, `.exit`). Kendiliğinden hata gözlenmedi.
+- Aynı eski testte, yalnız deneyde `update_dialog.install` aşamasına iki
+  saniyelik gecikme eklendi. Üretim koduna dokunulmadı. `d470c41` üzerinde
+  aynı `AYAKTA 0 []` hatası **1 failed in 6.99s**, çıkış 1 ile yeniden
+  üretildi (`d470c41-gecikmeli-eski.log`, `.exit`;
+  `gecikmeli-acilis-probu.py`). Bu, eski sürümde de hatayı üreten yeterli
+  koşuldur; eski tam paket koşusu yapılmadı ve doğal tam paket başarısızlığı
+  kesinleşmiş gibi sunulmaz.
+- Test şimdi görünür/exposed ana pencereyi olay döngüsünde yoklar, istisnayı
+  gerçek bir zamanlayıcı yuvasında oluşturur; sonra doğru hata metnini
+  içeren görünür kutu **ve** günlük girdisi gelene kadar yoklar. Sabit bekleme
+  yoktur; 60 saniyelik bekçi hata durumunda süreci çıkış 2 ile bitirir.
+  Gerçek modal olmayan QMessageBox korunur; beklenmedik modal girişler
+  MonkeyPatch ile engellenir. Tek kutu/non-modal, sıfır çıkış kodu, zaman
+  damgası, traceback ve `boom` çerçevesi doğrulamaları korunmuştur.
+- Tek test üç kez geçti: **1 passed in 4.28s**, **1 passed in 4.60s**,
+  **1 passed in 8.61s** (`crash-tek-1.log` … `crash-tek-3.log`).
+- Dosyanın tamamı üç kez geçti: **15 passed in 29.23s**,
+  **15 passed in 28.42s**, **15 passed in 28.70s**
+  (`crash-dosya-1.log` … `crash-dosya-3.log`). Altı çıkış kodu da 0;
+  eş adlı `.exit` dosyalarında saklanır.
+- Aynı kontrollü açılış gecikmesiyle yeni test dalda **1 passed in 5.83s**
+  (`gecikmeli-yeni.log`) ve `d470c41` üretim koduyla **1 passed in 5.84s**
+  (`d470c41-gecikmeli-yeni.log`) verdi; ikisinin de çıkışı 0.
+
+### Yenilenen önce/sonra ölçümü
+
+Aynı güncel `scripts/measure_camera_preview.py`, önce `d470c41`, sonra
+`05fb327` üretim koduyla ardışık çalıştırıldı. Eski worktree'de `PYTHONPATH`
+o worktree'nin `src` dizinine ayarlandı; eski betikte bulunmayan çizilen-kare
+sayaçları için dalın aynı ölçüm betiği kullanıldı. Kamera 30 fps hedefli,
+kaynaklar 160×90 ve 1280×720; iki Qt ekranı 1920×1080, harici görünüm
+1920×1080, sentetik kayıt 640×360/30 fps. Her durum yaklaşık 6 saniye;
+ölçüm yalnız RECORDING aralığıdır, finalize hariçtir. Aşağıdaki hızlar
+**gerçek çizim sonrası farklı cacheKey** sayısıdır, teslim veya kodlama fps'si
+değildir. Tam komutlar, ortam ve commitler `olcum-komutlari.json`;
+çalıştırıcı `olcumleri-kos.py` içinde kayıtlıdır.
+
+| Kaynak / mod (harici açık) | Tahta çizim önce → sonra | Harici çizim önce → sonra |
+|---|---:|---:|
+| 160×90 / yeşil perde | 17,59 → 24,06 | 5,44 → 23,04 |
+| 160×90 / ham | 22,56 → 27,58 | 7,06 → 27,07 |
+| 1280×720 / yeşil perde | 21,52 → 20,91 | 6,65 → 20,91 |
+| 1280×720 / ham | 18,54 → 19,07 | 6,34 → 18,37 |
+
+Birim kare/sn; iki ondalığa yuvarlandı. Kaynaklar: `once-kucuk.json`,
+`sonra-kucuk.json`, `once-hd.json`, `sonra-hd.json`; eş adlı `.log` ve `.exit`
+dosyaları komut çıktılarını ve sıfır çıkışlarını içerir. Her JSON'da yeşil
+perde/ham ve harici kapalı/açık durumlarının tamamı, teslim ve kodlama
+hızları da bulunur. Kamera bütün durumlarda bir kez açıldı, `record_error`
+yoktu. Eski küçük kaynak/yeşil perde/harici açık koşulunda kodlayıcı
+uyarısı vardı; diğer koşullarda yoktu. Paylaşımlı sunucudaki tek ardışık
+ölçüm istatistiksel kıyas değildir. HD ham kaynakta yeni harici çizim
+**18,37 fps**: HD için genel ≥20 fps garantisi verilmez; yeşil perdede
+harici açık tahta hızı da 21,52 → 20,91 olduğundan mutlak performansın
+her durumda arttığı ileri sürülmez.
+
+Kamera/önizleme/çift ekran hedefleri **29 passed in 14.05s**, çıkış 0
+(`kamera-dogru-hedefler.log`, `.exit`). İlk hedef komutu var olmayan
+`tests/test_cift_ekran.py` adı nedeniyle çıkış 4 verdi, hiç test çalışmadı
+(`kamera-hedefleri.log`); gerçek dosya adlarıyla yeniden koşuldu.
+
+**CI eşiği önceki turda gevşetilmiştir:** mutlak 20 yerine
+`min(20, teslim_fps × 0,80)` ve ayrıca tahtaya göre en az %80 koşulu vardır.
+Bu turda eşik ya da üretim kamera kodu değiştirilmedi. Yeni tam paket ve
+aynı commit'in Windows/macOS CI sonuçları teslim metadata'sında,
+`tam-paket.log`/`.exit` ve `ci-sonuc.json` kanıtlarıyla verilir.
+
+Gerçek kamera, XP-Pen, fiziksel çoklu ekran/DPI, Windows/MSS yakalama,
+mikrofon ve GPU kodlayıcı denenmedi. `core/recorder.py` ve
+`core/audio_capture.py` değişmedi (`yasak-dosyalar.diff` boştur).

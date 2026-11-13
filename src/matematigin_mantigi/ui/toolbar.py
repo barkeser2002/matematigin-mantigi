@@ -2,14 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PyQt6.QtCore import QRect, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, QRect, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFontMetrics, QIcon, QPainter, QPixmap
-from PyQt6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton,
+from PyQt6.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton,
                              QMenu, QScrollArea, QSizePolicy, QSlider, QStyle, QStyleOptionButton, QVBoxLayout, QWidget)
 
-from matematigin_mantigi.core.models import PALETTE, TOOL_META, WIDTHS, Tool
+from matematigin_mantigi.core.models import PALETTE, SHAPE_META, TOOL_META, WIDTHS, Shape, Tool
 from matematigin_mantigi.core.settings import ERASER_MIN, ERASER_MAX, ERASER_SIZES
 from matematigin_mantigi.ui import theme
+from matematigin_mantigi.ui.shape_menu import ShapeMenu
 from matematigin_mantigi.ui.theme import FontFamilies
 from matematigin_mantigi.ui.widgets import DotButton, GlyphButton, RecordButton, SwatchButton, WrapButton
 
@@ -155,6 +156,7 @@ class ToolBar(QWidget):
 
     toolSelected = pyqtSignal(object)      # Tool
     customColorRequested = pyqtSignal()
+    shapeSelected = pyqtSignal(object)     # Shape (görsel şekil menüsünden)
     colorSelected = pyqtSignal(str)        # hex
     widthSelected = pyqtSignal(int)
     workToggled = pyqtSignal()
@@ -223,7 +225,12 @@ class ToolBar(QWidget):
             self.tool_buttons[tool] = b
             b.clicked.connect(lambda _c=False, t=tool: self.toolSelected.emit(t))   # seçiliyken de yayar (şekil döngüsü)
             col.addWidget(b, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.tool_buttons[Tool.SHAPE].setToolTip("Tekrar basınca şekil değişir: dikdörtgen, elips, üçgen, çizgi")
+        shape_btn = self.tool_buttons[Tool.SHAPE]
+        shape_btn.setToolTip("Seçiliyken tekrar basınca (ya da sağ tık) şekil menüsü açılır")
+        shape_btn.rightClicked.connect(self.open_shape_menu)
+        self.shape_menu = ShapeMenu(self)
+        self.shape_menu.shapeSelected.connect(self._on_shape_chosen)
+        self.set_shape(Shape.RECT)
         self.tool_buttons[Tool.PEN].setChecked(True)
         col.addWidget(self._rule())
 
@@ -603,6 +610,24 @@ class ToolBar(QWidget):
         b = self.tool_buttons[Tool.SHAPE]
         b.glyph = glyph
         b.update()
+
+    def set_shape(self, shape: Shape) -> None:
+        """Şekil düğmesi seçili şeklin kendi çizimini gösterir (sinyal yayılmaz)."""
+        b = self.tool_buttons[Tool.SHAPE]
+        b.shape_icon = shape
+        b.glyph = SHAPE_META[shape][1]
+        b.setToolTip(f"Şekil: {SHAPE_META[shape][0]} · seçiliyken tekrar basınca (ya da sağ tık) şekil menüsü açılır")
+        self.shape_menu.set_current(shape)
+        b.update()
+
+    def open_shape_menu(self) -> None:
+        b = self.tool_buttons[Tool.SHAPE]
+        screen = b.screen() or QApplication.primaryScreen()
+        self.shape_menu.popup_beside(b.mapToGlobal(QPoint(b.width() + 6, 0)), screen.availableGeometry())
+
+    def _on_shape_chosen(self, shape: Shape) -> None:
+        self.set_shape(shape)
+        self.shapeSelected.emit(shape)
 
     def set_layout_edit(self, on: bool) -> None:
         self.layout_button.blockSignals(True); self.layout_button.setChecked(on); self.layout_button.blockSignals(False)

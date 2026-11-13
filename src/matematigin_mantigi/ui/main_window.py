@@ -14,8 +14,8 @@ from matematigin_mantigi import paths
 from matematigin_mantigi.core import crash_log
 from matematigin_mantigi.core.autostart import Autostart, AutostartError
 from matematigin_mantigi.core import layout_model as lm
-from matematigin_mantigi.core.models import (SHAPE_META, TOOL_META, WIDTHS, Nib, PenSettings, Question, QuestionStatus, Tool,
-                                             next_shape)
+from matematigin_mantigi.core.models import (SHAPE_META, TOOL_META, WIDTHS, Nib, PenSettings, Question, QuestionStatus, Shape,
+                                             Tool)
 from matematigin_mantigi.core.question_flow import QuestionFlow
 from matematigin_mantigi.core.recorder import (DISK_HINT, Recorder, RecorderError, RecorderState, MicrophoneStartError, MssFfmpegRecorder, exception_text,
                                                record_rect_for)
@@ -280,6 +280,7 @@ class MainWindow(QMainWindow):
     def _wire(self) -> None:
         tb, c, flow = self.toolbar, self.canvas, self.flow
         tb.toolSelected.connect(self._on_tool)
+        tb.shapeSelected.connect(self._on_shape)
         tb.colorSelected.connect(self._on_color)
         tb.customColorRequested.connect(self.open_custom_color)
         tb.widthSelected.connect(self._on_width)
@@ -408,13 +409,22 @@ class MainWindow(QMainWindow):
 
     # --- handlers -----------------------------------------------------------------
     def _on_tool(self, t: Tool) -> None:
-        if t == Tool.SHAPE and self.canvas.tool == Tool.SHAPE:      # Şekil'e tekrar basış: sıradaki şekil
-            self.canvas.set_shape(next_shape(self.canvas.shape))
+        reopen_menu = t == Tool.SHAPE and self.canvas.tool == Tool.SHAPE      # Şekil'e tekrar basış: görsel menü
         self.canvas.set_tool(t); self.settings.tool = t
         self.toolbar.set_tool(t)
         self._sync_size_control()
-        self.toolbar.set_shape_glyph(SHAPE_META[self.canvas.shape][1])
+        self.toolbar.set_shape(self.canvas.shape)
+        if reopen_menu:
+            self.toolbar.open_shape_menu()
         self.work_area.set_click_mode(t == Tool.CLICK)
+        self.refresh_cursor(); self._status("XP-Pen")
+
+    def _on_shape(self, shape: Shape) -> None:
+        self.canvas.set_shape(shape)
+        self.canvas.set_tool(Tool.SHAPE); self.settings.tool = Tool.SHAPE
+        self.toolbar.set_tool(Tool.SHAPE)
+        self._sync_size_control()
+        self.work_area.set_click_mode(False)
         self.refresh_cursor(); self._status("XP-Pen")
 
     def open_custom_color(self) -> None:

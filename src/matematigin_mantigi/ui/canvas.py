@@ -15,6 +15,7 @@ from matematigin_mantigi.core.models import LineStyle, Nib, PenSettings, Shape, 
 from matematigin_mantigi.core.settings import ERASER_MIN, ERASER_MAX
 from matematigin_mantigi.core.stroke import LASER_COLOR, MOUSE_PRESSURE, eraser_diameter, pressure_width
 from matematigin_mantigi.ui import theme
+from matematigin_mantigi.ui.shape_paint import paint_shape
 
 
 def _grown(old: QImage, size: QSize, dpr: float) -> QImage:
@@ -403,15 +404,7 @@ class DrawingCanvas(QWidget):
         width = pressure_width(self.base_width, 0.7)
         p.setPen(QPen(self.color, width, self._line_style(), Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        rect = QRectF(a, b).normalized()
-        if self.shape == Shape.LINE:
-            p.drawLine(a, b)
-        elif self.shape == Shape.RECT:
-            p.drawRect(rect)
-        elif self.shape == Shape.ELLIPSE:
-            p.drawEllipse(rect)
-        else:  # TRIANGLE: tepe üst-orta, taban alt kenar
-            p.drawPolygon(QPolygonF([QPointF(rect.center().x(), rect.top()), rect.bottomRight(), rect.bottomLeft()]))
+        paint_shape(p, self.shape, a, b)
 
     # --- painting ------------------------------------------------------------
     def _chalk_texture(self, color: QColor) -> QBrush:

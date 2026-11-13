@@ -28,16 +28,41 @@ class Shape(str, Enum):
     LINE = "line"
     RECT = "rect"
     ELLIPSE = "ellipse"
-    TRIANGLE = "triangle"
+    TRIANGLE = "triangle"            # ikizkenar (tepe tabanın ortasında)
+    ARROW = "arrow"
+    SQUARE = "square"
+    CIRCLE = "circle"
+    EQUILATERAL = "equilateral"
+    RIGHT_TRIANGLE = "right_triangle"
+    RHOMBUS = "rhombus"
+    PARALLELOGRAM = "parallelogram"
+    TRAPEZOID = "trapezoid"
+    PENTAGON = "pentagon"
+    HEXAGON = "hexagon"
+    STAR = "star"
+    AXES = "axes"                    # koordinat düzlemi
 
 
 SHAPE_META: dict[Shape, tuple[str, str]] = {
     Shape.LINE: ("Çizgi", "╱"),
+    Shape.ARROW: ("Ok", "→"),
     Shape.RECT: ("Dikdörtgen", "▭"),
+    Shape.SQUARE: ("Kare", "□"),
     Shape.ELLIPSE: ("Elips", "○"),
-    Shape.TRIANGLE: ("Üçgen", "△"),
+    Shape.CIRCLE: ("Daire", "◯"),
+    Shape.TRIANGLE: ("İkizkenar üçgen", "△"),
+    Shape.EQUILATERAL: ("Eşkenar üçgen", "▵"),
+    Shape.RIGHT_TRIANGLE: ("Dik üçgen", "◺"),
+    Shape.RHOMBUS: ("Eşkenar dörtgen", "◇"),
+    Shape.PARALLELOGRAM: ("Paralelkenar", "▱"),
+    Shape.TRAPEZOID: ("Yamuk", "⏢"),
+    Shape.PENTAGON: ("Düzgün beşgen", "⬠"),
+    Shape.HEXAGON: ("Düzgün altıgen", "⬡"),
+    Shape.STAR: ("Yıldız", "☆"),
+    Shape.AXES: ("Koordinat düzlemi", "┼"),
 }
-SHAPE_ORDER = (Shape.RECT, Shape.ELLIPSE, Shape.TRIANGLE, Shape.LINE)
+# Menü sırası: önce çizgiler, sonra dörtgenler/daireler, üçgenler, çokgenler, özel şekiller.
+SHAPE_ORDER = tuple(SHAPE_META)
 
 
 def next_shape(s: Shape) -> Shape:

@@ -302,19 +302,32 @@ def test_record_badge_stays_transparent_after_edit_mode_round_trip(window, qtbot
     assert window.badge.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
 
-def test_shape_button_cycles_and_draws(window, qtbot):
+def test_shape_button_opens_menu_and_draws_chosen_shape(window, qtbot):
     from matematigin_mantigi.core.models import Shape
     btn = window.toolbar.tool_buttons[Tool.SHAPE]
     qtbot.mouseClick(btn, Qt.MouseButton.LeftButton)
     assert window.canvas.tool == Tool.SHAPE and window.canvas.shape == Shape.RECT and btn.glyph == "▭"
     assert "Şekil (Dikdörtgen)" in window.work_area.status_label.text()
-    qtbot.mouseClick(btn, Qt.MouseButton.LeftButton)                  # seçiliyken tekrar: elips
-    assert window.canvas.shape == Shape.ELLIPSE and btn.glyph == "○"
+    assert not window.toolbar.shape_menu.isVisible()                  # ilk basış yalnız aracı seçer
+    qtbot.mouseClick(btn, Qt.MouseButton.LeftButton)                  # seçiliyken tekrar: görsel menü
+    assert window.toolbar.shape_menu.isVisible() and window.canvas.shape == Shape.RECT
+    menu = window.toolbar.shape_menu
+    qtbot.mouseClick(menu.buttons[Shape.HEXAGON], Qt.MouseButton.LeftButton)
+    assert window.canvas.shape == Shape.HEXAGON and btn.shape_icon == Shape.HEXAGON
+    assert "Şekil (Düzgün altıgen)" in window.work_area.status_label.text()
     c = window.canvas
-    c.begin_stroke(QPointF(300, 300), 0.5); c.extend_stroke(QPointF(500, 420), 0.5); c.end_stroke()
+    c.begin_stroke(QPointF(300, 300), 0.5); c.extend_stroke(QPointF(500, 500), 0.5); c.end_stroke()
     assert not c.is_empty()
     qtbot.mouseClick(window.toolbar.tool_buttons[Tool.PEN], Qt.MouseButton.LeftButton)
-    assert window.canvas.shape == Shape.ELLIPSE                        # seçim hatırlanır
+    assert window.canvas.shape == Shape.HEXAGON                        # seçim hatırlanır
+
+
+def test_choosing_a_shape_from_menu_switches_from_another_tool(window, qtbot):
+    from matematigin_mantigi.core.models import Shape
+    window.toolbar.open_shape_menu()
+    qtbot.mouseClick(window.toolbar.shape_menu.buttons[Shape.STAR], Qt.MouseButton.LeftButton)
+    assert window.canvas.tool == Tool.SHAPE and window.canvas.shape == Shape.STAR
+    assert window.toolbar.tool_buttons[Tool.SHAPE].isChecked()
 
 
 def test_text_tool_through_window(window, qtbot):

@@ -75,3 +75,235 @@ XDG_CONFIG_HOME="$TMPDIR/mm-donma" \
 Regresyonlar: `tests/test_kamera_kare_basinci.py` (anahtarlama sınırı, biçim, mod geçişi, en yeni kare/tek bildirim, küçük panel için işçi ölçeklemesi, resize/DPR güncellemesi, önizleme çizim sınırı, gerçek kaydediciyle geometri kontrolü). Mevcut kamera ve çift ekran testlerinin beklentileri gevşetilmedi.
 
 Gerçek XP-Pen, Windows kamera sürücüsü, GPU kodlayıcı ve çoklu ekran compositor davranışı hedef bilgisayarda ayrıca denenmelidir.
+
+## 10 Hz sınırının kaldırılması (d470c41 sonrası)
+
+Önceki bölümlerdeki 10 Hz ödünü `d470c41` durumunu anlatır. Sınır
+`ui/main_window.py::_Preview` içindeki tek atımlık 100 ms zamanlayıcıdaydı:
+`set_frame` yaklaşık kamera hızında çalışsa bile gerçek `paintEvent` yaklaşık
+10/sn (yük altında daha az) çalışıyordu. Bu yüzden yalnız teslim sayan eski
+regresyon akıcılık sorununu yakalamıyordu.
+
+### Değişiklik
+
+- Harici görünüm yeni kare geldikçe yeniden çizim ister. Önceki istekten
+  kalan 1/30 sn bütçesi hassas tek atımlık zamanlayıcıyla beklenir; her kareye
+  sabit 33 ms gecikme eklenmez (bu, 30 fps kaynağı yaklaşık 15 fps'ye bölebilir).
+- Bekleyen en fazla tek çizim isteği vardır; arada gelen kareler eskisini
+  değiştirir. Yeni kare yoksa zamanlayıcı kendiliğinden tekrar çalışmaz.
+  Kamera kopması/placeholder bekleyen isteği iptal eder ve hemen çizilir.
+- GUI'deki büyük harici görüntü `SmoothPixmapTransform` olmadan, yakın komşu
+  hızlı yoluyla kendi dikdörtgenine ölçeklenir. Tahtanın yumuşak çizimi,
+  işçideki premultiplied dönüşüm/küçük görüntü hazırlığı, tek hücreli kare
+  dağıtımı ve yeşil perde için tahta boyutu/640 px sınırı değişmedi.
+- Yeşil perde işçidedir; GUI'ye taşınmadı. Harici önizlemede bilinear
+  yumuşatma yerine daha pikselli görüntü bilinçli ödündür. Kayıt çekirdeği
+  (`core/recorder.py`, `core/audio_capture.py`) değiştirilmedi.
+
+### Kırmızı → yeşil: gerçek RECORDING ve gerçekten çizilen kareler
+
+Yeni `test_recording_external_preview_paints_at_camera_rate`, mevcut pencere
+ve küçük sentetik ffmpeg yakalayıcı kurgusunu kullanır. 160×90 kamera,
+800×800 harici görünüm, yaklaşık 2,2 sn ortak ölçüm aralığı vardır. Aynı
+`QImage.cacheKey()`'in gerçek harici yuvaya teslimini ve gerçek çizimden sonra
+farklı cacheKey sayısını **ayrı** sayar; finalize başlamadan sayaçları dondurur.
+QMessageBox yanıtları monkeypatch edilir.
+
+| Durum | Tahtaya teslim | Tahtada çizilen | Harici teslim | Haricide çizilen |
+|---|---:|---:|---:|---:|
+| d470c41, kırmızı | 26,71 | 26,71 | 26,71 | **7,70** |
+| Düzeltme, yeşil | 27,21 | 27,21 | 27,21 | **27,21** |
+
+Birim kare/sn. İlk test sürümü teslim/tahta çizimi için ≥20, harici çizim için
+≥max(20, tahta×0,70) ve ≤32 sınadı. Son CI-uyumlu sürüm mutlak tabanı
+`min(20, teslim_fps×0,80)` olarak hesaplar; harici görünüm ayrıca tahta çizim
+hızının en az %80'ini korumalıdır. Kaynak ≥25 fps teslim edebiliyorsa mutlak
+20 fps kapısı aynen kalır; kaynak/CI zaten daha yavaşsa olmayan karelerin
+çizilmesi istenmez. Gerçek fps değerleri değiştirilmeden raporlanır.
+İşçi aynı kalmalı, kamera bir kez açılmalı ve kayıt geometri kesintisi
+yaşamamalıdır. Ayrı piksel testi eski
+kodda bilinear karışım nedeniyle 129 yerine beklenen 255 kırmızıyı üretemez;
+yeni kodda harici hızlı yol ve tahtanın yumuşak yolu ayrı doğrulanır.
+Deterministik saat testi 30 Hz bütçesinden kalan süreyi, kare birleştirmeyi,
+yeni kare yokken zamanlayıcının susmasını ve kopma iptalini sınar.
+
+İlk dal CI koşusunda (`43376307186`) Windows paket/test/artifact yeşil,
+macOS'ta bu yeni test kırmızıydı: kaynak teslimi, tahta çizimi ve harici çizim
+hep 9,37 fps idi (yani 10 Hz harici sınırı değil, bütün sentetik akış yavaştı).
+Bu nedenle zamanlayıcı regresyonunun çizim yükü de 320×180 mantıksal piksele
+sınırlandı; tam ekran ölçümü betikte korundu. Aynı ara test tekrar
+arşivlenmiş d470c41 kaynakla kırmızı
+(harici 7,70; tahta 24,46), yeni kaynakla yeşil (harici 21,44; tahta 23,26)
+oldu. Bu Linux örneği tam paketle eşzamanlı koşuldu; ilk 27,21 fps
+kanıtı yukarıda ayrı tutulmuştur. İkinci CI (`43378019134`) macOS'ta bütün
+akışı 13,94 fps ölçtü ve aynı mutlak eşikte düştü; pencere boyutu tek başına
+nedeni açıklamadı. Son sürüm çizim ritmini 64×36 ham kaynakla ayrı sınar ve
+hız tabanını yukarıdaki kaynak hızına göre hesaplar; yeşil perde maliyeti
+ayrı regresyon/ölçümde korunur. Boyut veya HSV maliyetinin macOS düşüşünün
+tek nedeni olduğu kanıtlanmış değildir. Son testin tekrarında d470c41
+kırmızı (harici 8,91; tahta 28,51), düzeltme yeşil (harici 23,93;
+tahta 25,73; teslim 25,28) oldu. Son hedef paket **58 passed in 31.92s**,
+çıkış 0; ham kanıt `tdd-son-kirmizi.log` ve `kamera-son-hedefleri.log`.
+
+Linux tam paket bir kez koşuldu: **1 failed, 1333 passed, 2 skipped,
+1 xfailed in 1253.01s** (çıkış 1). Düşen test
+`tests/test_crash_log.py::test_app_survives_unhandled_slot_exception_and_logs_it`:
+beklenen `AYAKTA 1 [False]` yerine `AYAKTA 0 []`. Aynı test ana checkout'ta
+ve dalda tek başına geçti; ana checkout'ta ek sekiz tekrarın sekizi de geçti.
+Tam paket hatasının önceden var olduğu kesinleştirilemedi; kamera kapalı bu
+senaryoya drive-by düzeltme yapılmadı. Yerel tam paket yeşil ilan edilmez.
+
+### Önce/sonra: iki FHD offscreen ekran
+
+`scripts/measure_camera_preview.py` artık teslim ve **farklı çizilen kare**
+hızlarını ayrı yazar; bütün sayaçlar RECORDING aralığıyla sınırlıdır.
+Aynı güncellenmiş betik üretim kodu değiştirilmeden önce ve sonra koşuldu.
+Her durum yaklaşık 6 sn, iki Qt ekranı 1920×1080, harici pencere tam ekran,
+sentetik kodlama 640×360/30 fps. Sunucu paylaşımlı/yavaştır; bunlar istatistiksel
+benchmark veya gerçek donanım akıcılık garantisi değildir.
+
+| Kaynak / mod / harici | Tahta çizim önce → sonra | Harici teslim önce → sonra | Harici çizim önce → sonra | Kodlama önce → sonra |
+|---|---:|---:|---:|---:|
+| 160×90 / yeşil perde / kapalı | 18,92 → 25,28 | — | — | 14,94 → 29,97 |
+| 160×90 / yeşil perde / açık | 17,35 → 26,14 | 17,35 → 26,14 | **5,46 → 25,61** | 16,71 → 29,65 |
+| 160×90 / ham / kapalı | 26,18 → 28,74 | — | — | 28,56 → 29,61 |
+| 160×90 / ham / açık | 22,68 → 23,63 | 22,83 → 23,63 | **6,82 → 23,63** | 24,26 → 25,05 |
+| 1280×720 / yeşil perde / kapalı | 19,22 → 15,70 | — | — | 27,78 → 19,19 |
+| 1280×720 / yeşil perde / açık | 22,05 → 15,47 | 22,22 → 15,47 | **6,35 → 15,31** | 23,39 → 23,62 |
+| 1280×720 / ham / kapalı | 23,04 → 25,86 | — | — | 21,67 → 29,51 |
+| 1280×720 / ham / açık | 16,55 → 14,28 | 17,59 → 15,71 | **5,52 → 13,49** | 19,48 → 20,94 |
+
+Birim kare/sn. Küçük kaynakta yeşil perdeli büyük önizleme boyaması ortalama
+54,58 → 8,93 ms; ham görüntüde 33,00 → 12,08 ms. HD kaynakta sırasıyla
+30,78 → 21,98 ms ve 45,77 → 23,85 ms. Yeşil perde ve HD kaynak maliyeti
+bu sunucuda hâlâ değişken/doygun: HD koşulunda tahta hızı da düşük ve yeni
+kodda daha düşüktür; **HD kaynak + FHD harici pencere için ≥20/25 fps ve tahta
+hızının korunması bu ölçümle doğrulanmış değildir**. Küçük kaynaklı kayıt
+regresyonu ve FHD ölçümünde hedef yakalandı; gerçek PC/Mac performansına
+buradan genelleme yapılmaz.
+
+Küçük kaynak önceki yeşil perde koşullarında kodlayıcı yetişemedi uyarısı
+vardı; sonraki dört küçük kaynak koşulunda yoktu. HD sonraki kapalı yeşil
+perde koşulunda uyarı çıktı; diğer yedi HD koşulunda çıkmadı. Bütün koşulda
+`record_error=null`, kamera açılışı bir kez. 1080p gerçek ekran yakalama,
+mikrofon, GPU kodlayıcı, XP-Pen ve compositor bu çalışmanın kapsamı dışında.
+
+### Ham kanıtlar ve komutlar
+
+Sunucudaki kanıt kökü:
+`/root/hermes/profiles/baris-beyin/cache/scratch/mm-onizleme-fps-kanit/`.
+Scratch budanabilir; temel sonuçlar bu belgede korunur.
+
+- `tdd-kirmizi.log`: eski kodda hız testinin beklenen assertion hatası; çıkış 1.
+- `olcekleme-kirmizi.log`: eski kodda hızlı ölçekleme piksel testi; çıkış 1.
+- `hedef-yesil.log`: ilk yeşil 13 test ve yukarıdaki 27,21 fps ölçümü.
+- `kamera-hedefleri.log`: kamera/önizleme/çift ekran hedef paketi.
+- `once-kucuk.json`, `sonra-kucuk.json`, `once-hd.json`, `sonra-hd.json`:
+  dört durumun ham sayaç/maliyet/uyarı sonuçları; eş adlı `.log` dosyaları
+  stdout/stderr. Yan klasörler yalnız sentetik MP4 içerir.
+- `tam-paket.log`, `tam-paket.exit`: tam paket sonucu ve gerçek çıkış kodu.
+- `ekranlar.json`: ölçümde kullanılan iki ekran konfigürasyonu.
+
+```bash
+QT_QPA_PLATFORM=offscreen XDG_CONFIG_HOME="$TMPDIR/mm-onizleme-fps" \
+.venv/bin/python -m pytest -q -s -p no:cacheprovider \
+  tests/test_kamera_kare_basinci.py > "$TMPDIR/kamera-test.log" 2>&1
+
+QT_QPA_PLATFORM="offscreen:configfile=$TMPDIR/mm-onizleme-fps-kanit/ekranlar.json" \
+XDG_CONFIG_HOME="$TMPDIR/mm-onizleme-fps" \
+.venv/bin/python scripts/measure_camera_preview.py --source-width 160 --seconds 6 \
+  --output "$TMPDIR/kamera-kucuk.json" > "$TMPDIR/kamera-kucuk.log" 2>&1
+```
+
+HD kaynak için `--source-width 1280` (varsayılan). Önceki üretim kodu
+`d470c41`; yeniden karşılaştırmada aynı güncellenmiş ölçüm betiğine
+`git archive d470c41 src` ile scratch'e açılmış `src` ağacını `PYTHONPATH`
+olarak verin, ana checkout'u değiştirmeyin. Test çıktısını `tail`'e borulamak
+çıkış kodunu gizler; dosyaya yazıp gerçek sonucu ayrı saklayın.
+
+## Üçüncü tur: zamanlama yarışı ve yenilenen ölçümler
+
+Kanıt kökü: `/root/hermes/profiles/baris-beyin/cache/scratch/mm-onizleme-fps-tur3/`.
+Ana checkout değiştirilmedi; eski kod ayrı, geçici ve detached
+`/root/matematigin-mantigi-wt/onizleme-fps-d470c41-tur3` worktree'sinde
+çalıştırıldı. Eski kaynak yolu `d470c41-kaynak-yolu.txt` ile doğrulandı.
+
+### İstisnadan sonra ayakta kalma testi
+
+Eski test, pencere kurulurken 100 ms sonra istisna ve 1500 ms sonra rapor
+planlıyordu. Olay döngüsü başlamadan açılış işi uzarsa iki zamanlayıcı da
+vadesini doldurabilir: istisnanın kuyruklu uyarısı gösterilmeden rapor
+`AYAKTA 0 []` yazıyordu. Bu, uygulamanın öldüğünü göstermiyordu.
+
+- Değişmemiş `d470c41` üzerinde dosyanın olağan koşusu **15 passed in 31.45s**,
+  çıkış 0 (`d470c41-eski-dosya.log`, `.exit`). Kendiliğinden hata gözlenmedi.
+- Aynı eski testte, yalnız deneyde `update_dialog.install` aşamasına iki
+  saniyelik gecikme eklendi. Üretim koduna dokunulmadı. `d470c41` üzerinde
+  aynı `AYAKTA 0 []` hatası **1 failed in 6.99s**, çıkış 1 ile yeniden
+  üretildi (`d470c41-gecikmeli-eski.log`, `.exit`;
+  `gecikmeli-acilis-probu.py`). Bu, eski sürümde de hatayı üreten yeterli
+  koşuldur; eski tam paket koşusu yapılmadı ve doğal tam paket başarısızlığı
+  kesinleşmiş gibi sunulmaz.
+- Test şimdi görünür/exposed ana pencereyi olay döngüsünde yoklar, istisnayı
+  gerçek bir zamanlayıcı yuvasında oluşturur; sonra doğru hata metnini
+  içeren görünür kutu **ve** günlük girdisi gelene kadar yoklar. Sabit bekleme
+  yoktur; 60 saniyelik bekçi hata durumunda süreci çıkış 2 ile bitirir.
+  Gerçek modal olmayan QMessageBox korunur; beklenmedik modal girişler
+  MonkeyPatch ile engellenir. Tek kutu/non-modal, sıfır çıkış kodu, zaman
+  damgası, traceback ve `boom` çerçevesi doğrulamaları korunmuştur.
+- Tek test üç kez geçti: **1 passed in 4.28s**, **1 passed in 4.60s**,
+  **1 passed in 8.61s** (`crash-tek-1.log` … `crash-tek-3.log`).
+- Dosyanın tamamı üç kez geçti: **15 passed in 29.23s**,
+  **15 passed in 28.42s**, **15 passed in 28.70s**
+  (`crash-dosya-1.log` … `crash-dosya-3.log`). Altı çıkış kodu da 0;
+  eş adlı `.exit` dosyalarında saklanır.
+- Aynı kontrollü açılış gecikmesiyle yeni test dalda **1 passed in 5.83s**
+  (`gecikmeli-yeni.log`) ve `d470c41` üretim koduyla **1 passed in 5.84s**
+  (`d470c41-gecikmeli-yeni.log`) verdi; ikisinin de çıkışı 0.
+
+### Yenilenen önce/sonra ölçümü
+
+Aynı güncel `scripts/measure_camera_preview.py`, önce `d470c41`, sonra
+`05fb327` üretim koduyla ardışık çalıştırıldı. Eski worktree'de `PYTHONPATH`
+o worktree'nin `src` dizinine ayarlandı; eski betikte bulunmayan çizilen-kare
+sayaçları için dalın aynı ölçüm betiği kullanıldı. Kamera 30 fps hedefli,
+kaynaklar 160×90 ve 1280×720; iki Qt ekranı 1920×1080, harici görünüm
+1920×1080, sentetik kayıt 640×360/30 fps. Her durum yaklaşık 6 saniye;
+ölçüm yalnız RECORDING aralığıdır, finalize hariçtir. Aşağıdaki hızlar
+**gerçek çizim sonrası farklı cacheKey** sayısıdır, teslim veya kodlama fps'si
+değildir. Tam komutlar, ortam ve commitler `olcum-komutlari.json`;
+çalıştırıcı `olcumleri-kos.py` içinde kayıtlıdır.
+
+| Kaynak / mod (harici açık) | Tahta çizim önce → sonra | Harici çizim önce → sonra |
+|---|---:|---:|
+| 160×90 / yeşil perde | 17,59 → 24,06 | 5,44 → 23,04 |
+| 160×90 / ham | 22,56 → 27,58 | 7,06 → 27,07 |
+| 1280×720 / yeşil perde | 21,52 → 20,91 | 6,65 → 20,91 |
+| 1280×720 / ham | 18,54 → 19,07 | 6,34 → 18,37 |
+
+Birim kare/sn; iki ondalığa yuvarlandı. Kaynaklar: `once-kucuk.json`,
+`sonra-kucuk.json`, `once-hd.json`, `sonra-hd.json`; eş adlı `.log` ve `.exit`
+dosyaları komut çıktılarını ve sıfır çıkışlarını içerir. Her JSON'da yeşil
+perde/ham ve harici kapalı/açık durumlarının tamamı, teslim ve kodlama
+hızları da bulunur. Kamera bütün durumlarda bir kez açıldı, `record_error`
+yoktu. Eski küçük kaynak/yeşil perde/harici açık koşulunda kodlayıcı
+uyarısı vardı; diğer koşullarda yoktu. Paylaşımlı sunucudaki tek ardışık
+ölçüm istatistiksel kıyas değildir. HD ham kaynakta yeni harici çizim
+**18,37 fps**: HD için genel ≥20 fps garantisi verilmez; yeşil perdede
+harici açık tahta hızı da 21,52 → 20,91 olduğundan mutlak performansın
+her durumda arttığı ileri sürülmez.
+
+Kamera/önizleme/çift ekran hedefleri **29 passed in 14.05s**, çıkış 0
+(`kamera-dogru-hedefler.log`, `.exit`). İlk hedef komutu var olmayan
+`tests/test_cift_ekran.py` adı nedeniyle çıkış 4 verdi, hiç test çalışmadı
+(`kamera-hedefleri.log`); gerçek dosya adlarıyla yeniden koşuldu.
+
+**CI eşiği önceki turda gevşetilmiştir:** mutlak 20 yerine
+`min(20, teslim_fps × 0,80)` ve ayrıca tahtaya göre en az %80 koşulu vardır.
+Bu turda eşik ya da üretim kamera kodu değiştirilmedi. Yeni tam paket ve
+aynı commit'in Windows/macOS CI sonuçları teslim metadata'sında,
+`tam-paket.log`/`.exit` ve `ci-sonuc.json` kanıtlarıyla verilir.
+
+Gerçek kamera, XP-Pen, fiziksel çoklu ekran/DPI, Windows/MSS yakalama,
+mikrofon ve GPU kodlayıcı denenmedi. `core/recorder.py` ve
+`core/audio_capture.py` değişmedi (`yasak-dosyalar.diff` boştur).

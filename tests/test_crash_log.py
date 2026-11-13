@@ -15,30 +15,67 @@ from matematigin_mantigi.core import crash_log
 # görünmez). Pencere gerçek build_window'dan gelir; yalnız bir zamanlayıcı yuvası bilerek patlar.
 _E2E = textwrap.dedent('''
     import sys
+    from pathlib import Path
+    from pytest import MonkeyPatch
     from PyQt6.QtCore import QSettings, QTimer
     from PyQt6.QtWidgets import QApplication, QMessageBox
     from matematigin_mantigi import app as app_mod
     from matematigin_mantigi.core.settings import AppSettings
 
+    # Gerçek modal olmayan kutu korunur; beklenmedik modal test sürecini kilitlemesin.
+    monkeypatch = MonkeyPatch()
+    def unexpected_modal(*args, **kwargs):
+        raise AssertionError("Bu senaryoda modal uyarı açılmamalı")
+    for name in ("exec", "warning", "critical", "information", "question"):
+        monkeypatch.setattr(QMessageBox, name, unexpected_modal)
     real_build = app_mod.build_window
 
     def build(args, fam, settings=None):
         # Ayarlar geçici ini dosyasında: Windows kayıt defterine / macOS plist'ine dokunulmaz.
         win = real_build(args, fam, AppSettings(QSettings("ayarlar.ini", QSettings.Format.IniFormat)))
+        raised = False
         def boom():
             raise OSError("yapay yuva hatası")
-        def report():
+        def report_when_ready():
+            nonlocal raised
+            if not raised:
+                # Açılış yükü ne kadar sürerse sürsün, istisna gerçek olay döngüsünde ve
+                # ana pencere gösterildikten sonra oluşur; yalnız gecikmeye güvenilmez.
+                handle = win.windowHandle()
+                if win.isVisible() and handle is not None and handle.isExposed():
+                    raised = True
+                    QTimer.singleShot(0, boom)
+                return
             boxes = [w for w in QApplication.topLevelWidgets() if isinstance(w, QMessageBox) and w.isVisible()]
+            log = Path("hatalar.log")
+            logged = log.exists() and "OSError: yapay yuva hatası" in log.read_text(encoding="utf-8")
+            if not logged or not any("OSError: yapay yuva hatası" in b.text() for b in boxes):
+                return
+            # Kancanın ve kuyruklu uyarının ardından başka bir olay turu da çalıştı.
+            poll.stop()
+            watchdog.stop()
             print("AYAKTA", len(boxes), [b.isModal() for b in boxes], flush=True)
             win.close()
             QApplication.instance().quit()
-        QTimer.singleShot(100, boom)
-        QTimer.singleShot(1500, report)
+        def timed_out():
+            print("ZAMAN_ASIMI: istisna sonrası günlük ve görünür uyarı bekleniyordu", flush=True)
+            QApplication.instance().exit(2)
+        poll = QTimer(win)
+        poll.setInterval(10)
+        poll.timeout.connect(report_when_ready)
+        watchdog = QTimer(win)
+        watchdog.setSingleShot(True)
+        watchdog.timeout.connect(timed_out)
+        watchdog.start(60000)
+        poll.start()
         return win
 
     app_mod.build_window = build
     ARGS = ["matematigin-mantigi", "--kamera-yok", "--sorular", "sorular.xlsx", "--duzen", "duzen.json"]
-    sys.exit(app_mod.main(ARGS))
+    try:
+        sys.exit(app_mod.main(ARGS))
+    finally:
+        monkeypatch.undo()
 ''')
 
 # Aynı senaryo süren bir kayıtla: gerçek ffmpeg kaydedicisi (sentetik ekran karesiyle) istisnadan önce başlar,
@@ -93,8 +130,8 @@ def test_app_survives_unhandled_slot_exception_and_logs_it(tmp_path):
     öldürüyor, süren kayıt birleştirilmeden kalıyordu. Artık hata veri klasöründeki hatalar.log'a zaman damgası
     ve traceback'le yazılır, uygulama çalışmaya devam eder."""
     r = _run(tmp_path, _E2E)
-    assert r.returncode == 0, f"süreç düştü ({r.returncode}):\n{r.stderr[-2000:]}"
-    assert "AYAKTA 1 [False]" in r.stdout          # tek uyarı kutusu açıldı ve modal değil (ders sürer)
+    assert r.returncode == 0, f"süreç düştü ({r.returncode}):\n{r.stdout}\n{r.stderr[-2000:]}"
+    assert "AYAKTA 1 [False]" in r.stdout, r.stdout  # tek uyarı kutusu açıldı ve modal değil (ders sürer)
     log = (tmp_path / "hatalar.log").read_text(encoding="utf-8")       # dev modunda veri klasörü = çalışma dizini
     assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", log)
     assert "Traceback (most recent call last)" in log and "OSError: yapay yuva hatası" in log

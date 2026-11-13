@@ -61,6 +61,11 @@ class OpenCvSource:
         self._cap = None
         return False
 
+    @property
+    def fps(self) -> float:
+        value = self._cap.get(cv2.CAP_PROP_FPS) if self._cap is not None else 0
+        return float(value) if np.isfinite(value) and 1 <= value <= 240 else 30.0
+
     def read(self) -> np.ndarray | None:
         if self._cap is None:
             return None
@@ -128,6 +133,7 @@ class CameraWorker(QThread):
         self._render_width = render_width
         self._latest_frame: tuple[QImage, QImage] | None = None
         self._frame_pending = False
+        self.raw_recorder = None  # yalnız submit(): GUI kuyruğuna ham HD kare taşımaz
 
     def set_chroma_enabled(self, on: bool) -> None:
         self._chroma = on
@@ -280,6 +286,12 @@ class CameraWorker(QThread):
                     if not announced:
                         self.opened.emit(int(frame.shape[1]), int(frame.shape[0]))
                         announced = True
+                    sink = self.raw_recorder
+                    if sink is not None:
+                        try:
+                            sink.submit(frame, time.monotonic(), float(getattr(self._source, "fps", 30)))
+                        except Exception as err:  # noqa: BLE001 - ayrı kayıt önizlemeyi bile durduramaz
+                            crash_log.log_handled(err, "ham kamera aktarımı")
                     self._deliver(frame)
                     last_frame = time.monotonic()
                     failures = 0
@@ -298,7 +310,12 @@ class CameraWorker(QThread):
                             break
                     self.msleep(5)
                     continue
-                rest = self._period - (time.monotonic() - t0)
+                period = self._period
+                if self.raw_recorder is not None:
+                    source_fps = float(getattr(self._source, "fps", 30))
+                    if np.isfinite(source_fps) and 1 <= source_fps <= 240:
+                        period = 1.0 / source_fps
+                rest = period - (time.monotonic() - t0)
                 if rest > 0:
                     self.msleep(int(rest * 1000))
         finally:

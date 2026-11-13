@@ -11,7 +11,7 @@ from PyQt6.QtGui import (QBrush, QColor, QFont, QImage, QKeyEvent, QMouseEvent, 
                          QPointingDevice, QPolygonF, QResizeEvent, QTabletEvent)
 from PyQt6.QtWidgets import QLineEdit, QWidget
 
-from matematigin_mantigi.core.models import Nib, PenSettings, Shape, Tool
+from matematigin_mantigi.core.models import LineStyle, Nib, PenSettings, Shape, Tool
 from matematigin_mantigi.core.settings import ERASER_MIN, ERASER_MAX
 from matematigin_mantigi.core.stroke import LASER_COLOR, MOUSE_PRESSURE, eraser_diameter, pressure_width
 from matematigin_mantigi.ui import theme
@@ -393,10 +393,15 @@ class DrawingCanvas(QWidget):
         p.end()
         self.update()
 
+    def _line_style(self):
+        style = self._pen_settings.line_style if self._pen_settings else LineStyle.SOLID
+        return {LineStyle.SOLID: Qt.PenStyle.SolidLine, LineStyle.DASHED: Qt.PenStyle.DashLine,
+                LineStyle.DOTTED: Qt.PenStyle.DotLine}[style]
+
     def _paint_shape(self, p: QPainter, a: QPointF, b: QPointF) -> None:
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         width = pressure_width(self.base_width, 0.7)
-        p.setPen(QPen(self.color, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        p.setPen(QPen(self.color, width, self._line_style(), Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         p.setBrush(Qt.BrushStyle.NoBrush)
         rect = QRectF(a, b).normalized()
         if self.shape == Shape.LINE:
@@ -428,7 +433,8 @@ class DrawingCanvas(QWidget):
         if tool in (Tool.TEXT, Tool.SHAPE, Tool.CLICK):   # yazı kutuyla, şekil bırakınca, tıklama hiç çizmez
             return
         nib = self._pen_settings.nib if tool == Tool.PEN and self._pen_settings else Nib.ROUND
-        if nib == Nib.HIGHLIGHTER:
+        patterned = tool == Tool.PEN and self._line_style() != Qt.PenStyle.SolidLine
+        if nib == Nib.HIGHLIGHTER or patterned:
             self._stroke_path.lineTo(b)
             self._strokes = self._stroke_before.copy()
         target = self._overlay if tool == Tool.LASER else self._strokes
@@ -452,8 +458,9 @@ class DrawingCanvas(QWidget):
             color = QColor(color)
             color.setAlpha(round(color.alpha() * .85))
         brush = self._chalk_texture(color) if nib == Nib.CHALK else QBrush(color)
-        if nib == Nib.HIGHLIGHTER:
-            p.setPen(QPen(brush, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap, Qt.PenJoinStyle.BevelJoin))
+        if nib == Nib.HIGHLIGHTER or patterned:
+            cap = Qt.PenCapStyle.FlatCap if nib in (Nib.FELT, Nib.HIGHLIGHTER) else Qt.PenCapStyle.RoundCap
+            p.setPen(QPen(brush, width, self._line_style(), cap, Qt.PenJoinStyle.BevelJoin))
             if self._stroke_path.length() > 0:
                 p.drawPath(self._stroke_path)
             else:
@@ -470,7 +477,7 @@ class DrawingCanvas(QWidget):
             p.setPen(QPen(brush, width, Qt.PenStyle.SolidLine, cap, Qt.PenJoinStyle.RoundJoin))
             p.drawLine(a, b)
         p.end()
-        if nib == Nib.HIGHLIGHTER:
+        if nib == Nib.HIGHLIGHTER or patterned:
             self.update()
         m = int(width) + 2
         self.update(QRectF(a, b).normalized().toAlignedRect().adjusted(-m, -m, m, m))

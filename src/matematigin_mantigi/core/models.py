@@ -62,6 +62,12 @@ class Nib(str, Enum):
     HIGHLIGHTER = "Fosforlu"
 
 
+class LineStyle(str, Enum):
+    SOLID = "Düz"
+    DASHED = "Kesikli"
+    DOTTED = "Noktalı"
+
+
 class FrameStyle(str, Enum):
     """Tahtanın ekran çerçevesi stili -- Ayarlar > Tahta kartından seçilir (bkz. ui/frames.py:FRAME_SPECS)."""
     CLASSIC = "classic"
@@ -93,6 +99,7 @@ class PenSettings:
     max_width: int = 12
     nib: Nib = Nib.ROUND
     hold_to_straight: bool = True
+    line_style: LineStyle = LineStyle.SOLID
     math_recognition: bool = True
     shape_correction: bool = True
     autosave: bool = True

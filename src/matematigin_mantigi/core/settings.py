@@ -8,7 +8,7 @@ import re
 from PyQt6.QtCore import QSettings
 
 from matematigin_mantigi.core.chroma_key import ChromaParams
-from matematigin_mantigi.core.models import FrameStyle, HintMaskMode, Nib, PenSettings, Tool
+from matematigin_mantigi.core.models import FrameStyle, HintMaskMode, LineStyle, Nib, PenSettings, Tool
 from matematigin_mantigi.core.stroke import eraser_diameter
 
 ERASER_MIN, ERASER_MAX = 10, 120
@@ -298,6 +298,7 @@ class AppSettings:
             min_width=self._int("pen/min_width", d.min_width),
             max_width=self._int("pen/max_width", d.max_width),
             nib=self._enum("pen/nib", Nib, d.nib),
+            line_style=self._enum("pen/line_style", LineStyle, d.line_style),
             hold_to_straight=self._bool("pen/hold_to_straight", d.hold_to_straight),
             math_recognition=self._bool("pen/math_recognition", d.math_recognition),
             shape_correction=self._bool("pen/shape_correction", d.shape_correction),
@@ -309,7 +310,7 @@ class AppSettings:
     def set_pen(self, p: PenSettings) -> None:
         for f in fields(PenSettings):
             v = getattr(p, f.name)
-            self._q.setValue(f"pen/{f.name}", v.value if isinstance(v, Nib) else v)
+            self._q.setValue(f"pen/{f.name}", v.value if isinstance(v, (Nib, LineStyle)) else v)
 
     def sync(self) -> None:
         self._q.sync()

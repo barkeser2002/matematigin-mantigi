@@ -189,3 +189,123 @@ def test_custom_picker_confirmation_cancel_and_recent_selection(window, monkeypa
     assert window.settings.custom_colors == ["#765432"]
     assert window.settings.color == "#765432"
     window.webcam_panel.shutdown()
+
+
+@pytest.mark.parametrize("style_name", ["DASHED", "DOTTED"])
+def test_pattern_has_gaps_without_restarting_at_every_sample(qtbot, style_name):
+    from matematigin_mantigi.core.models import LineStyle
+    c = canvas_for(qtbot)
+    style = getattr(LineStyle, style_name)
+    c.set_pen_settings(replace(c._pen_settings, line_style=style))
+    c.begin_stroke(QPointF(40, 100), .5)
+    for x in range(41, 261):
+        c.extend_stroke(QPointF(x, 100), .5)
+    c.end_stroke()
+    alphas = [c.strokes_image().pixelColor(x, 100).alpha() for x in range(60, 240)]
+    assert 255 in alphas and 0 in alphas
+    before = c.strokes_image().copy()
+    c.undo(); assert c.is_empty()
+    c.redo(); assert c.strokes_image() == before
+
+
+def test_pattern_settings_roundtrip_and_dialog(ini_settings, qtbot):
+    from matematigin_mantigi.core.models import LineStyle
+    from matematigin_mantigi.ui.pen_settings import PenSettingsDialog
+    from matematigin_mantigi.ui.theme import FontFamilies
+    pen = replace(ini_settings.pen(), line_style=LineStyle.DOTTED)
+    ini_settings.set_pen(pen)
+    assert ini_settings.pen() == pen
+    dlg = PenSettingsDialog(pen, QColor("black"), 4, FontFamilies("Arial", "Arial", False))
+    qtbot.addWidget(dlg)
+    assert dlg.line_style_combo.currentData() == LineStyle.DOTTED
+    dlg.line_style_combo.setCurrentIndex(dlg.line_style_combo.findData(LineStyle.DASHED))
+    assert dlg.value().line_style == LineStyle.DASHED
+
+
+@pytest.mark.parametrize("mode", ["highlighter", "shift", "hold", "dashed", "dotted"])
+def test_new_strokes_png_autosave_and_session_restore(window, mode, qtbot):
+    from PyQt6.QtGui import QImage
+    from matematigin_mantigi.core.models import LineStyle
+    c = window.canvas
+    pen = PenSettings(smoothing=0, min_width=4, max_width=4)
+    if mode == "highlighter":
+        pen = replace(pen, nib=Nib.HIGHLIGHTER)
+    if mode in ("dashed", "dotted"):
+        pen = replace(pen, line_style=LineStyle.DASHED if mode == "dashed" else LineStyle.DOTTED)
+    window._apply_pen_settings(pen)
+    c.begin_stroke(QPointF(40, 100), .5)
+    c.extend_stroke(QPointF(120, 150), .5)
+    c.extend_stroke(QPointF(260, 100), .5,
+                    modifiers=Qt.KeyboardModifier.ShiftModifier if mode == "shift" else Qt.KeyboardModifier.NoModifier)
+    if mode == "hold":
+        qtbot.waitUntil(lambda: c._hold_corrected, timeout=1500)
+    c.end_stroke()
+    expected = c.snapshot_image()
+    window._autosave_timer.timeout.emit()
+    state = window.settings.session_state
+    assert state.board_image
+    assert QImage(state.board_image) == expected
+    c.reset_board()
+    window._pending_board = (state.board_image, state.board_question_id)
+    window._restore_board_image()
+    assert c.snapshot_image() == expected
+    window.webcam_panel.shutdown()
+
+
+def test_color_menu_picker_action_routes_to_window(window, monkeypatch):
+    from PyQt6.QtWidgets import QColorDialog
+    monkeypatch.setattr(QColorDialog, "getColor", lambda *a, **k: QColor("#abcdef"))
+    window.toolbar.color_menu.actions()[0].trigger()
+    assert window.settings.custom_colors == ["#abcdef"]
+    window.webcam_panel.shutdown()
+
+
+def test_shift_tablet_path_uses_modifiers(qtbot):
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtGui import QInputDevice, QPointingDevice, QTabletEvent
+    from PyQt6.QtWidgets import QApplication
+    c = canvas_for(qtbot)
+    device = QPointingDevice("test pen", 1, QInputDevice.DeviceType.Stylus,
+                             QPointingDevice.PointerType.Pen,
+                             QInputDevice.Capability.Position | QInputDevice.Capability.Pressure, 1, 1)
+    for kind, pos, button, buttons in (
+        (QEvent.Type.TabletPress, (40, 100), Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton),
+        (QEvent.Type.TabletMove, (260, 110), Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton),
+        (QEvent.Type.TabletRelease, (260, 110), Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton),
+    ):
+        e = QTabletEvent(kind, device, QPointF(*pos), QPointF(*pos), .5, 0, 0, 0, 0, 0,
+                         Qt.KeyboardModifier.ShiftModifier, button, buttons)
+        QApplication.sendEvent(c, e)
+    assert c.strokes_image().pixelColor(160, 100).alpha() > 100
+    assert c.strokes_image().pixelColor(160, 106).alpha() == 0
+
+
+@pytest.mark.parametrize("style_name", ["DASHED", "DOTTED"])
+def test_pattern_highlighter_shift_and_active_resize(qtbot, style_name):
+    from matematigin_mantigi.core.models import LineStyle
+    c = canvas_for(qtbot, nib=Nib.HIGHLIGHTER, line_style=getattr(LineStyle, style_name))
+    c.begin_stroke(QPointF(40, 100), .5, modifiers=Qt.KeyboardModifier.ShiftModifier)
+    c.extend_stroke(QPointF(260, 105), .5, modifiers=Qt.KeyboardModifier.ShiftModifier)
+    c.resize(640, 400)
+    c.extend_stroke(QPointF(520, 205), .5, modifiers=Qt.KeyboardModifier.ShiftModifier)
+    c.end_stroke()
+    alphas = [c.strokes_image().pixelColor(x, 200).alpha() for x in range(100, 500)]
+    assert 0 in alphas and 97 in alphas
+    c.undo(); c.redo()
+    assert c.strokes_image().pixelColor(200, 250).alpha() == 0
+
+
+def test_new_stroke_clears_redo_and_hold_does_not_modify_history(qtbot):
+    c = canvas_for(qtbot)
+    line(c)
+    c.undo()
+    c.begin_stroke(QPointF(40, 100), .5)
+    c.extend_stroke(QPointF(120, 150), .5)
+    c.extend_stroke(QPointF(260, 100), .5)
+    count = len(c._undo)
+    c._hold_timer.timeout.emit()
+    assert len(c._undo) == count
+    c.end_stroke()
+    expected = c.strokes_image().copy()
+    c.redo()
+    assert c.strokes_image() == expected

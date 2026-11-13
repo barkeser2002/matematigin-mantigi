@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import (QButtonGroup, QCheckBox, QDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
+from PyQt6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
                              QLabel, QPushButton, QSlider, QVBoxLayout)
 
-from matematigin_mantigi.core.models import Nib, PenSettings
+from matematigin_mantigi.core.models import LineStyle, Nib, PenSettings
 from matematigin_mantigi.ui import cursors, theme
 from matematigin_mantigi.ui.theme import FontFamilies
 
@@ -69,6 +69,11 @@ class PenSettingsDialog(QDialog):
             row = QHBoxLayout(); row.addWidget(slider, 1); row.addWidget(value)
             lab = QLabel(name); lab.setFont(theme.font(fam, 11, 500))
             form.addRow(lab, row)
+        self.line_style_combo = QComboBox()
+        for style in LineStyle:
+            self.line_style_combo.addItem(style.value, style)
+        self.line_style_combo.setCurrentIndex(self.line_style_combo.findData(current.line_style))
+        form.addRow("Çizgi biçimi", self.line_style_combo)
         pen_col.addLayout(form)
         scale_note = QLabel("Kalınlıklar, araç çubuğunda 4 px seçiliyken geçerlidir; diğer kademeler aralığı orantılı ölçekler.")
         scale_note.setWordWrap(True); pen_col.addWidget(scale_note)
@@ -145,6 +150,7 @@ class PenSettingsDialog(QDialog):
         nib = next(n for n, b in self.nib_buttons.items() if b.isChecked())
         return PenSettings(pressure_curve=self.curve_slider.value(), smoothing=self.smoothing_slider.value(),
                            min_width=self.min_slider.value(), max_width=self.max_slider.value(), nib=nib,
+                           line_style=self.line_style_combo.currentData(),
                            hold_to_straight=self._current.hold_to_straight,
                            math_recognition=self._current.math_recognition,
                            shape_correction=self._current.shape_correction,

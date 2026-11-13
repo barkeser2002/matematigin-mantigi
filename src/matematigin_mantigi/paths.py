@@ -74,6 +74,11 @@ def default_layout_path() -> Path:
     return data_dir() / "duzen.json"
 
 
+def default_tanima_ornek_root() -> Path:
+    """Tanıma örneği toplama (Hedef B): sembol alt klasörleri ve JSON/PNG çiftleri burada."""
+    return data_dir() / "tanima-ornekleri"
+
+
 def default_error_log_path() -> Path:
     """Hata günlüğü (core/crash_log.py): yakalanmamış istisnalar ve ayrıntısı saklanan yakalanmış hatalar."""
     return data_dir() / "hatalar.log"

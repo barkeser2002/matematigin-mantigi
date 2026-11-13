@@ -6,7 +6,7 @@ import math
 
 import numpy as np
 import pytest
-from PyQt6.QtCore import QPointF, QSettings, Qt
+from PyQt6.QtCore import QPointF, QSettings, QSize, Qt
 from PyQt6.QtGui import QColor, QImage
 from PyQt6.QtWidgets import QApplication
 
@@ -298,3 +298,33 @@ def test_resize_scales_corrected_shape_and_undo_stack(qtbot):
     assert not c.is_empty()
     c.undo()
     assert c.is_empty()
+
+
+def test_corrected_shape_survives_png_file_and_scaled_restore(qtbot, tmp_path):
+    """Otomatik kayıt: düzeltilmiş şekil PNG dosyasına yazılır, dosyadan okunup daha büyük tuvale ölçeklenir."""
+    from matematigin_mantigi.ui.main_window import ink_from_snapshot
+    c = make(qtbot)
+    draw(c, circle(noise=1.0))
+    assert c.last_correction == "circle"
+    path = tmp_path / "tahta.png"
+    assert c.snapshot_image().save(str(path), "PNG")
+    loaded = QImage.fromData(path.read_bytes(), "PNG")
+    assert not loaded.isNull()
+    px = loaded.pixelColor(290, 150)                      # beyaz zemin üstünde sağ kenar: koyu
+    assert px.red() + px.green() + px.blue() < 300
+    assert loaded.pixelColor(200, 150).red() > 240        # merkez boş
+    layer = c._strokes
+    scaled = ink_from_snapshot(loaded, QSize(800, 600), 1.0)
+    assert scaled.size() == QSize(800, 600)
+    assert scaled.pixelColor(580, 300).alpha() > 150      # 2 kat büyümüş sağ kenar
+    assert scaled.pixelColor(400, 300).alpha() == 0       # merkez hâlâ boş
+    assert layer.size() == QSize(400, 300)
+
+
+@pytest.mark.xfail(strict=True, reason="bilinen sınır: 0.68 eşiğinde kapalı organik lekeler şekle dönebilir (sentetik %8,9); eşik 0.80 kazancı doğruluk kaybına değmedi")
+def test_organic_closed_blob_is_not_turned_into_a_polygon():
+    """Ölçümdeki tek yanlış kabul ailesi (kapalı organik leke) varsayılan eşikte şekle dönmemeli."""
+    a = np.linspace(0, 2 * np.pi, 300)
+    r = 1 + 0.14 * np.sin(3 * a + 1.0) + 0.09 * np.cos(5 * a)
+    blob = np.column_stack([200 + 100 * r * np.cos(a), 150 + 100 * r * np.sin(a)])
+    assert sr.correct_stroke(blob) is None

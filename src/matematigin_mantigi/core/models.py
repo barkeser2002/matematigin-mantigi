@@ -92,6 +92,7 @@ class PenSettings:
     min_width: int = 1
     max_width: int = 12
     nib: Nib = Nib.ROUND
+    hold_to_straight: bool = True
     math_recognition: bool = True
     shape_correction: bool = True
     autosave: bool = True

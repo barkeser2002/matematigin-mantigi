@@ -92,3 +92,58 @@ def test_shift_mouse_events_use_modifiers(qtbot):
     c.mouseReleaseEvent(event(QEvent.Type.MouseButtonRelease, (260, 111), Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton))
     assert c.strokes_image().pixelColor(200, 100).alpha() > 100
     assert c.strokes_image().pixelColor(200, 108).alpha() == 0
+
+
+def test_hold_corrects_after_six_hundred_ms_and_never_after_release(qtbot):
+    c = canvas_for(qtbot)
+    c.begin_stroke(QPointF(40, 100), .5)
+    c.extend_stroke(QPointF(120, 150), .5)
+    c.extend_stroke(QPointF(260, 100), .5)
+    assert c._hold_timer.interval() == 600
+    assert c.strokes_image().pixelColor(120, 150).alpha() > 100
+    qtbot.waitUntil(lambda: c.strokes_image().pixelColor(120, 150).alpha() == 0, timeout=1500)
+    assert c.strokes_image().pixelColor(160, 100).alpha() > 100
+    c.end_stroke()
+    assert not c._hold_timer.isActive()
+    c.undo(); assert c.is_empty()
+    c.redo(); assert c.strokes_image().pixelColor(160, 100).alpha() > 100
+    c.begin_stroke(QPointF(40, 50), .5)
+    c.extend_stroke(QPointF(260, 60), .5)
+    c.end_stroke()
+    before = c.strokes_image().copy()
+    c._hold_timer.timeout.emit()
+    assert c.strokes_image() == before
+
+
+def test_hold_disabled_and_reset_cancel_timer(qtbot):
+    c = canvas_for(qtbot, hold_to_straight=False)
+    c.begin_stroke(QPointF(40, 100), .5)
+    c.extend_stroke(QPointF(120, 150), .5)
+    c.extend_stroke(QPointF(260, 100), .5)
+    assert not c._hold_timer.isActive()
+    c._hold_timer.timeout.emit()
+    assert c.strokes_image().pixelColor(120, 150).alpha() > 100
+    c.set_pen_settings(replace(c._pen_settings, hold_to_straight=True))
+    c.extend_stroke(QPointF(270, 100), .5)
+    assert c._hold_timer.isActive()
+    c.reset_board()
+    assert not c._hold_timer.isActive()
+    c._hold_timer.timeout.emit()
+    assert c.is_empty()
+
+
+def test_hold_setting_default_persists_and_applies_from_settings(window, qtbot):
+    from matematigin_mantigi.ui.settings_dialog import SettingsDialog
+    from matematigin_mantigi.ui.pen_settings import PenSettingsDialog
+    assert window.settings.pen().hold_to_straight is True
+    dlg = SettingsDialog(window.settings, window.fam)
+    qtbot.addWidget(dlg)
+    assert dlg.hold_to_straight_check.isChecked()
+    dlg.hold_to_straight_check.setChecked(False)
+    window.apply_settings_values(dlg.value())
+    assert window.settings.pen().hold_to_straight is False
+    assert window.canvas._pen_settings.hold_to_straight is False
+    pen_dlg = PenSettingsDialog(window.settings.pen(), QColor("black"), 4, window.fam)
+    qtbot.addWidget(pen_dlg)
+    assert pen_dlg.value().hold_to_straight is False
+    window.webcam_panel.shutdown()

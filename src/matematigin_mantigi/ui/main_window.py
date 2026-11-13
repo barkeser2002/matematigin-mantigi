@@ -1104,7 +1104,8 @@ class MainWindow(QMainWindow):
         if v.autostart is not None:
             self._apply_autostart(v.autostart)
         s.font_file = v.font_file
-        s.set_pen(replace(s.pen(), reading_ms=v.reading_ms))
+        s.set_pen(replace(s.pen(), reading_ms=v.reading_ms, hold_to_straight=v.hold_to_straight))
+        self.canvas.set_pen_settings(s.pen())
         s.auto_key = v.auto_key
         s.chroma_enabled = v.chroma_enabled
         s.presenter_name = v.presenter_name

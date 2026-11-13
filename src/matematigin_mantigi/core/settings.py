@@ -274,6 +274,7 @@ class AppSettings:
             min_width=self._int("pen/min_width", d.min_width),
             max_width=self._int("pen/max_width", d.max_width),
             nib=self._enum("pen/nib", Nib, d.nib),
+            hold_to_straight=self._bool("pen/hold_to_straight", d.hold_to_straight),
             math_recognition=self._bool("pen/math_recognition", d.math_recognition),
             shape_correction=self._bool("pen/shape_correction", d.shape_correction),
             autosave=self._bool("pen/autosave", d.autosave),

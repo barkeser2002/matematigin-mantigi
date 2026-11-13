@@ -145,6 +145,7 @@ class PenSettingsDialog(QDialog):
         nib = next(n for n, b in self.nib_buttons.items() if b.isChecked())
         return PenSettings(pressure_curve=self.curve_slider.value(), smoothing=self.smoothing_slider.value(),
                            min_width=self.min_slider.value(), max_width=self.max_slider.value(), nib=nib,
+                           hold_to_straight=self._current.hold_to_straight,
                            math_recognition=self._current.math_recognition,
                            shape_correction=self._current.shape_correction,
                            autosave=self.toggles["autosave"].isChecked(),

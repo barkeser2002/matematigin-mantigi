@@ -74,6 +74,13 @@ class DrawingCanvas(QWidget):
         self._stroke_path = QPainterPath()
         self._stroke_start: QPointF | None = None
         self._straight = False
+        self._hold_corrected = False
+        self._hold_anchor: QPointF | None = None
+        self._hold_timer = QTimer(self)
+        self._hold_timer.setSingleShot(True)
+        self._hold_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._hold_timer.setInterval(600)
+        self._hold_timer.timeout.connect(self._correct_held_stroke)
         self._stroke_count = 0
         self._tablet_down = False
         self._mouse_down = False
@@ -135,6 +142,8 @@ class DrawingCanvas(QWidget):
 
     def set_pen_settings(self, settings: PenSettings) -> None:
         self._pen_settings = settings
+        if not settings.hold_to_straight:
+            self._hold_timer.stop()
 
     def _pen_width(self, pressure: float) -> float:
         settings = self._pen_settings
@@ -170,6 +179,9 @@ class DrawingCanvas(QWidget):
     # --- stroke API (used by tablet, mouse and tests) -------------------------
     def begin_stroke(self, pos: QPointF, pressure: float, eraser_tip: bool = False,
                      modifiers=Qt.KeyboardModifier.NoModifier) -> None:
+        self._hold_timer.stop()
+        self._hold_corrected = False
+        self._hold_anchor = QPointF(pos)
         self._set_eraser_tip(eraser_tip)
         self._active_tool = self.effective_tool
         if self._active_tool in (Tool.PEN, Tool.ERASER):
@@ -207,12 +219,30 @@ class DrawingCanvas(QWidget):
             pos = self._stroke_start + QPointF(math.cos(angle) * length, math.sin(angle) * length)
             self._render_straight(pos, pressure)
             return
+        if self._active_tool == Tool.PEN and self._hold_corrected:
+            self._render_straight(pos, pressure)
+            return
+        if (self._active_tool == Tool.PEN and (self._pen_settings is None or self._pen_settings.hold_to_straight)
+                and (self._hold_anchor is None or math.hypot(pos.x() - self._hold_anchor.x(),
+                                                            pos.y() - self._hold_anchor.y()) > 2)):
+            self._hold_anchor = QPointF(pos)
+            self._hold_timer.start()
         self._raw_last = pos
         if self._active_tool == Tool.PEN and self._pen_settings is not None:
             smoothing = max(0, min(100, self._pen_settings.smoothing)) / 100
             pos = self._last + (pos - self._last) * (1 - smoothing * 0.8)
         self._draw_segment(self._last, pos, (self._last_p + pressure) / 2)
         self._last, self._last_p = pos, pressure
+
+    def _correct_held_stroke(self) -> None:
+        if (self._last is None or self._raw_last is None or self._active_tool != Tool.PEN
+                or self._pen_settings is not None and not self._pen_settings.hold_to_straight):
+            return
+        delta = self._raw_last - self._stroke_start
+        if math.hypot(delta.x(), delta.y()) < 10:
+            return
+        self._hold_corrected = True
+        self._render_straight(self._raw_last, self._last_p)
 
     def _render_straight(self, pos: QPointF, pressure: float) -> None:
         self._strokes = self._stroke_before.copy()
@@ -223,6 +253,7 @@ class DrawingCanvas(QWidget):
         self.update()
 
     def end_stroke(self) -> None:
+        self._hold_timer.stop()
         if (self._active_tool == Tool.PEN and self._last is not None
                 and self._raw_last is not None and self._last != self._raw_last):
             self._draw_segment(self._last, self._raw_last, self._last_p)
@@ -244,6 +275,8 @@ class DrawingCanvas(QWidget):
         self.historyChanged.emit(self.can_undo(), self.is_empty())
 
     def undo(self) -> None:
+        self._hold_timer.stop()
+        self._last = self._raw_last = None
         if not self._undo:
             return
         self._redo.append((self._strokes.copy(), self._stroke_count))
@@ -253,6 +286,8 @@ class DrawingCanvas(QWidget):
         self.historyChanged.emit(self.can_undo(), self.is_empty())
 
     def redo(self) -> None:
+        self._hold_timer.stop()
+        self._last = self._raw_last = None
         if not self._redo:
             return
         self._undo.append((self._strokes.copy(), self._stroke_count))
@@ -261,6 +296,8 @@ class DrawingCanvas(QWidget):
         self.historyChanged.emit(self.can_undo(), self.is_empty())
 
     def clear(self) -> None:
+        self._hold_timer.stop()
+        self._last = self._raw_last = None
         if self.is_empty():
             return
         self._push_undo()
@@ -272,6 +309,7 @@ class DrawingCanvas(QWidget):
     def reset_board(self) -> None:
         """Yeni soru için mürekkebi, geçici araçları ve soru içi geçmişi sıfırla."""
         self.cancel_text()
+        self._hold_timer.stop()
         self._tablet_down = self._mouse_down = False
         self._last = self._raw_last = self._shape_start = None
         self._laser_timer.stop()
@@ -463,7 +501,7 @@ class DrawingCanvas(QWidget):
         need = QSize(max(1, int(e.size().width() * dpr)), max(1, int(e.size().height() * dpr)))
         if self._strokes.size() != need or self._strokes.devicePixelRatio() != dpr:
             old_size = self._strokes.deviceIndependentSize()
-            for name in ("_last", "_raw_last", "_shape_start", "_text_pos", "_stroke_start"):
+            for name in ("_last", "_raw_last", "_shape_start", "_text_pos", "_stroke_start", "_hold_anchor"):
                 point = getattr(self, name)
                 if point is not None:
                     setattr(self, name, QPointF(point.x() * e.size().width() / old_size.width(),

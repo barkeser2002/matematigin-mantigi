@@ -22,6 +22,7 @@ from matematigin_mantigi.ui.theme import FontFamilies
 class SettingsValues:
     font_file: str = ""
     reading_ms: int = 40
+    hold_to_straight: bool = True
     auto_key: bool = True
     chroma_enabled: bool = True
     presenter_name: str = "Koray Varol"
@@ -106,6 +107,9 @@ class SettingsDialog(QDialog):
         row.addWidget(self.reading_slider, 1); row.addWidget(self.reading_value)
         scol.addLayout(row)
         self._refresh_reading()
+        self.hold_to_straight_check = QCheckBox("Bekle-düzelt · 0,6 sn bekleyince düz çizgi")
+        self.hold_to_straight_check.setChecked(settings.pen().hold_to_straight)
+        scol.addWidget(self.hold_to_straight_check)
         col.addWidget(speed_card)
 
         logo_card, lcol = _card("Logo (sol üst)", fam)
@@ -357,6 +361,7 @@ class SettingsDialog(QDialog):
     def value(self) -> SettingsValues:
         return SettingsValues(font_file=self.font_path_edit.text().strip(),
                               reading_ms=self.reading_slider.value(),
+                              hold_to_straight=self.hold_to_straight_check.isChecked(),
                               auto_key=self.auto_key_check.isChecked(),
                               chroma_enabled=self.chroma_check.isChecked(),
                               presenter_name=self.presenter_edit.text().strip(),

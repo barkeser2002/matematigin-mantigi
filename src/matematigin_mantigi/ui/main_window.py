@@ -339,6 +339,8 @@ class MainWindow(QMainWindow):
         sc("[", self._smaller_size)
         sc("]", self._larger_size)
         sc("Ctrl+Z", self.canvas.undo)
+        sc("Ctrl+Shift+Z", self.canvas.redo)
+        sc("Ctrl+Y", self.canvas.redo)
         sc("Ctrl+Shift+X", self.canvas.clear)
         sc("N", self.flow.next_question)
         sc("P", self.flow.prev_question)

@@ -59,6 +59,7 @@ class Nib(str, Enum):
     ROUND = "Yuvarlak"
     FELT = "Keçeli"
     CHALK = "Tebeşir"
+    HIGHLIGHTER = "Fosforlu"
 
 
 class FrameStyle(str, Enum):

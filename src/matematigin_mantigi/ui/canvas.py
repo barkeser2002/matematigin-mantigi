@@ -6,7 +6,7 @@ from collections import deque
 import random
 
 from PyQt6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import (QBrush, QColor, QFont, QImage, QKeyEvent, QMouseEvent, QPainter, QPaintEvent, QPen, QPixmap,
+from PyQt6.QtGui import (QBrush, QColor, QFont, QImage, QKeyEvent, QMouseEvent, QPainter, QPainterPath, QPaintEvent, QPen, QPixmap,
                          QPointingDevice, QPolygonF, QResizeEvent, QTabletEvent)
 from PyQt6.QtWidgets import QLineEdit, QWidget
 
@@ -68,6 +68,9 @@ class DrawingCanvas(QWidget):
         self._strokes = QImage()
         self._overlay = QImage()
         self._undo: deque[tuple[QImage, int]] = deque(maxlen=self.MAX_UNDO)
+        self._redo: deque[tuple[QImage, int]] = deque(maxlen=self.MAX_UNDO)
+        self._stroke_before = QImage()
+        self._stroke_path = QPainterPath()
         self._stroke_count = 0
         self._tablet_down = False
         self._mouse_down = False
@@ -118,7 +121,8 @@ class DrawingCanvas(QWidget):
         pressure = self.cursor_pressure
         if self._pen_settings is not None and self._pen_settings.nib == Nib.FELT:
             pressure = .5 + (max(0., min(1., pressure)) - .5) * .5
-        return self._pen_width(pressure)
+        width = self._pen_width(pressure)
+        return max(12., width * 4) if self._pen_settings and self._pen_settings.nib == Nib.HIGHLIGHTER else width
 
     def set_shape(self, s: Shape) -> None: self.shape = s
     def set_color(self, c: QColor) -> None: self.color = QColor(c)
@@ -175,6 +179,8 @@ class DrawingCanvas(QWidget):
         elif self._active_tool == Tool.TEXT:
             self.begin_text(pos)
             return
+        self._stroke_before = self._strokes.copy()
+        self._stroke_path = QPainterPath(pos)
         self._last, self._raw_last, self._last_p = pos, pos, pressure
         self._draw_segment(pos, pos, pressure)
         self.strokeStarted.emit()
@@ -217,8 +223,17 @@ class DrawingCanvas(QWidget):
     def undo(self) -> None:
         if not self._undo:
             return
+        self._redo.append((self._strokes.copy(), self._stroke_count))
         self._strokes, self._stroke_count = self._undo.pop()
         self._ensure_layers(self.size())
+        self.update()
+        self.historyChanged.emit(self.can_undo(), self.is_empty())
+
+    def redo(self) -> None:
+        if not self._redo:
+            return
+        self._undo.append((self._strokes.copy(), self._stroke_count))
+        self._strokes, self._stroke_count = self._redo.pop()
         self.update()
         self.historyChanged.emit(self.can_undo(), self.is_empty())
 
@@ -242,10 +257,12 @@ class DrawingCanvas(QWidget):
         self._overlay.fill(Qt.GlobalColor.transparent)
         self._stroke_count = 0
         self._undo.clear()
+        self._redo.clear()
         self.update()
         self.historyChanged.emit(False, True)
 
     def _push_undo(self) -> None:
+        self._redo.clear()
         self._undo.append((self._strokes.copy(), self._stroke_count))
 
     # --- yazı aracı ------------------------------------------------------------
@@ -349,6 +366,10 @@ class DrawingCanvas(QWidget):
         tool = self._active_tool
         if tool in (Tool.TEXT, Tool.SHAPE, Tool.CLICK):   # yazı kutuyla, şekil bırakınca, tıklama hiç çizmez
             return
+        nib = self._pen_settings.nib if tool == Tool.PEN and self._pen_settings else Nib.ROUND
+        if nib == Nib.HIGHLIGHTER:
+            self._stroke_path.lineTo(b)
+            self._strokes = self._stroke_before.copy()
         target = self._overlay if tool == Tool.LASER else self._strokes
         p = QPainter(target)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -360,13 +381,23 @@ class DrawingCanvas(QWidget):
             width = (self._pen_width(pressure) if tool == Tool.PEN
                      else pressure_width(self.base_width, pressure))
             color = QColor(LASER_COLOR) if tool == Tool.LASER else self.color
-        nib = self._pen_settings.nib if tool == Tool.PEN and self._pen_settings else Nib.ROUND
+        if nib == Nib.HIGHLIGHTER:
+            width = max(12., self._pen_width(.5) * 4)
+            color = QColor(color)
+            color.setAlpha(round(color.alpha() * .38))
+            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Multiply)
         if nib == Nib.FELT:
             width = self._pen_width(.5 + (max(0., min(1., pressure)) - .5) * .5)
             color = QColor(color)
             color.setAlpha(round(color.alpha() * .85))
         brush = self._chalk_texture(color) if nib == Nib.CHALK else QBrush(color)
-        if a == b:                                # tek dokunuş: sıfır uzunluklu çizgi çizilmez, nokta bas
+        if nib == Nib.HIGHLIGHTER:
+            p.setPen(QPen(brush, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap, Qt.PenJoinStyle.BevelJoin))
+            if self._stroke_path.length() > 0:
+                p.drawPath(self._stroke_path)
+            else:
+                p.fillRect(QRectF(a.x() - width / 2, a.y() - width / 2, width, width), brush)
+        elif a == b:                                # tek dokunuş: sıfır uzunluklu çizgi çizilmez, nokta bas
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(brush)
             if nib == Nib.FELT:
@@ -378,6 +409,8 @@ class DrawingCanvas(QWidget):
             p.setPen(QPen(brush, width, Qt.PenStyle.SolidLine, cap, Qt.PenJoinStyle.RoundJoin))
             p.drawLine(a, b)
         p.end()
+        if nib == Nib.HIGHLIGHTER:
+            self.update()
         m = int(width) + 2
         self.update(QRectF(a, b).normalized().toAlignedRect().adjusted(-m, -m, m, m))
 
@@ -422,6 +455,13 @@ class DrawingCanvas(QWidget):
             self._strokes = scaled(self._strokes)
             self._overlay = scaled(self._overlay)
             self._undo = deque(((scaled(image), count) for image, count in self._undo), maxlen=self.MAX_UNDO)
+            self._redo = deque(((scaled(image), count) for image, count in self._redo), maxlen=self.MAX_UNDO)
+            if not self._stroke_before.isNull():
+                from PyQt6.QtGui import QTransform
+                transform = QTransform.fromScale(e.size().width() / old_size.width(),
+                                                 e.size().height() / old_size.height())
+                self._stroke_path = transform.map(self._stroke_path)
+                self._stroke_before = scaled(self._stroke_before)
         self._ensure_layers(e.size())
         if self._text_pos is not None:
             # Ebeveyn yerleşimi kardeş katmanları bundan sonra yükseltebilir.

@@ -213,6 +213,11 @@ class AppSettings:
     def frame_style(self, s: FrameStyle) -> None: self._q.setValue("frame_style", s.value)
 
     @property
+    def record_camera(self) -> bool: return self._bool("record/camera", False)
+    @record_camera.setter
+    def record_camera(self, on: bool) -> None: self._q.setValue("record/camera", bool(on))
+
+    @property
     def record_fps(self) -> int: return 30 if self._int("record/fps", 60) == 30 else 60
     @record_fps.setter
     def record_fps(self, fps: int) -> None: self._q.setValue("record/fps", int(fps))

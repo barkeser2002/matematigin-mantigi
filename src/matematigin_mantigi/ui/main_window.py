@@ -21,6 +21,7 @@ from matematigin_mantigi.core.models import (SHAPE_META, TOOL_META, PenSettings,
 from matematigin_mantigi.core.question_flow import QuestionFlow
 from matematigin_mantigi.core.recorder import (DISK_HINT, Recorder, RecorderError, RecorderState, MicrophoneStartError, MssFfmpegRecorder, exception_text,
                                                record_rect_for)
+from matematigin_mantigi.core.camera_recorder import CameraRecorder
 from matematigin_mantigi.core.session_store import SessionStore
 from matematigin_mantigi.core.settings import AppSettings, SessionState
 from matematigin_mantigi.ui.camera_worker import FrameSource
@@ -43,9 +44,10 @@ class _StopWorker(QThread):
     """recorder.stop() birkaç saniye sürebilir (ffmpeg kapanışı + ses birleştirme); arayüzü dondurmasın."""
     done = pyqtSignal(object)
 
-    def __init__(self, recorder, parent=None):
+    def __init__(self, recorder, parent=None, *, camera=None):
         super().__init__(parent)
         self.recorder = recorder
+        self.camera = camera
         self.exc: str | None = None
 
     def run(self) -> None:
@@ -55,6 +57,12 @@ class _StopWorker(QThread):
         except Exception as err:  # noqa: BLE001 - sonuç pencereye 'Kayıt hatası' olarak gider
             self.exc = str(err) or repr(err)         # mesajsız istisna (OSError()) da sessiz kalmasın
             crash_log.log_handled(err, "kayıt kapanışı")
+        if self.camera is not None:
+            try:
+                self.camera.screen_started = getattr(self.recorder, "video_t0", None)
+                self.camera.finish(getattr(self.recorder, "audio_result", None))
+            except Exception as err:  # noqa: BLE001 - ana kaydın sonucu mutlaka teslim edilir
+                self.camera._warn(f"Kamera kaydı tamamlanamadı: {err}")
         self.done.emit(path)
 
 
@@ -215,6 +223,11 @@ class MainWindow(QMainWindow):
         self._preview_screen = None
         self._screen_preferences_restored = False
         self.camera_source_factory = camera_source_factory
+        self._camera_recorder: CameraRecorder | None = None
+        self._camera_warning: str | None = None
+        self._camera_timer = QTimer(self)
+        self._camera_timer.setInterval(200)
+        self._camera_timer.timeout.connect(self._check_camera_recording)
         self._stop_worker: _StopWorker | None = None    # kayıt kapanışı arka planda sürüyor (sonucu henüz gelmedi)
         self._record_rect = None
         self._record_starting = False
@@ -807,6 +820,7 @@ class MainWindow(QMainWindow):
                 return
             finally:
                 self._record_starting = False
+            self._start_camera_recording()
             self._geometry_timer.start()
             h = self.settings.record_height or rect.height
             self.badge.set_format(round(rect.width * h / rect.height), h, fps)
@@ -826,13 +840,47 @@ class MainWindow(QMainWindow):
         if recording:
             self.toolbar.set_recording_time(self.badge.seconds)
 
+    def _start_camera_recording(self) -> None:
+        self._camera_recorder = None
+        self._camera_warning = None
+        self.toolbar.set_alert("camera-file", None)
+        panel = self.webcam_panel
+        if not (self.settings.record_camera and self.settings.visible("webcam")
+                and panel.has_camera and panel.worker.isRunning()):
+            return
+        path = getattr(self.recorder, "last_path", None)
+        started = getattr(self.recorder, "video_t0", None)
+        if path is None:
+            self._camera_warning = "Ayrı kamera kaydı başlamadı: ekran kaydının yolu yok."
+            self.toolbar.set_alert("camera-file", "Kamera dosyası başlamadı; ana kayıt sürüyor")
+            return
+        try:
+            self._camera_recorder = CameraRecorder(path, started)
+            panel.worker.raw_recorder = self._camera_recorder
+            self._camera_timer.start()
+        except Exception as err:  # noqa: BLE001
+            self._camera_warning = f"Ayrı kamera kaydı başlamadı: {err}"
+            crash_log.log_handled(err, "ayrı kamera kaydı başlatma")
+            self.toolbar.set_alert("camera-file", "Kamera dosyası başlamadı; ana kayıt sürüyor")
+
+    def _check_camera_recording(self) -> None:
+        camera = self._camera_recorder
+        if camera is not None:
+            camera.check_stall()
+        if camera is not None and camera.warning:
+            self._camera_warning = camera.warning
+            self.toolbar.set_alert("camera-file", "Kamera dosyasında sorun var; ana kayıt sürüyor")
+
     def _start_stop_worker(self) -> None:
         """Kapanışı (recorder.stop: ffmpeg + ses birleştirme) arka planda başlatır; sonuç _on_record_stopped'a gelir.
         O ana dek düğme ve R kilitli. Kaydedici zaten kapanıyorsa (FINALIZING) işçinin stop()'u bitişi bekler."""
         self.toolbar.set_recording(False)
         self.toolbar.record_button.setEnabled(False)
         self._show_saving_alert()
-        self._stop_worker = _StopWorker(self.recorder, self)
+        if self._camera_recorder is not None:
+            self.webcam_panel.worker.raw_recorder = None
+            self._camera_recorder.request_stop()
+        self._stop_worker = _StopWorker(self.recorder, self, camera=self._camera_recorder)
         self._stop_worker.done.connect(self._on_record_stopped)
         self._stop_worker.start()
 
@@ -857,6 +905,9 @@ class MainWindow(QMainWindow):
             worker.wait()                    # done run()'ın son adımı: iş parçacığı bitsin, öyle bırakılsın
             exc = worker.exc
             worker.deleteLater()             # bitmiş iş parçacığı nesnesi pencerede birikmesin
+        self._camera_timer.stop()
+        self._check_camera_recording()
+        self.toolbar.set_alert("camera-file", None)
         self._stop_worker = None             # kapanış bitti: düğme ve R yeniden kayıt başlatabilir
         self.toolbar.set_alert(SAVING_KEY, None)
         self.toolbar.record_button.setEnabled(True)
@@ -909,8 +960,10 @@ class MainWindow(QMainWindow):
         istisna metni yalnız yedek. Görüntü uyarısı (kodlayıcı kayda yetişemedi) kaydedicinin ayrı alanında
         (video_warning): eskiden audio_error'daydı ve 'Kaydın sesinde sorun var' diye gösteriliyordu (U7). Alanı
         olmayan kaydedicide None."""
-        return (getattr(self.recorder, "error", None) or exc, getattr(self.recorder, "audio_error", None),
-                getattr(self.recorder, "video_warning", None))
+        video_warn = getattr(self.recorder, "video_warning", None)
+        if self._camera_warning:
+            video_warn = "\n".join(filter(None, (video_warn, "Ayrı kamera kaydı: " + self._camera_warning)))
+        return (getattr(self.recorder, "error", None) or exc, getattr(self.recorder, "audio_error", None), video_warn)
 
     def _record_details(self) -> list[str]:
         cap = getattr(self.recorder, "capture_fps", 0.0)
@@ -1069,6 +1122,7 @@ class MainWindow(QMainWindow):
         s.logo_size = v.logo_size
         s.record_fps, s.record_height, s.audio_device = v.record_fps, v.record_height, v.audio_device
         s.record_folder = v.record_folder
+        s.record_camera = v.record_camera
         s.aspect_lock = v.aspect_lock
         s.frame_style = v.frame_style
         if v.camera_index != s.camera_index:

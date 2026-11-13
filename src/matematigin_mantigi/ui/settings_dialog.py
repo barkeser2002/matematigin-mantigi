@@ -28,6 +28,7 @@ class SettingsValues:
     logo_file: str = ""
     logo_size: int = 48
     camera_index: int = 0
+    record_camera: bool = False
     record_fps: int = 60
     record_height: int = 1440
     audio_device: str = ""
@@ -182,6 +183,10 @@ class SettingsDialog(QDialog):
         self.list_audio_button.clicked.connect(self._list_audio)
         row.addWidget(mic_lab); row.addWidget(self.audio_combo, 1); row.addWidget(self.list_audio_button)
         rcol.addLayout(row)
+        self.record_camera_check = QCheckBox("Kamerayı ayrı dosyaya da kaydet")
+        self.record_camera_check.setChecked(settings.record_camera)
+        self.record_camera_check.setToolTip("Ham kamera görüntüsü ve dersin sesi ayrı MP4'e yazılır; ek disk alanı kullanır.")
+        rcol.addWidget(self.record_camera_check)
         rec_note = QLabel("Seçim yeni kayıtları etkiler; ders anlık görüntüleri oturum klasöründe kalır. Araç çubuğu kayda girmez.")
         rec_note.setWordWrap(True)
         rec_note.setFont(theme.font(fam, 10, 400)); rec_note.setStyleSheet(f"color: {theme.MUTED};")
@@ -363,6 +368,7 @@ class SettingsDialog(QDialog):
                               logo_file=self.logo_path_edit.text().strip(),
                               logo_size=self.logo_size_slider.value(),
                               camera_index=int(self.camera_combo.currentData() or 0),
+                              record_camera=self.record_camera_check.isChecked(),
                               record_fps=int(self.fps_combo.currentData() or 60),
                               record_height=int(self.res_combo.currentData() or 0),
                               record_folder=self.record_folder_edit.text(),

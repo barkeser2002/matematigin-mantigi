@@ -8,7 +8,7 @@ from typing import Callable, Sequence
 
 from PyQt6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QKeySequence, QShortcut
-from PyQt6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QMessageBox, QPushButton, QToolTip, QWidget
+from PyQt6.QtWidgets import QColorDialog, QApplication, QHBoxLayout, QMainWindow, QMessageBox, QPushButton, QToolTip, QWidget
 
 from matematigin_mantigi import paths
 from matematigin_mantigi.core import crash_log
@@ -281,6 +281,7 @@ class MainWindow(QMainWindow):
         tb, c, flow = self.toolbar, self.canvas, self.flow
         tb.toolSelected.connect(self._on_tool)
         tb.colorSelected.connect(self._on_color)
+        tb.customColorRequested.connect(self.open_custom_color)
         tb.widthSelected.connect(self._on_width)
         tb.undoRequested.connect(c.undo)
         tb.clearRequested.connect(c.clear)
@@ -396,6 +397,7 @@ class MainWindow(QMainWindow):
         s = self.settings
         self.canvas.set_tool(s.tool); self.canvas.set_color(QColor(s.color)); self.canvas.set_base_width(s.width)
         self.canvas.set_eraser_size(s.eraser_size)
+        self.toolbar.set_custom_colors(s.custom_colors)
         self.toolbar.set_tool(s.tool); self.toolbar.set_color(s.color)
         self._sync_size_control()
         self.hint_zone.set_mask_mode(s.hint_mask)
@@ -415,7 +417,19 @@ class MainWindow(QMainWindow):
         self.work_area.set_click_mode(t == Tool.CLICK)
         self.refresh_cursor(); self._status("XP-Pen")
 
+    def open_custom_color(self) -> None:
+        if self._refuse_while_closing(self.toolbar.custom_color_button) or not self._confirm_recorded_dialog():
+            return
+        color = QColorDialog.getColor(self.canvas.color, self, "Özel kalem rengi",
+                                      QColorDialog.ColorDialogOption.DontUseNativeDialog)
+        if color.isValid():
+            hx = color.name()
+            self.settings.remember_custom_color(hx)
+            self.toolbar.set_custom_colors(self.settings.custom_colors)
+            self._on_color(hx)
+
     def _on_color(self, hx: str) -> None:
+        self.toolbar.set_color(hx)
         self.canvas.set_color(QColor(hx)); self.settings.color = hx
         if self.canvas.tool != Tool.PEN:              # renk seçimi kalemi seçer
             self._on_tool(Tool.PEN); self.toolbar.set_tool(Tool.PEN)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields
 import json
+import re
 
 from PyQt6.QtCore import QSettings
 
@@ -154,6 +155,29 @@ class AppSettings:
     def color(self) -> str: return self._str("color", "#1c1b19")
     @color.setter
     def color(self, hx: str) -> None: self._q.setValue("color", hx)
+
+    @property
+    def custom_colors(self) -> list[str]:
+        try:
+            raw = json.loads(self._str("pen/custom_colors", "[]"))
+        except ValueError:
+            return []
+        if not isinstance(raw, list):
+            return []
+        colors = []
+        for value in raw:
+            if isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+                value = value.lower()
+                if value not in colors:
+                    colors.append(value)
+        return colors[:4]
+
+    def remember_custom_color(self, hx: str) -> None:
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", hx):
+            return
+        hx = hx.lower()
+        colors = [hx] + [c for c in self.custom_colors if c != hx]
+        self._q.setValue("pen/custom_colors", json.dumps(colors[:4]))
 
     @property
     def width(self) -> int: return self._int("width", 4)

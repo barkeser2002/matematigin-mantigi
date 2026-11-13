@@ -147,3 +147,45 @@ def test_hold_setting_default_persists_and_applies_from_settings(window, qtbot):
     qtbot.addWidget(pen_dlg)
     assert pen_dlg.value().hold_to_straight is False
     window.webcam_panel.shutdown()
+
+
+def test_custom_color_history_is_deduplicated_bounded_and_persistent(ini_settings):
+    from PyQt6.QtCore import QSettings
+    from matematigin_mantigi.core.settings import AppSettings
+    for hx in ("#112233", "#223344", "#334455", "#445566", "#556677", "#223344"):
+        ini_settings.remember_custom_color(hx)
+    ini_settings.sync()
+    reopened = AppSettings(QSettings(ini_settings._q.fileName(), QSettings.Format.IniFormat))
+    assert reopened.custom_colors == ["#223344", "#556677", "#445566", "#334455"]
+    reopened.remember_custom_color("not-a-color")
+    assert reopened.custom_colors == ini_settings.custom_colors
+    reopened._q.setValue("pen/custom_colors", '["bad", "#AABBCC", "#aabbcc", null, 42]')
+    assert reopened.custom_colors == ["#aabbcc"]
+
+
+def test_custom_picker_confirmation_cancel_and_recent_selection(window, monkeypatch):
+    from PyQt6.QtWidgets import QColorDialog, QMessageBox
+    from matematigin_mantigi.core.recorder import RecorderState
+    opened = []
+    monkeypatch.setattr(QColorDialog, "getColor", lambda *a, **k: opened.append(True) or QColor("#765432"))
+    with monkeypatch.context() as state_patch:
+        state_patch.setattr(type(window.recorder), "state", property(lambda self: RecorderState.RECORDING))
+        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No)
+        window.open_custom_color()
+        assert not opened
+        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+        window.open_custom_color()
+    assert opened == [True]
+    assert window.settings.color == "#765432"
+    assert window.settings.custom_colors == ["#765432"]
+    assert window.canvas.color == QColor("#765432")
+    assert not any(b.isChecked() for b in window.toolbar.swatches.values())
+    action = next(a for a in window.toolbar.color_menu.actions() if a.data() == "#765432")
+    window._on_color("#2456b8")
+    action.trigger()
+    assert window.canvas.color == QColor("#765432")
+    monkeypatch.setattr(QColorDialog, "getColor", lambda *a, **k: QColor())
+    window.open_custom_color()
+    assert window.settings.custom_colors == ["#765432"]
+    assert window.settings.color == "#765432"
+    window.webcam_panel.shutdown()

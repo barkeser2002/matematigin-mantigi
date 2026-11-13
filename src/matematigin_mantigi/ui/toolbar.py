@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PyQt6.QtCore import QRect, Qt, pyqtSignal
-from PyQt6.QtGui import QFontMetrics
+from PyQt6.QtCore import QRect, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QFontMetrics, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton,
-                             QScrollArea, QSizePolicy, QSlider, QStyle, QStyleOptionButton, QVBoxLayout, QWidget)
+                             QMenu, QScrollArea, QSizePolicy, QSlider, QStyle, QStyleOptionButton, QVBoxLayout, QWidget)
 
 from matematigin_mantigi.core.models import PALETTE, TOOL_META, WIDTHS, Tool
 from matematigin_mantigi.core.settings import ERASER_MIN, ERASER_MAX, ERASER_SIZES
@@ -154,6 +154,7 @@ class ToolBar(QWidget):
     FULLSCREEN_TEXT, WINDOWED_TEXT = "⛶ Tam ekran", "❐ Pencere"
 
     toolSelected = pyqtSignal(object)      # Tool
+    customColorRequested = pyqtSignal()
     colorSelected = pyqtSignal(str)        # hex
     widthSelected = pyqtSignal(int)
     workToggled = pyqtSignal()
@@ -228,15 +229,31 @@ class ToolBar(QWidget):
 
         self._swatch_group = QButtonGroup(self); self._swatch_group.setExclusive(True)
         self.swatches: dict[str, SwatchButton] = {}
+        palette_col = QVBoxLayout(); palette_col.setSpacing(0)
         row = QHBoxLayout(); row.setSpacing(0)
         for i, hx in enumerate(PALETTE):
             s = SwatchButton(hx); self._swatch_group.addButton(s); self.swatches[hx] = s
             s.clicked.connect(lambda _c=False, h=hx: self.colorSelected.emit(h))
             if i % 2 == 0 and i:
-                col.addLayout(row); row = QHBoxLayout(); row.setSpacing(0)
+                palette_col.addLayout(row); row = QHBoxLayout(); row.setSpacing(0)
             row.addWidget(s)
-        col.addLayout(row)
+        palette_col.addLayout(row)
         self.swatches[PALETTE[0]].setChecked(True)
+        self.custom_color_button = QPushButton()
+        icon = QPixmap(10, 10); icon.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(icon); painter.setPen(QColor(theme.PANEL_SOFT))
+        painter.drawLine(1, 5, 9, 5); painter.drawLine(5, 1, 5, 9); painter.end()
+        self.custom_color_button.setIcon(QIcon(icon))
+        self.custom_color_button.setIconSize(QSize(10, 10))
+        self.custom_color_button.setFixedWidth(12)
+        self.custom_color_button.setStyleSheet(_BTN_CSS + "QPushButton { padding: 0; } QPushButton::menu-indicator { width: 0; }")
+        self.custom_color_button.setAccessibleName("Özel renk ve son dört renk")
+        self.color_menu = QMenu(self.custom_color_button)
+        self.custom_color_button.setMenu(self.color_menu)
+        self.set_custom_colors([])
+        palette_row = QHBoxLayout(); palette_row.setSpacing(0)
+        palette_row.addLayout(palette_col); palette_row.addWidget(self.custom_color_button)
+        col.addLayout(palette_row)
 
         cap = self._caption("KALINLIK"); col.addWidget(cap); self.section_captions.append(cap)
         self._width_group = QButtonGroup(self); self._width_group.setExclusive(True)
@@ -470,9 +487,29 @@ class ToolBar(QWidget):
     def set_tool(self, t: Tool) -> None:
         b = self.tool_buttons[t]; b.blockSignals(True); b.setChecked(True); b.blockSignals(False)
 
+    def set_custom_colors(self, colors: list[str]) -> None:
+        self.color_menu.clear()
+        choose = self.color_menu.addAction("Özel renk seç…")
+        choose.triggered.connect(self.customColorRequested)
+        if colors:
+            self.color_menu.addSeparator()
+        for hx in colors[:4]:
+            action = self.color_menu.addAction(hx)
+            action.setData(hx)
+        if not getattr(self, "_color_menu_wired", False):
+            self.color_menu.triggered.connect(self._recent_color_selected)
+            self._color_menu_wired = True
+
+    def _recent_color_selected(self, action) -> None:
+        if action.data():
+            self.colorSelected.emit(action.data())
+
     def set_color(self, hx: str) -> None:
-        if hx in self.swatches:
-            s = self.swatches[hx]; s.blockSignals(True); s.setChecked(True); s.blockSignals(False)
+        self._swatch_group.setExclusive(False)
+        for color, button in self.swatches.items():
+            button.setChecked(color == hx)
+        self._swatch_group.setExclusive(True)
+        self.custom_color_button.setToolTip(f"Özel renk seç / Son 4 özel renk · Seçili: {hx}")
 
     def _select_preset(self, w: int) -> None:
         value = ERASER_SIZES[WIDTHS.index(w)] if self._size_tool == Tool.ERASER else w

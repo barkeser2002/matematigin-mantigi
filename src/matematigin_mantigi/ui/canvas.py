@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 import random
+import math
 
 from PyQt6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (QBrush, QColor, QFont, QImage, QKeyEvent, QMouseEvent, QPainter, QPainterPath, QPaintEvent, QPen, QPixmap,
@@ -71,6 +72,8 @@ class DrawingCanvas(QWidget):
         self._redo: deque[tuple[QImage, int]] = deque(maxlen=self.MAX_UNDO)
         self._stroke_before = QImage()
         self._stroke_path = QPainterPath()
+        self._stroke_start: QPointF | None = None
+        self._straight = False
         self._stroke_count = 0
         self._tablet_down = False
         self._mouse_down = False
@@ -165,7 +168,8 @@ class DrawingCanvas(QWidget):
         return not self.is_empty() or (self._text_pos is not None and bool(self.text_edit.text().strip()))
 
     # --- stroke API (used by tablet, mouse and tests) -------------------------
-    def begin_stroke(self, pos: QPointF, pressure: float, eraser_tip: bool = False) -> None:
+    def begin_stroke(self, pos: QPointF, pressure: float, eraser_tip: bool = False,
+                     modifiers=Qt.KeyboardModifier.NoModifier) -> None:
         self._set_eraser_tip(eraser_tip)
         self._active_tool = self.effective_tool
         if self._active_tool in (Tool.PEN, Tool.ERASER):
@@ -180,17 +184,28 @@ class DrawingCanvas(QWidget):
             self.begin_text(pos)
             return
         self._stroke_before = self._strokes.copy()
+        self._stroke_start = QPointF(pos)
+        self._straight = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
         self._stroke_path = QPainterPath(pos)
         self._last, self._raw_last, self._last_p = pos, pos, pressure
         self._draw_segment(pos, pos, pressure)
         self.strokeStarted.emit()
 
-    def extend_stroke(self, pos: QPointF, pressure: float) -> None:
+    def extend_stroke(self, pos: QPointF, pressure: float,
+                      modifiers=Qt.KeyboardModifier.NoModifier) -> None:
         if self._last is None:
             return
         if self._active_tool == Tool.SHAPE:
             self._preview_shape(pos)
             self._last = pos
+            return
+        if self._active_tool == Tool.PEN and (self._straight or modifiers & Qt.KeyboardModifier.ShiftModifier):
+            self._straight = True
+            delta = pos - self._stroke_start
+            angle = round(math.atan2(delta.y(), delta.x()) / (math.pi / 12)) * (math.pi / 12)
+            length = math.hypot(delta.x(), delta.y())
+            pos = self._stroke_start + QPointF(math.cos(angle) * length, math.sin(angle) * length)
+            self._render_straight(pos, pressure)
             return
         self._raw_last = pos
         if self._active_tool == Tool.PEN and self._pen_settings is not None:
@@ -198,6 +213,14 @@ class DrawingCanvas(QWidget):
             pos = self._last + (pos - self._last) * (1 - smoothing * 0.8)
         self._draw_segment(self._last, pos, (self._last_p + pressure) / 2)
         self._last, self._last_p = pos, pressure
+
+    def _render_straight(self, pos: QPointF, pressure: float) -> None:
+        self._strokes = self._stroke_before.copy()
+        self._stroke_path = QPainterPath(self._stroke_start)
+        self._draw_segment(self._stroke_start, pos, pressure)
+        self._last = self._raw_last = QPointF(pos)
+        self._last_p = pressure
+        self.update()
 
     def end_stroke(self) -> None:
         if (self._active_tool == Tool.PEN and self._last is not None
@@ -440,7 +463,7 @@ class DrawingCanvas(QWidget):
         need = QSize(max(1, int(e.size().width() * dpr)), max(1, int(e.size().height() * dpr)))
         if self._strokes.size() != need or self._strokes.devicePixelRatio() != dpr:
             old_size = self._strokes.deviceIndependentSize()
-            for name in ("_last", "_raw_last", "_shape_start", "_text_pos"):
+            for name in ("_last", "_raw_last", "_shape_start", "_text_pos", "_stroke_start"):
                 point = getattr(self, name)
                 if point is not None:
                     setattr(self, name, QPointF(point.x() * e.size().width() / old_size.width(),
@@ -507,11 +530,11 @@ class DrawingCanvas(QWidget):
             if e.button() == Qt.MouseButton.LeftButton:
                 self._tablet_down = True
                 self.inputSourceChanged.emit("tablet")
-                self.begin_stroke(e.position(), e.pressure(), eraser_tip)
+                self.begin_stroke(e.position(), e.pressure(), eraser_tip, e.modifiers())
         elif t == QEvent.Type.TabletMove:
             if self._tablet_down:
                 if e.buttons() & Qt.MouseButton.LeftButton:
-                    self.extend_stroke(e.position(), e.pressure())
+                    self.extend_stroke(e.position(), e.pressure(), e.modifiers())
                 else:
                     self._tablet_down = False
                     self.end_stroke()
@@ -533,13 +556,13 @@ class DrawingCanvas(QWidget):
         self.pressureChanged.emit(MOUSE_PRESSURE)
         self._mouse_down = True
         self.inputSourceChanged.emit("mouse")
-        self.begin_stroke(e.position(), MOUSE_PRESSURE)
+        self.begin_stroke(e.position(), MOUSE_PRESSURE, modifiers=e.modifiers())
         e.accept()
 
     def mouseMoveEvent(self, e: QMouseEvent) -> None:
         if not self._mouse_down:
             e.ignore(); return
-        self.extend_stroke(e.position(), MOUSE_PRESSURE)
+        self.extend_stroke(e.position(), MOUSE_PRESSURE, e.modifiers())
         e.accept()
 
     def mouseReleaseEvent(self, e: QMouseEvent) -> None:

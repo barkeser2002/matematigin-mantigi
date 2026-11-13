@@ -84,7 +84,7 @@ def model_kur():
     """Küçük CNN (28x28 gri -> 19 sınıf). TF'yi burada import eder."""
     import tensorflow as tf
     return tf.keras.Sequential([
-        tf.keras.layers.InputLayer(input_shape=(BOYUT, BOYUT, 1), name="girdi"),
+        tf.keras.layers.InputLayer(shape=(BOYUT, BOYUT, 1), name="girdi"),
         tf.keras.layers.Conv2D(16, 3, padding="same", activation="relu", name="conv1"),
         tf.keras.layers.MaxPooling2D(2, name="havuz1"),
         tf.keras.layers.Conv2D(32, 3, padding="same", activation="relu", name="conv2"),

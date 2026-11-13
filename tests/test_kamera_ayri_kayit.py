@@ -44,7 +44,7 @@ def kayit_penceresi(window, tmp_path, qtbot, monkeypatch):
 
 def kaydet(win, qtbot):
     win.toggle_recording(True)
-    qtbot.waitUntil(lambda: win.recorder.frames_written >= 35, timeout=15000)
+    qtbot.waitUntil(lambda: win.recorder.frames_written >= 90, timeout=15000)
     win.toggle_recording(False)
     qtbot.waitUntil(lambda: win._stop_worker is None, timeout=60000)
     assert win.recorder.last_path.exists() and not win.recorder.error
@@ -63,7 +63,12 @@ def kamera_dogrula(main):
     finally:
         cap.release()
     exe = find_ffmpeg()
-    assert abs(media_duration(exe, cam) - media_duration(exe, main)) <= 0.5
+    meta = json.loads(cam.with_suffix(".json").read_text(encoding="utf-8"))
+    cam_s, main_s, offset = media_duration(exe, cam), media_duration(exe, main), meta["start_offset_seconds"]
+    # Kamera dosyası ana kayıttan sonra başlar (ilk kareyi bekler): bitişler aynı anda olmalı.
+    assert abs(cam_s + offset - main_s) <= 0.5, (cam_s, offset, main_s)
+    if offset <= 0.3:
+        assert abs(cam_s - main_s) <= 0.5, (cam_s, main_s)
     p = subprocess.run([exe, "-hide_banner", "-i", str(cam)], capture_output=True, **no_window())
     assert b"Video:" in p.stderr and b"Audio:" in p.stderr
     if shutil.which("ffprobe"):
@@ -72,9 +77,8 @@ def kamera_dogrula(main):
         streams = json.loads(probe.stdout)["streams"]
         assert {s["codec_type"] for s in streams} == {"video", "audio"}
         assert next(s for s in streams if s["codec_type"] == "video")["width"] == 1280
-    meta = json.loads(cam.with_suffix(".json").read_text(encoding="utf-8"))
     assert meta["resolution"] == [1280, 720] and meta["fps"] == 30
-    assert abs(meta["start_offset_seconds"]) < 0.5
+    assert 0 <= meta["start_offset_seconds"] < 2.0
     assert meta["audio_muxed"] is True
     return cam
 
@@ -123,7 +127,7 @@ def test_kodlayici_hatasi_ana_kaydi_bozmaz(kayit_penceresi, qtbot, monkeypatch):
     assert "camera-file" in win.toolbar._alerts
     assert "sentetik" not in win.toolbar._alerts["camera-file"]
     assert str(win.recorder.last_path.parent) not in win.work_area.status_label.text()
-    qtbot.waitUntil(lambda: win.recorder.frames_written >= 35, timeout=15000)
+    qtbot.waitUntil(lambda: win.recorder.frames_written >= 90, timeout=15000)
     win.toggle_recording(False)
     qtbot.waitUntil(lambda: win._stop_worker is None, timeout=60000)
     assert media_duration(find_ffmpeg(), win.recorder.last_path) > 0

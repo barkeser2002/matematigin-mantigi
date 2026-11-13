@@ -96,28 +96,33 @@ class CameraRecorder:
         self._reserved = True
         args = ffmpeg_args(exe, w, h, self.fps, self.raw_path, encoder=enc)
         args[args.index("-pix_fmt") + 1] = "bgr24"
-        # Ham boruda düşen kareler zamanı sıkıştırmasın: ffmpeg aradaki CFR
-        # yuvalarını doldurur. Duvar saati yalnız bu bağımsız alt süreçte kullanılır.
-        args[args.index("-i"):args.index("-i")] = ["-use_wallclock_as_timestamps", "1"]
         if w % 2 or h % 2:
             args[-args[::-1].index("-pix_fmt")] = "yuv444p"
         self._log = self.log_path.open("ab")
         self._proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                                       stderr=self._log, **no_window())
 
+    CATCHUP_CAP_S = 5.0     # durdurmada tekrarlanarak yazılacak en uzun borç (yük altında dosya kısa kalmasın)
+
+    def _write(self, frame) -> None:
+        self._write_started = time.monotonic()
+        self._proc.stdin.write(np.ascontiguousarray(frame).tobytes())
+        self._write_started = 0.0
+        self.frames_written += 1
+        self._progress_at = time.monotonic()
+
     def _run(self):
+        # Zaman çizelgesi bu iş parçacığında kare sayısıyla kurulur (ffmpeg okuma saatine bağlı değil):
+        # k. kare first_at + k/fps anına düşer; kodlayıcı geri kalırsa son kare tekrarlanarak yetişilir.
         try:
             frame = None
-            deadline = time.monotonic()
             while True:
                 if frame is None:
                     self._wake.wait(0.1)
                     self._wake.clear()
-                else:
-                    self._stop.wait(max(0.0, deadline - time.monotonic()))
                 item = self._take()
                 if item is not None:
-                    frame, captured, fps = item
+                    frame, _captured, fps = item
                 if frame is None:
                     if self._stop.is_set():
                         break
@@ -126,21 +131,23 @@ class CameraRecorder:
                     self._open(frame, fps)
                     newest = self._take()
                     if newest is not None:
-                        frame, captured, _ = newest
-                    self.first_at = captured
-                    deadline = time.monotonic()
+                        frame = newest[0]
+                    self.first_at = time.monotonic()
                 if (frame.shape[1], frame.shape[0]) != self.resolution:
                     raise RuntimeError("Kamera çözünürlüğü kayıt sırasında değişti")
-                self._write_started = time.monotonic()
-                self._proc.stdin.write(np.ascontiguousarray(frame).tobytes())
-                self._write_started = 0.0
-                self.frames_written += 1
-                self._progress_at = time.monotonic()
-                # Son kaynak karesi tekrarlanabilir; ağır kodlayıcıda eski kaynak
-                # kareleri birikmez. ffmpeg zaman damgaları gerçek aralığı korur.
-                deadline = max(deadline + 1.0 / self.fps, time.monotonic())
+                now = self.stopped_at if self._stop.is_set() and self.stopped_at else time.monotonic()
+                due = int((now - self.first_at) * self.fps) + 1
+                if self._stop.is_set():
+                    due = min(due, self.frames_written + int(self.CATCHUP_CAP_S * self.fps))
+                if self.frames_written < due:
+                    self._write(frame)
+                    continue
                 if self._stop.is_set():
                     break
+                self._stop.wait(max(0.001, self.first_at + self.frames_written / self.fps - time.monotonic()))
+                item = self._take()
+                if item is not None:
+                    frame = item[0]
         except Exception as err:  # noqa: BLE001 - ekran kaydı her koşulda bağımsız kalır
             self._warn(f"Kamera dosyası yazılamadı: {err}. Ham görüntü: {self.raw_path}")
         finally:

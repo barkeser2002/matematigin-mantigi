@@ -11,6 +11,7 @@ from PyQt6.QtGui import (QBrush, QColor, QFont, QImage, QKeyEvent, QMouseEvent, 
 from PyQt6.QtWidgets import QLineEdit, QWidget
 
 from matematigin_mantigi.core.models import Nib, PenSettings, Shape, Tool
+from matematigin_mantigi.core.settings import ERASER_MIN, ERASER_MAX
 from matematigin_mantigi.core.stroke import LASER_COLOR, MOUSE_PRESSURE, eraser_diameter, pressure_width
 from matematigin_mantigi.ui import theme
 
@@ -44,6 +45,7 @@ class DrawingCanvas(QWidget):
     strokeFinished = pyqtSignal()
     historyChanged = pyqtSignal(bool, bool)     # can_undo, is_empty
     pressureChanged = pyqtSignal(float)
+    effectiveToolChanged = pyqtSignal()
     inputSourceChanged = pyqtSignal(str)        # "tablet" | "mouse"
     MAX_UNDO = 30
     LASER_FADE_MS = 1500                        # lazer izi bu sürede sönerek kaybolur
@@ -54,9 +56,12 @@ class DrawingCanvas(QWidget):
         self.setTabletTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         self.tool = Tool.PEN
+        self._eraser_tip = False
+        self.cursor_pressure = MOUSE_PRESSURE
         self.shape = Shape.RECT
         self.color = QColor(theme.INK)
         self.base_width = 4
+        self.eraser_size = eraser_diameter(self.base_width)
         self._pen_settings: PenSettings | None = None
         self._chalk_color = None
         self._chalk_brush = None
@@ -94,10 +99,33 @@ class DrawingCanvas(QWidget):
         if t != Tool.TEXT and self.text_edit.isVisible():
             self.commit_text()
         self.tool = t
+        self._eraser_tip = False
+        self.effectiveToolChanged.emit()
+
+    @property
+    def effective_tool(self) -> Tool:
+        return Tool.ERASER if self._eraser_tip else self.tool
+
+    def _set_eraser_tip(self, erasing: bool) -> None:
+        if self._eraser_tip != erasing:
+            if self._last is not None:
+                self.end_stroke()
+            self._tablet_down = self._mouse_down = False
+            self._eraser_tip = erasing
+            self.effectiveToolChanged.emit()
+
+    def cursor_width(self) -> float:
+        pressure = self.cursor_pressure
+        if self._pen_settings is not None and self._pen_settings.nib == Nib.FELT:
+            pressure = .5 + (max(0., min(1., pressure)) - .5) * .5
+        return self._pen_width(pressure)
 
     def set_shape(self, s: Shape) -> None: self.shape = s
     def set_color(self, c: QColor) -> None: self.color = QColor(c)
     def set_base_width(self, w: int) -> None: self.base_width = int(w)
+    def set_eraser_size(self, size: int) -> None:
+        self.eraser_size = max(ERASER_MIN, min(ERASER_MAX, int(size)))
+
     def set_pen_settings(self, settings: PenSettings) -> None:
         self._pen_settings = settings
 
@@ -134,7 +162,8 @@ class DrawingCanvas(QWidget):
 
     # --- stroke API (used by tablet, mouse and tests) -------------------------
     def begin_stroke(self, pos: QPointF, pressure: float, eraser_tip: bool = False) -> None:
-        self._active_tool = Tool.ERASER if eraser_tip else self.tool
+        self._set_eraser_tip(eraser_tip)
+        self._active_tool = self.effective_tool
         if self._active_tool in (Tool.PEN, Tool.ERASER):
             self._push_undo()
             self._stroke_count += 1
@@ -325,7 +354,7 @@ class DrawingCanvas(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         if tool == Tool.ERASER:
             p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
-            width = float(eraser_diameter(self.base_width))
+            width = float(self.eraser_size)
             color = QColor(0, 0, 0, 255)
         else:
             width = (self._pen_width(pressure) if tool == Tool.PEN
@@ -431,13 +460,15 @@ class DrawingCanvas(QWidget):
             e.ignore(); return
         t = e.type()
         eraser_tip = e.pointerType() == QPointingDevice.PointerType.Eraser
+        self.cursor_pressure = e.pressure()
+        self._set_eraser_tip(eraser_tip)
+        self.pressureChanged.emit(e.pressure())
         if t == QEvent.Type.TabletPress:
             if e.button() == Qt.MouseButton.LeftButton:
                 self._tablet_down = True
                 self.inputSourceChanged.emit("tablet")
                 self.begin_stroke(e.position(), e.pressure(), eraser_tip)
         elif t == QEvent.Type.TabletMove:
-            self.pressureChanged.emit(e.pressure())
             if self._tablet_down:
                 if e.buttons() & Qt.MouseButton.LeftButton:
                     self.extend_stroke(e.position(), e.pressure())
@@ -457,6 +488,9 @@ class DrawingCanvas(QWidget):
     def mousePressEvent(self, e: QMouseEvent) -> None:
         if self._tablet_down or e.button() != Qt.MouseButton.LeftButton:
             e.ignore(); return
+        self._set_eraser_tip(False)
+        self.cursor_pressure = MOUSE_PRESSURE
+        self.pressureChanged.emit(MOUSE_PRESSURE)
         self._mouse_down = True
         self.inputSourceChanged.emit("mouse")
         self.begin_stroke(e.position(), MOUSE_PRESSURE)

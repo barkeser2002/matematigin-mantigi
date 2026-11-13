@@ -22,7 +22,8 @@ def _card(title: str, fam: FontFamilies) -> tuple[QFrame, QVBoxLayout]:
 class PenSettingsDialog(QDialog):
     applied = pyqtSignal(object)
 
-    def __init__(self, current: PenSettings, color: QColor, base_width: int, fam: FontFamilies, parent=None):
+    def __init__(self, current: PenSettings, color: QColor, base_width: int, fam: FontFamilies, parent=None,
+                 *, eraser_size: int | None = None):
         super().__init__(parent)
         self.setWindowTitle("Kalem, silgi & imleç")
         self.setMinimumWidth(720)
@@ -43,7 +44,7 @@ class PenSettingsDialog(QDialog):
         cur_col.addWidget(note)
         tiles = QHBoxLayout(); tiles.setSpacing(18)
         for label, cur in ((f"Kalem · {color.name()}", cursors.pen_cursor(color, base_width)),
-                           ("Silgi", cursors.eraser_cursor(base_width)),
+                           ("Silgi", cursors.eraser_cursor(base_width, diameter=eraser_size)),
                            ("Lazer", cursors.laser_cursor())):
             tile = QVBoxLayout(); pic = QLabel(); pic.setPixmap(cur.pixmap()); pic.setAlignment(Qt.AlignmentFlag.AlignCenter)
             cap = QLabel(label); cap.setFont(theme.font(fam, 10, 500)); cap.setAlignment(Qt.AlignmentFlag.AlignCenter)

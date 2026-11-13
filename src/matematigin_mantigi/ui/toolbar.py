@@ -5,9 +5,10 @@ from dataclasses import dataclass
 from PyQt6.QtCore import QRect, Qt, pyqtSignal
 from PyQt6.QtGui import QFontMetrics
 from PyQt6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton,
-                             QScrollArea, QSizePolicy, QStyle, QStyleOptionButton, QVBoxLayout, QWidget)
+                             QScrollArea, QSizePolicy, QSlider, QStyle, QStyleOptionButton, QVBoxLayout, QWidget)
 
 from matematigin_mantigi.core.models import PALETTE, TOOL_META, WIDTHS, Tool
+from matematigin_mantigi.core.settings import ERASER_MIN, ERASER_MAX, ERASER_SIZES
 from matematigin_mantigi.ui import theme
 from matematigin_mantigi.ui.theme import FontFamilies
 from matematigin_mantigi.ui.widgets import DotButton, GlyphButton, RecordButton, SwatchButton, WrapButton
@@ -170,6 +171,7 @@ class ToolBar(QWidget):
     def __init__(self, fam: FontFamilies, parent=None):
         super().__init__(parent)
         self.fam = fam
+        self._size_tool = Tool.PEN
         self.tier = _FULL.name
         self._tier_need: dict[str, int] = {}          # kademe -> kaydırmasız gereken içerik yüksekliği (ölçülünce)
         self.setFixedWidth(theme.TOOLBAR_WIDTH)
@@ -241,7 +243,7 @@ class ToolBar(QWidget):
         self.width_buttons: dict[int, DotButton] = {}
         for w in WIDTHS:
             d = DotButton(w); self._width_group.addButton(d); self.width_buttons[w] = d
-            d.clicked.connect(lambda _c=False, v=w: self.widthSelected.emit(v))
+            d.clicked.connect(lambda _c=False, v=w: self._select_preset(v))
         # Beş DotButton'ın satır dağılımı kademeye göre değişir (FULL/COMPACT: 3+2,
         # MINI: 5'i tek satırda) -> ayrı bir alt QVBoxLayout, bkz. _set_dot_rows.
         self._dots_col = QVBoxLayout(); self._dots_col.setSpacing(0)
@@ -249,6 +251,17 @@ class ToolBar(QWidget):
         self.dot_rows: list[QHBoxLayout] = []
         self._dot_row_shape: tuple[tuple[int, ...], ...] | None = None
         self.width_buttons[4].setChecked(True)
+        self.size_label = self._caption("Silgi · 34 px")
+        self.size_label.hide()
+        col.addWidget(self.size_label)
+        self.size_slider = QSlider(Qt.Orientation.Horizontal)
+        self.size_slider.setRange(ERASER_MIN, ERASER_MAX)
+        self.size_slider.setValue(34)
+        self.size_slider.setToolTip("Silgi çapı (px) · [ küçült / ] büyüt")
+        self.size_slider.setAccessibleName("Silgi çapı")
+        self.size_slider.valueChanged.connect(self.widthSelected)
+        self.size_slider.hide()
+        col.addWidget(self.size_slider)
         col.addWidget(self._rule())
 
         cap = self._caption("SORU AKIŞI"); col.addWidget(cap); self.section_captions.append(cap)
@@ -408,6 +421,9 @@ class ToolBar(QWidget):
         self._col.setSpacing(spec.spacing)
         self._col.setContentsMargins(*spec.margins)
         inner = self.width() - spec.margins[0] - spec.margins[2]
+        self.size_label.setFixedWidth(inner)
+        self.size_label.setWordWrap(True)
+        self.size_slider.setFixedWidth(inner)
         for b in (self.pen_settings_button, self.settings_button, self.editor_button,
                   self.layout_button, self.fullscreen_button, self.work_button,
                   self.prev_button, self.next_button):
@@ -455,9 +471,36 @@ class ToolBar(QWidget):
         if hx in self.swatches:
             s = self.swatches[hx]; s.blockSignals(True); s.setChecked(True); s.blockSignals(False)
 
+    def _select_preset(self, w: int) -> None:
+        value = ERASER_SIZES[WIDTHS.index(w)] if self._size_tool == Tool.ERASER else w
+        self.widthSelected.emit(value)
+
+    def set_size_context(self, tool: Tool, width: int) -> None:
+        erasing = tool == Tool.ERASER
+        changed = erasing != (self._size_tool == Tool.ERASER)
+        self._size_tool = tool
+        self.size_slider.setVisible(erasing)
+        self.size_label.setVisible(erasing)
+        for w, b in self.width_buttons.items():
+            size = ERASER_SIZES[WIDTHS.index(w)] if erasing else w
+            b.setToolTip(f"{'Silgi çapı' if erasing else 'Kalem kalınlığı'} · {size} px")
+            b.setAccessibleName(b.toolTip())
+        self.set_width(width)
+        if changed:
+            self._refresh_fit()
+
     def set_width(self, w: int) -> None:
-        if w in self.width_buttons:
-            d = self.width_buttons[w]; d.blockSignals(True); d.setChecked(True); d.blockSignals(False)
+        erasing = self._size_tool == Tool.ERASER
+        self._width_group.setExclusive(False)
+        for key, button in self.width_buttons.items():
+            value = ERASER_SIZES[WIDTHS.index(key)] if erasing else key
+            button.setChecked(value == w)
+        self._width_group.setExclusive(True)
+        if erasing:
+            self.size_slider.blockSignals(True)
+            self.size_slider.setValue(w)
+            self.size_slider.blockSignals(False)
+            self.size_label.setText(f"Silgi · {w} px")
 
     def set_work_label(self, text: str) -> None:
         if self.work_button.text() != text:

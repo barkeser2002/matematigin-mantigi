@@ -8,6 +8,10 @@ from PyQt6.QtCore import QSettings
 
 from matematigin_mantigi.core.chroma_key import ChromaParams
 from matematigin_mantigi.core.models import FrameStyle, HintMaskMode, Nib, PenSettings, Tool
+from matematigin_mantigi.core.stroke import eraser_diameter
+
+ERASER_MIN, ERASER_MAX = 10, 120
+ERASER_SIZES = (20, 34, 50, 80, 120)
 
 # Tahtadaki gizlenebilir yazısal öğeler: (anahtar, etiket)
 VISIBILITY_KEYS: tuple[tuple[str, str], ...] = (
@@ -76,6 +80,9 @@ class SessionState:
 class AppSettings:
     def __init__(self, backend: QSettings | None = None):
         self._q = backend or QSettings("MatematiginMantigi", "Ogretim")
+        # Eski kalınlık ölçeğini yalnız ilk açılışta taşı; sonra kalemden bağımsız.
+        if not self._q.contains("eraser/size"):
+            self.eraser_size = eraser_diameter(self.width)
 
     # --- helpers ---------------------------------------------------------------
     def _int(self, key: str, default: int) -> int:
@@ -152,6 +159,13 @@ class AppSettings:
     def width(self) -> int: return self._int("width", 4)
     @width.setter
     def width(self, w: int) -> None: self._q.setValue("width", int(w))
+
+    @property
+    def eraser_size(self) -> int:
+        return max(ERASER_MIN, min(ERASER_MAX, self._int("eraser/size", eraser_diameter(self.width))))
+    @eraser_size.setter
+    def eraser_size(self, size: int) -> None:
+        self._q.setValue("eraser/size", max(ERASER_MIN, min(ERASER_MAX, int(size))))
 
     @property
     def hint_mask(self) -> HintMaskMode: return self._enum("hint_mask", HintMaskMode, HintMaskMode.BLUR)

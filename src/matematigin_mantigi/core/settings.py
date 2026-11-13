@@ -8,7 +8,7 @@ import re
 from PyQt6.QtCore import QSettings
 
 from matematigin_mantigi.core.chroma_key import ChromaParams
-from matematigin_mantigi.core.models import FrameStyle, HintMaskMode, LineStyle, Nib, PenSettings, Tool
+from matematigin_mantigi.core.models import FrameStyle, HintMaskMode, LineStyle, Nib, PenSettings, Shape, Tool
 from matematigin_mantigi.core.stroke import eraser_diameter
 
 ERASER_MIN, ERASER_MAX = 10, 120
@@ -150,6 +150,16 @@ class AppSettings:
     def tool(self) -> Tool: return self._enum("tool", Tool, Tool.PEN)
     @tool.setter
     def tool(self, t: Tool) -> None: self._q.setValue("tool", t.value)
+
+    @property
+    def shape(self) -> Shape: return self._enum("shape", Shape, Shape.RECT)
+    @shape.setter
+    def shape(self, s: Shape) -> None: self._q.setValue("shape", s.value)
+
+    @property
+    def shape_fill(self) -> bool: return self._bool("shape/fill", False)
+    @shape_fill.setter
+    def shape_fill(self, on: bool) -> None: self._q.setValue("shape/fill", bool(on))
 
     @property
     def color(self) -> str: return self._str("color", "#1c1b19")

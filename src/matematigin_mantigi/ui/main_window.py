@@ -64,6 +64,7 @@ SAVING_ALERT = "Kayıt kaydediliyor…"   # kapanış (ffmpeg + ses birleştirme
 CLOSING_ALERT = "Kayıt kaydediliyor… bitince pencere kapanacak"     # pencere kapatılmak istendi, kayıt bekleniyor
 # Kapanış beklenirken editör/ayarlar düğmesine basılınca düğmenin yanında görünen kısa neden.
 CLOSING_NO_DIALOG = "Kayıt kaydediliyor; bitince pencere kapanacak. Bu pencere şimdi açılmaz."
+SHAPE_MENU_RECORDING_MS = 8000     # kayıt sürerken şekil menüsü bu kadar sonra kendiliğinden kapanır (kalıcı bindirme olmaz)
 STOP_AND_QUIT, KEEP_RECORDING = "Durdur ve çık", "Kayda devam et"   # kayıt sürerken kapatma sorusunun düğmeleri
 # Kayıt pencerelerinin metni kendi başına anlaşılır olmalı: Qt macOS'ta QMessageBox başlığını göstermez.
 START_FAILED = "Kayıt başlamadı."
@@ -281,6 +282,8 @@ class MainWindow(QMainWindow):
         tb, c, flow = self.toolbar, self.canvas, self.flow
         tb.toolSelected.connect(self._on_tool)
         tb.shapeSelected.connect(self._on_shape)
+        tb.shapeFillSelected.connect(self._on_shape_fill)
+        tb.shape_menu_gate = self._shape_menu_gate
         tb.colorSelected.connect(self._on_color)
         tb.customColorRequested.connect(self.open_custom_color)
         tb.widthSelected.connect(self._on_width)
@@ -397,6 +400,8 @@ class MainWindow(QMainWindow):
     def _restore_settings(self) -> None:
         s = self.settings
         self.canvas.set_tool(s.tool); self.canvas.set_color(QColor(s.color)); self.canvas.set_base_width(s.width)
+        self.canvas.set_shape(s.shape); self.canvas.set_shape_fill(s.shape_fill)
+        self.toolbar.set_shape(s.shape); self.toolbar.set_shape_fill(s.shape_fill)
         self.canvas.set_eraser_size(s.eraser_size)
         self.toolbar.set_custom_colors(s.custom_colors)
         self.toolbar.set_tool(s.tool); self.toolbar.set_color(s.color)
@@ -420,12 +425,25 @@ class MainWindow(QMainWindow):
         self.refresh_cursor(); self._status("XP-Pen")
 
     def _on_shape(self, shape: Shape) -> None:
-        self.canvas.set_shape(shape)
+        self.canvas.set_shape(shape); self.settings.shape = shape
         self.canvas.set_tool(Tool.SHAPE); self.settings.tool = Tool.SHAPE
         self.toolbar.set_tool(Tool.SHAPE)
         self._sync_size_control()
         self.work_area.set_click_mode(False)
         self.refresh_cursor(); self._status("XP-Pen")
+
+    def _on_shape_fill(self, on: bool) -> None:
+        self.canvas.set_shape_fill(on); self.settings.shape_fill = on
+
+    def _shape_menu_gate(self) -> int:
+        """Şekil menüsü: -1 açılmaz (kapanış bekleniyor), 0 açık kalır, >0 ms sonra kendiliğinden kapanır.
+        Kayıt sürerken menü sahneye kalıcı bindirme yapmaz: kısa süre sonra kapanır. Onay kutusu sorulmaz:
+        menü geçici bir açılır listedir, içinde kaydedilmemiş iş yoktur (bkz. SHAPE_MENU_RECORDING_MS)."""
+        if self._close_after_save:
+            return -1
+        if self._record_starting or self.recorder.state is RecorderState.RECORDING:
+            return SHAPE_MENU_RECORDING_MS
+        return 0
 
     def open_custom_color(self) -> None:
         if self._refuse_while_closing(self.toolbar.custom_color_button) or not self._confirm_recorded_dialog():

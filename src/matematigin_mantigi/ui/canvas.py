@@ -13,9 +13,10 @@ from PyQt6.QtWidgets import QLineEdit, QWidget
 
 from matematigin_mantigi.core.models import LineStyle, Nib, PenSettings, Shape, Tool
 from matematigin_mantigi.core.settings import ERASER_MIN, ERASER_MAX
+from matematigin_mantigi.core.shapes import CLOSED_SHAPES, constrain
 from matematigin_mantigi.core.stroke import LASER_COLOR, MOUSE_PRESSURE, eraser_diameter, pressure_width
 from matematigin_mantigi.ui import theme
-from matematigin_mantigi.ui.shape_paint import paint_shape
+from matematigin_mantigi.ui.shape_paint import fill_color, paint_shape
 
 
 def _grown(old: QImage, size: QSize, dpr: float) -> QImage:
@@ -61,6 +62,8 @@ class DrawingCanvas(QWidget):
         self._eraser_tip = False
         self.cursor_pressure = MOUSE_PRESSURE
         self.shape = Shape.RECT
+        self.fill_shapes = False                    # kapalı şekiller yarı saydam dolgulu mu (kalıcı, menüden)
+        self._shape_mods = Qt.KeyboardModifier.NoModifier    # son sürükleme anındaki Shift/Alt
         self.color = QColor(theme.INK)
         self.base_width = 4
         self.eraser_size = eraser_diameter(self.base_width)
@@ -136,6 +139,7 @@ class DrawingCanvas(QWidget):
         return max(12., width * 4) if self._pen_settings and self._pen_settings.nib == Nib.HIGHLIGHTER else width
 
     def set_shape(self, s: Shape) -> None: self.shape = s
+    def set_shape_fill(self, on: bool) -> None: self.fill_shapes = bool(on)
     def set_color(self, c: QColor) -> None: self.color = QColor(c)
     def set_base_width(self, w: int) -> None: self.base_width = int(w)
     def set_eraser_size(self, size: int) -> None:
@@ -193,6 +197,7 @@ class DrawingCanvas(QWidget):
             self._laser_alpha = 1.0
         elif self._active_tool == Tool.SHAPE:
             self._shape_start = pos
+            self._shape_mods = modifiers
         elif self._active_tool == Tool.TEXT:
             self.begin_text(pos)
             return
@@ -209,6 +214,7 @@ class DrawingCanvas(QWidget):
         if self._last is None:
             return
         if self._active_tool == Tool.SHAPE:
+            self._shape_mods = modifiers
             self._preview_shape(pos)
             self._last = pos
             return
@@ -404,7 +410,12 @@ class DrawingCanvas(QWidget):
         width = pressure_width(self.base_width, 0.7)
         p.setPen(QPen(self.color, width, self._line_style(), Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        paint_shape(p, self.shape, a, b)
+        mods = self._shape_mods
+        start, end = constrain(self.shape, (a.x(), a.y()), (b.x(), b.y()),
+                               shift=bool(mods & Qt.KeyboardModifier.ShiftModifier),
+                               alt=bool(mods & Qt.KeyboardModifier.AltModifier))
+        fill = fill_color(self.color) if self.fill_shapes and self.shape in CLOSED_SHAPES else None
+        paint_shape(p, self.shape, QPointF(*start), QPointF(*end), fill)
 
     # --- painting ------------------------------------------------------------
     def _chalk_texture(self, color: QColor) -> QBrush:

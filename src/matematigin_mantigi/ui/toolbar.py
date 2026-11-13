@@ -157,6 +157,7 @@ class ToolBar(QWidget):
     toolSelected = pyqtSignal(object)      # Tool
     customColorRequested = pyqtSignal()
     shapeSelected = pyqtSignal(object)     # Shape (görsel şekil menüsünden)
+    shapeFillSelected = pyqtSignal(bool)   # dolgu: True yarı saydam, False boş
     colorSelected = pyqtSignal(str)        # hex
     widthSelected = pyqtSignal(int)
     workToggled = pyqtSignal()
@@ -230,6 +231,8 @@ class ToolBar(QWidget):
         shape_btn.rightClicked.connect(self.open_shape_menu)
         self.shape_menu = ShapeMenu(self)
         self.shape_menu.shapeSelected.connect(self._on_shape_chosen)
+        self.shape_menu.fillSelected.connect(self.shapeFillSelected)
+        self.shape_menu_gate = None            # bağlanınca: () -> int (bkz. open_shape_menu)
         self.set_shape(Shape.RECT)
         self.tool_buttons[Tool.PEN].setChecked(True)
         col.addWidget(self._rule())
@@ -620,7 +623,15 @@ class ToolBar(QWidget):
         self.shape_menu.set_current(shape)
         b.update()
 
+    def set_shape_fill(self, on: bool) -> None:
+        self.shape_menu.set_fill(on)
+
     def open_shape_menu(self) -> None:
+        """shape_menu_gate: -1 açılmaz; 0 açık kalır; >0 o kadar ms sonra kendiliğinden kapanır (kayıt sürerken)."""
+        gate = self.shape_menu_gate() if self.shape_menu_gate is not None else 0
+        if gate < 0:
+            return
+        self.shape_menu.set_auto_close_ms(gate)
         b = self.tool_buttons[Tool.SHAPE]
         screen = b.screen() or QApplication.primaryScreen()
         self.shape_menu.popup_beside(b.mapToGlobal(QPoint(b.width() + 6, 0)), screen.availableGeometry())
